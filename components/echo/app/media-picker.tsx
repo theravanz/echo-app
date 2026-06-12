@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react';
 // @ts-ignore
 import EmojiPicker from 'emoji-picker-react';
-import { Search, Film, StickyNote, Smile, Loader2 } from 'lucide-react';
+import { TbSearch as Search, TbMovie as Film, TbNote as StickyNote, TbMoodSmile as Smile, TbLoader2 as Loader2 } from 'react-icons/tb';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";

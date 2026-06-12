@@ -17,7 +17,21 @@ import {
   RecaptchaVerifier,
 } from 'firebase/auth';
 import { AnimatedSphere } from '@/components/echo/animated-sphere';
-import { Shield, Smartphone, Mail, Lock, Check, Copy, ArrowRight, RefreshCw, AlertTriangle, Fingerprint, Globe, Key, ShieldCheck } from 'lucide-react';
+import { 
+  TbShield as Shield, 
+  TbDeviceMobile as Smartphone, 
+  TbMail as Mail, 
+  TbLock as Lock, 
+  TbCheck as Check, 
+  TbCopy as Copy, 
+  TbArrowRight as ArrowRight, 
+  TbRefresh as RefreshCw, 
+  TbAlertTriangle as AlertTriangle, 
+  TbFingerprint as Fingerprint, 
+  TbGlobe as Globe, 
+  TbKey as Key, 
+  TbShieldCheck as ShieldCheck 
+} from 'react-icons/tb';
 import { cn } from '@/lib/utils';
 
 type Step = 1 | 2 | 3 | 4 | 5;

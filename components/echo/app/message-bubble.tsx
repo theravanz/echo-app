@@ -3,7 +3,7 @@
 import React, { memo } from 'react';
 import { cn } from "@/lib/utils";
 import { LinkPreview } from "./link-preview";
-import { Check, CheckCheck, Reply, Heart, MoreVertical, Pen } from "lucide-react";
+import { TbCheck as Check, TbChecks as CheckCheck, TbArrowBackUp as Reply, TbHeart as Heart, TbDotsVertical as MoreVertical, TbPencil as Pen } from "react-icons/tb";
 import { Button } from "@/components/ui/button";
 
 interface MessageBubbleProps {

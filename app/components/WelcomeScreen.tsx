@@ -4,8 +4,11 @@
 import { motion } from 'framer-motion';
 import Image from 'next/image';
 import PixelBlast from './PixelBlast';
+import { useTranslation } from '@/hooks/use-translation';
 
 export default function WelcomeScreen({ onComplete }: { onComplete: () => void }) {
+  const { t, language, setLanguage } = useTranslation();
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -68,7 +71,7 @@ export default function WelcomeScreen({ onComplete }: { onComplete: () => void }
           transition={{ duration: 0.6, delay: 0.1, ease: "easeOut" }}
           className="text-3xl sm:text-4xl md:text-5xl font-semibold text-white text-center tracking-tight mb-3"
         >
-          Next-gen communication.
+          {t('welcome.title')}
         </motion.h1>
 
         {/* Подзаголовок */}
@@ -76,10 +79,9 @@ export default function WelcomeScreen({ onComplete }: { onComplete: () => void }
           initial={{ y: 20, opacity: 0 }}
           animate={{ y: 0, opacity: 1 }}
           transition={{ duration: 0.6, delay: 0.2, ease: "easeOut" }}
-          className="text-base sm:text-lg text-white/60 text-center max-w-md leading-relaxed"
+          className="text-base sm:text-lg text-white/60 text-center max-w-md leading-relaxed whitespace-pre-line"
         >
-          Free expression. Total control.<br />
-          All in one app.
+          {t('welcome.subtitle')}
         </motion.p>
 
         {/* Индикаторы */}
@@ -110,7 +112,7 @@ export default function WelcomeScreen({ onComplete }: { onComplete: () => void }
                      hover:bg-white/15 hover:border-white/20 hover:scale-[1.01]
                      active:scale-[0.99] active:bg-white/10"
         >
-          <span className="mr-1">Get started</span>
+          <span className="mr-1">{t('welcome.getStarted')}</span>
           <svg
             xmlns="http://www.w3.org/2000/svg"
             fill="none"
@@ -124,11 +126,11 @@ export default function WelcomeScreen({ onComplete }: { onComplete: () => void }
         </button>
 
         <button
-          onClick={() => console.log('Language toggle')}
+          onClick={() => setLanguage(language === 'en' ? 'ru' : 'en')}
           className="mt-5 w-full text-center text-xs sm:text-sm text-white/50 hover:text-white/80 
                      transition-colors duration-300 font-medium"
         >
-          Перевести на Русский
+          {t('welcome.switchLang')}
         </button>
       </motion.div>
     </motion.div>

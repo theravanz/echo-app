@@ -7,6 +7,9 @@ const nextConfig: NextConfig = {
     unoptimized: true,
   },
   experimental: {
+    turbo: {
+      root: process.cwd(),
+    },
   },
 };
 

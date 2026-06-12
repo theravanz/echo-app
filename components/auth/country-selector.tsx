@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, ChevronsUpDown } from "lucide-react";
+import { TbCheck as Check, TbSelector as ChevronsUpDown } from "react-icons/tb";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {

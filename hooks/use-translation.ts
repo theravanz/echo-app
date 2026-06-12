@@ -48,6 +48,10 @@ const translations: Record<string, Record<string, string>> = {
     'auth.error.recaptchaExpired': 'reCAPTCHA expired. Please try again.',
     'auth.error.unknown': 'Something went wrong. Please try again.',
     'auth.error.sessionExpired': 'Session expired. Please restart the process.',
+    'welcome.title': 'Next-gen communication.',
+    'welcome.subtitle': 'Free expression. Total control.\nAll in one app.',
+    'welcome.getStarted': 'Get started',
+    'welcome.switchLang': 'Перевести на Русский',
   },
   ru: {
     'auth.subtitle': 'Безопасно, зашифровано, децентрализовано.',
@@ -96,6 +100,10 @@ const translations: Record<string, Record<string, string>> = {
     'auth.error.recaptchaExpired': 'reCAPTCHA истекла. Попробуйте еще раз.',
     'auth.error.unknown': 'Что-то пошло не так. Попробуйте еще раз.',
     'auth.error.sessionExpired': 'Сессия истекла. Пожалуйста, начните заново.',
+    'welcome.title': 'Коммуникация нового поколения.',
+    'welcome.subtitle': 'Свобода самовыражения. Полный контроль.\nВсё в одном приложении.',
+    'welcome.getStarted': 'Начать',
+    'welcome.switchLang': 'Switch to English',
   }
 };
 
