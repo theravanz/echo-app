@@ -107,6 +107,13 @@ import { useTranslation } from "@/hooks/use-translation";
 import { useE2EE } from "@/hooks/echo/use-e2ee";
 import { MessageBubble } from "@/components/echo/app/message-bubble";
 import { MediaPicker } from "@/components/echo/app/media-picker";
+import dynamic from "next/dynamic";
+
+const SettingsModal = dynamic(
+  () => import("@/components/echo/app/settings-modal"),
+  { ssr: false }
+);
+
 
 // --- Types & Constants ---
 
@@ -623,17 +630,64 @@ useEffect(() => {
         isMobile && selectedChat ? "-translate-x-full absolute inset-y-0 opacity-0 pointer-events-none" : "opacity-100 translate-x-0 relative"
       )}>
         <div className="h-16 md:h-20 px-4 md:px-6 pt-2 md:pt-0 flex items-center justify-between shrink-0">
-          <h2 className="font-display font-bold text-2xl tracking-tight">
-            {activeTab === 'community' && 'Community'}
-            {activeTab === 'chats' && (
-                <span className="flex items-center gap-2">
-                  {connectionStatus === 'connected' && 'Chats'}
-                  {connectionStatus === 'connecting' && <><RefreshCw className="w-4 h-4 animate-spin" /> Connecting</>}
-                  {connectionStatus === 'disconnected' && <><span className="w-2 h-2 rounded-full bg-destructive" /> Offline</>}
-                </span>
-              )}
-            {activeTab === 'feed' && 'Feed'}
-          </h2>
+          {activeTab === 'chats' ? (
+            <div className="flex items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button className="flex items-center gap-2 group">
+                    {connectionStatus === 'connected' && (
+                      <>
+                        <Wifi className="w-5 h-5 text-primary" />
+                        <span className="font-display font-bold text-2xl tracking-tight group-hover:text-primary transition-colors">Chats</span>
+                      </>
+                    )}
+                    {connectionStatus === 'connecting' && (
+                      <>
+                        <RefreshCw className="w-5 h-5 text-muted-foreground animate-spin" />
+                        <span className="font-display font-bold text-2xl tracking-tight text-muted-foreground">Connecting</span>
+                      </>
+                    )}
+                    {connectionStatus === 'disconnected' && (
+                      <>
+                        <ZapOff className="w-5 h-5 text-destructive" />
+                        <span className="font-display font-bold text-2xl tracking-tight text-destructive">Offline</span>
+                      </>
+                    )}
+                    <ChevronDown className="w-4 h-4 text-white/30 group-hover:text-white/60 transition-colors" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-52 rounded-2xl border-white/10 bg-background/95 backdrop-blur-3xl p-2">
+                  <DropdownMenuLabel className="text-[9px] font-mono uppercase tracking-widest text-white/40 px-3 py-2">Network Mode</DropdownMenuLabel>
+                  <DropdownMenuItem className="rounded-xl gap-3 py-3 px-3 cursor-pointer">
+                    <div className="w-2 h-2 rounded-full bg-primary shrink-0" />
+                    <div>
+                      <div className="text-sm font-bold">Base</div>
+                      <div className="text-[10px] text-white/40 font-medium">Default Connection</div>
+                    </div>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem className="rounded-xl gap-3 py-3 px-3 cursor-pointer">
+                    <div className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                    <div>
+                      <div className="text-sm font-bold">Relay</div>
+                      <div className="text-[10px] text-white/40 font-medium">P2P · Servers</div>
+                    </div>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem className="rounded-xl gap-3 py-3 px-3 cursor-pointer">
+                    <div className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />
+                    <div>
+                      <div className="text-sm font-bold">Mesh</div>
+                      <div className="text-[10px] text-white/40 font-medium">Decentralized Web</div>
+                    </div>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          ) : (
+            <h2 className="font-display font-bold text-2xl tracking-tight">
+              {activeTab === 'community' && 'Community'}
+              {activeTab === 'feed' && 'Feed'}
+            </h2>
+          )}
           <div className="flex items-center gap-1.5">
             <Button
               variant="ghost"
@@ -802,7 +856,7 @@ useEffect(() => {
                       <span className="font-bold text-sm truncate group-hover:text-primary transition-colors">{chat.display_name || chat.username}</span>
                       <span className="text-[9px] font-mono text-white/20 uppercase tracking-tighter">{formatRelativeTime(chat.lastMessageTime)}</span>
                    </div>
-                   <p className="text-xs text-muted-foreground truncate font-medium group-hover:text-white/60 transition-colors">{chat.lastMessage || `@${chat.username}`}</p>
+                   <p className="text-xs text-muted-foreground line-clamp-1 font-medium group-hover:text-white/60 transition-colors">{chat.lastMessage || `@${chat.username}`}</p>
                 </div>
                 {chat.unreadCount > 0 && (
                   <div className="absolute top-4 right-4 w-5 h-5 bg-primary rounded-full flex items-center justify-center text-[10px] font-bold text-primary-foreground shadow-lg shadow-primary/20 animate-in zoom-in duration-500">
@@ -1149,92 +1203,11 @@ useEffect(() => {
         </aside>
       )}
 
-      {/* --- Settings Dialog --- */}
-      <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
-        <DialogContent className="max-w-3xl bg-background/95 border-white/10 backdrop-blur-3xl rounded-[48px] p-0 overflow-hidden shadow-2xl noise-overlay">
-          <div className="flex h-[640px]">
-              <aside className="w-56 border-r border-white/5 bg-black/20 p-8 space-y-1 hidden sm:block">
-                 <div className="text-[9px] font-mono text-white/20 uppercase tracking-[0.4em] mb-6">Core System</div>
-                 <div className="space-y-4">
-                    {[
-                      { icon: User, label: 'Identity', active: true },
-                      { icon: ShieldCheck, label: 'Security' },
-                      { icon: Bell, label: 'Alerts' },
-                      { icon: Palette, label: 'Interface' },
-                      { icon: Wifi, label: 'Network' },
-                      { icon: HardDrive, label: 'Storage' },
-                    ].map(item => (
-                      <button key={item.label} className={cn("w-full flex items-center gap-4 py-3 px-4 rounded-2xl transition-all", item.active ? "bg-primary text-primary-foreground shadow-2xl shadow-primary/20 font-bold" : "text-white/40 hover:text-white hover:bg-white/5")}>
-                        <item.icon className="w-4 h-4" />
-                        <span className="text-xs uppercase tracking-widest tracking-tighter">{item.label}</span>
-                      </button>
-                    ))}
-                 </div>
-              </aside>
-              
-              <div className="flex-1 p-12 overflow-y-auto">
-                 <div className="flex items-center justify-between mb-12">
-                    <div>
-                       <h2 className="text-3xl font-display font-bold tracking-tight mb-2">Settings</h2>
-                       <p className="text-muted-foreground text-xs font-mono uppercase tracking-widest">Protocol_Version: 2.4.0-Alpha</p>
-                    </div>
-                    <Button variant="ghost" size="icon" className="rounded-2xl" onClick={() => setIsSettingsOpen(false)}><X className="w-6 h-6" /></Button>
-                 </div>
-                 
-                 <div className="space-y-12">
-                    <section className="space-y-6">
-                       <h4 className="text-[10px] font-mono uppercase tracking-[0.4em] text-primary/60">Node Integrity</h4>
-                       <GlassPanel className="p-8 rounded-[36px]">
-                          <CornerBrackets />
-                          <div className="flex items-center gap-6">
-                             <div className="w-20 h-20 rounded-[32px] bg-primary flex items-center justify-center text-primary-foreground font-display text-4xl font-bold shadow-2xl shadow-primary/30">D</div>
-                             <div className="flex-1">
-                                <div className="text-xl font-bold mb-1">Echo Node</div>
-                                <div className="text-xs text-white/40 font-mono tracking-widest">UID: {(user?.id || "").substring(0, 16)}...</div>
-                                <Button size="sm" variant="outline" className="mt-4 rounded-xl border-white/10 hover:bg-white/5 h-8 text-[10px] uppercase tracking-widest">Export Identity</Button>
-                             </div>
-                          </div>
-                       </GlassPanel>
-                    </section>
-                    
-                    <section className="space-y-6">
-                       <h4 className="text-[10px] font-mono uppercase tracking-[0.4em] text-primary/60">Multi-Account Bridge</h4>
-                       <div className="space-y-3">
-                          {accounts.map(acc => (
-                            <div key={acc.uid} className={cn("flex items-center justify-between p-5 rounded-[28px] border transition-all duration-500", acc.uid === user?.id ? "bg-primary/10 border-primary/20 shadow-xl" : "bg-white/[0.02] border-white/5 opacity-40 hover:opacity-100")}>
-                               <div className="flex items-center gap-4">
-                                 <div className="w-10 h-10 rounded-2xl bg-white/5 flex items-center justify-center text-sm font-bold">{safeChar(acc.displayName || acc.email)}</div>
-                                 <div>
-                                    <div className="text-sm font-bold">{acc.displayName || acc.email}</div>
-                                    <div className="text-[10px] text-white/30 font-mono">@{acc.username || (acc.uid ? acc.uid.substring(0, 8) : "node")}</div>
-                                 </div>
-                               </div>
-                               {acc.uid === user?.id ? <ShieldCheck className="w-5 h-5 text-primary animate-pulse" /> : <div className="w-5 h-5" />}
-                            </div>
-                          ))}
-                          <Button variant="outline" className="w-full rounded-[28px] border-dashed border-white/10 hover:border-primary/40 hover:bg-primary/5 h-16 text-xs uppercase tracking-widest font-bold">
-                             <UserPlus className="w-5 h-5 mr-3" /> Connect New Node
-                          </Button>
-                       </div>
-                    </section>
-
-                    <section className="space-y-6 pb-12">
-                       <h4 className="text-[10px] font-mono uppercase tracking-[0.4em] text-primary/60">Advanced Protocol</h4>
-                       <div className="p-6 bg-destructive/5 border border-destructive/10 rounded-[32px] flex gap-5 group hover:bg-destructive/10 transition-all duration-500">
-                          <div className="w-12 h-12 bg-destructive/20 rounded-[20px] flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform"><AlertTriangle className="w-6 h-6 text-destructive" /></div>
-                          <div className="space-y-2">
-                             <div className="text-sm font-bold text-destructive uppercase tracking-widest">Master Termination</div>
-                             <p className="text-xs text-destructive-foreground/60 leading-relaxed font-medium">This will permanently purge your local node identity and revoke all E2EE session keys. This action cannot be reversed.</p>
-                             <Button size="sm" variant="destructive" className="mt-2 rounded-xl h-10 px-6 font-bold uppercase tracking-widest text-[10px] active:scale-95 transition-all">Execute Purge</Button>
-                          </div>
-                       </div>
-                    </section>
-                 </div>
-              </div>
-           </div>
-        </DialogContent>
-      </Dialog>
-      {/* --- Mobile Hotbar --- */}
+      {/* --- Settings Modal --- */}
+      {isSettingsOpen && (
+        <SettingsModal user={user} accounts={accounts} onClose={() => setIsSettingsOpen(false)} isQuarantined={isQuarantined} />
+      )}
+      {/* --- Mobile Hotbar --- */}      {/* --- Mobile Hotbar --- */}
       {isMobile && !selectedChat && (
         <div className="fixed bottom-0 left-0 right-0 z-50 bg-black/80 backdrop-blur-2xl border-t border-white/5" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
           <div className="flex items-center justify-around h-14">
