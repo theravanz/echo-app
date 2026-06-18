@@ -1,8 +1,8 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "echo-tauri",
-  "version": "0.1.0",
-  "identifier": "com.tauri.dev",
+  "version": "0.1.2",
+  "identifier": "com.theravanz.echo-tauri",
   "build": {
     "frontendDist": "../out",
     "devUrl": "http://localhost:3000",

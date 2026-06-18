@@ -1,16 +1,43 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
 import { useE2EE } from './use-e2ee';
 
 export const useEchoApp = (user: any) => {
+  const router = useRouter();
   const [chats, setChats] = useState<any[]>([]);
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
   const [lastSeenMap, setLastSeenMap] = useState<Record<string, string>>({});
   const { decryptMessage } = useE2EE(chats);
 
+  // === КРИТИЧНО: Ref для стабилизации зависимостей ===
+  const decryptMessageRef = useRef(decryptMessage);
+  decryptMessageRef.current = decryptMessage;
+
+  const userRef = useRef(user);
+  userRef.current = user;
+
   const fetchChats = useCallback(async (currentUserId: string) => {
+    const cacheKey = `echo_chats_cache_${currentUserId}`;
+
+    // 1. Load from cache immediately
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed.chats && Array.isArray(parsed.chats)) {
+          setChats(prev => {
+            // Защита от лишних обновлений
+            if (JSON.stringify(prev) === JSON.stringify(parsed.chats)) return prev;
+            return parsed.chats;
+          });
+        }
+      }
+    } catch (e) { /* ignore */ }
+
+    // 2. Fetch fresh data
     try {
       const { data: recentMessages, error: msgError } = await supabase
         .from('messages')
@@ -29,10 +56,10 @@ export const useEchoApp = (user: any) => {
         const otherId = m.sender_id === currentUserId ? m.receiver_id : m.sender_id;
         if (!chatMap[otherId]) {
           participantIds.push(otherId);
-          chatMap[otherId] = { 
-            lastMsgRaw: m, 
-            lastMessageTime: m.created_at, 
-            unreadCount: (m.receiver_id === currentUserId && m.status !== 'read') ? 1 : 0 
+          chatMap[otherId] = {
+            lastMsgRaw: m,
+            lastMessageTime: m.created_at,
+            unreadCount: (m.receiver_id === currentUserId && m.status !== 'read') ? 1 : 0
           };
         } else if (m.receiver_id === currentUserId && m.status !== 'read') {
           chatMap[otherId].unreadCount++;
@@ -42,106 +69,203 @@ export const useEchoApp = (user: any) => {
       if (participantIds.length > 0) {
         const { data: profiles } = await supabase.from('profiles').select('*').in('id', participantIds);
         if (profiles) {
+          // Используем ref для стабильной ссылки
+          const decrypt = decryptMessageRef.current;
+
           const finalChats = await Promise.all(profiles.map(async (p) => {
             const chatData = chatMap[p.id];
             if (!chatData || !chatData.lastMsgRaw) return null;
-            
-            const decrypted = await decryptMessage(
-              chatData.lastMsgRaw.content || '', 
-              chatData.lastMsgRaw.nonce || '', 
+
+            const decrypted = await decrypt(
+              chatData.lastMsgRaw.content || '',
+              chatData.lastMsgRaw.nonce || '',
               p.id
             );
-            return { 
-              ...p, 
-              lastMessage: decrypted, 
-              lastMessageTime: chatData.lastMessageTime, 
-              unreadCount: chatData.unreadCount 
+            return {
+              ...p,
+              lastMessage: decrypted,
+              lastMessageTime: chatData.lastMessageTime,
+              unreadCount: chatData.unreadCount
             };
           }));
+
           const filteredChats = finalChats.filter((c): c is any => c !== null);
           filteredChats.sort((a, b) => new Date(b.lastMessageTime).getTime() - new Date(a.lastMessageTime).getTime());
-          setChats(filteredChats);
+
+          // Защита от лишних обновлений
+          setChats(prev => {
+            if (prev.length === filteredChats.length &&
+                prev.every((c, i) => c.id === filteredChats[i].id &&
+                                     c.lastMessage === filteredChats[i].lastMessage &&
+                                     c.unreadCount === filteredChats[i].unreadCount)) {
+              return prev; // Та же ссылка — нет перерендера
+            }
+            return filteredChats;
+          });
+
+          // Save to cache
+          try {
+            localStorage.setItem(cacheKey, JSON.stringify({
+              chats: filteredChats,
+              timestamp: new Date().toISOString()
+            }));
+          } catch (e) { /* ignore */ }
         }
       }
     } catch (err) {
       console.error('Fetch chats error:', err);
     }
-  }, [decryptMessage]);
+  }, []); // Пустые зависимости! Используем ref
 
+  // === Инициализация — выполняется ТОЛЬКО при изменении user.id ===
   useEffect(() => {
-    if (!user) return;
+    if (!user?.id) return;
 
-    fetchChats(user.id);
+    let isMounted = true;
+    let presenceChannel: any = null;
+    let msgChannel: any = null;
 
-    // Setup presence
-    const presence = supabase.channel('online-presence', { config: { presence: { key: user.id } } });
-    presence.on('presence', { event: 'sync' }, () => {
-      setOnlineUsers(new Set(Object.keys(presence.presenceState())));
-    }).subscribe(async (s) => {
-      if (s === 'SUBSCRIBED') await presence.track({ online_at: new Date().toISOString() });
-    });
+    const init = async () => {
+      fetchChats(user.id);
 
-    // Global messages listener for chat list updates
-    const msgChannel = supabase.channel('global-chat-updates').on('postgres_changes', { 
-      event: 'INSERT', 
-      schema: 'public', 
-      table: 'messages' 
-    }, (payload) => {
-      const nm = payload.new as any;
-      if (nm.receiver_id === user.id || nm.sender_id === user.id) {
-        fetchChats(user.id);
-      }
-    }).subscribe();
+      presenceChannel = supabase.channel('online-presence', {
+        config: { presence: { key: user.id } }
+      });
+
+      // СНАЧАЛА все обработчики
+      presenceChannel.on('presence', { event: 'sync' }, () => {
+        if (!isMounted) return;
+        const state = presenceChannel.presenceState();
+        const newUsers = new Set(Object.keys(state));
+        setOnlineUsers(prev => {
+          if (prev.size === newUsers.size && Array.from(prev).every(u => newUsers.has(u))) {
+            return prev;
+          }
+          return newUsers;
+        });
+      });
+
+      presenceChannel.on('presence', { event: 'join' }, () => {
+        if (!isMounted) return;
+        const state = presenceChannel.presenceState();
+        const newUsers = new Set(Object.keys(state));
+        setOnlineUsers(prev => {
+          if (prev.size === newUsers.size && Array.from(prev).every(u => newUsers.has(u))) {
+            return prev;
+          }
+          return newUsers;
+        });
+      });
+
+      presenceChannel.on('presence', { event: 'leave' }, () => {
+        if (!isMounted) return;
+        const state = presenceChannel.presenceState();
+        const newUsers = new Set(Object.keys(state));
+        setOnlineUsers(prev => {
+          if (prev.size === newUsers.size && Array.from(prev).every(u => newUsers.has(u))) {
+            return prev;
+          }
+          return newUsers;
+        });
+      });
+
+      // ПОТОМ подписка (без колбэка внутри .on)
+      presenceChannel.subscribe((status: string) => {
+        if (status === 'SUBSCRIBED' && isMounted) {
+          presenceChannel.track({ online_at: new Date().toISOString() });
+        }
+      });
+
+      // Messages listener
+      msgChannel = supabase.channel('global-chat-updates');
+      msgChannel.on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages'
+      }, (payload: any) => {
+        const nm = payload.new as any;
+        if (nm.receiver_id === user.id || nm.sender_id === user.id) {
+          fetchChats(user.id);
+        }
+      }).subscribe();
+    };
+
+    init();
 
     return () => {
-      supabase.removeChannel(presence);
-      supabase.removeChannel(msgChannel);
+      isMounted = false;
+      if (presenceChannel) supabase.removeChannel(presenceChannel);
+      if (msgChannel) supabase.removeChannel(msgChannel);
     };
-  }, [user?.id, fetchChats]);
+  }, [user?.id]); // Только user.id, БЕЗ fetchChats!
 
+  // === Drafts ===
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [draftsLoaded, setDraftsLoaded] = useState(false);
 
-  // Drafts logic
   useEffect(() => {
-    if (user && !draftsLoaded) {
+    if (!user || draftsLoaded) return;
+
+    try {
       const localDrafts = JSON.parse(localStorage.getItem(`echo_drafts_${user.id}`) || '{}');
       const supabaseDrafts = user.user_metadata?.drafts || {};
       const merged = { ...localDrafts, ...supabaseDrafts };
       setDrafts(merged);
-      setDraftsLoaded(true);
+    } catch (e) {
+      setDrafts({});
     }
-  }, [user, draftsLoaded]);
+    setDraftsLoaded(true);
+  }, [user?.id, draftsLoaded]);
 
   const saveDraft = useCallback((chatId: string, text: string) => {
     if (!user) return;
-    const newDrafts = { ...drafts, [chatId]: text };
-    setDrafts(newDrafts);
-    localStorage.setItem(`echo_drafts_${user.id}`, JSON.stringify(newDrafts));
-    
-    // Debounced sync to Supabase (simplification: just log for now or implement debounce)
-  }, [user, drafts]);
 
-  // Security Watchdog
+    setDrafts(prev => {
+      if (prev[chatId] === text) return prev; // Нет изменений
+      const newDrafts = { ...prev, [chatId]: text };
+      localStorage.setItem(`echo_drafts_${user.id}`, JSON.stringify(newDrafts));
+      return newDrafts;
+    });
+  }, [user?.id]);
+
+  // === Security Watchdog ===
   useEffect(() => {
-    if (!user) return;
+    if (!user?.id) return;
+
     const hwid = localStorage.getItem('echo_device_hwid');
-    
-    const deviceChannel = supabase.channel(`security-${user.id}`).on('postgres_changes', {
+    let deviceChannel: any = null;
+
+    deviceChannel = supabase.channel(`security-${user.id}`);
+    deviceChannel.on('postgres_changes', {
       event: 'DELETE',
       schema: 'public',
       table: 'devices',
       filter: `user_id=eq.${user.id}`
-    }, (payload) => {
-      // If our current device is deleted, logout
+    }, (payload: any) => {
       if (payload.old && payload.old.hwid === hwid) {
         supabase.auth.signOut();
-        window.location.href = '/auth';
+        router.push('/auth');
       }
     }).subscribe();
 
-    return () => { supabase.removeChannel(deviceChannel); };
+    return () => {
+      if (deviceChannel) supabase.removeChannel(deviceChannel);
+    };
   }, [user?.id]);
 
-  return { chats, setChats, onlineUsers, lastSeenMap, fetchChats, drafts, saveDraft };
+  // === Мемоизация возвращаемых значений ===
+  const stableOnlineUsers = useMemo(() => onlineUsers, [onlineUsers]);
+  const stableDrafts = useMemo(() => drafts, [drafts]);
+  const stableLastSeenMap = useMemo(() => lastSeenMap, [lastSeenMap]);
+
+  return {
+    chats,
+    setChats,
+    onlineUsers: stableOnlineUsers,
+    setOnlineUsers,
+    lastSeenMap: stableLastSeenMap,
+    fetchChats,
+    drafts: stableDrafts,
+    saveDraft
+  };
 };

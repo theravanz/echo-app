@@ -42,7 +42,7 @@ export function CountrySelector({ value, onChange, countries }: CountrySelectorP
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          className="w-[100px] justify-between h-12 bg-white/5 border-white/10 text-white hover:bg-white/10 hover:text-white rounded-xl"
+          className="w-[80px] sm:w-[100px] justify-between h-12 bg-white/5 border-white/10 text-white hover:bg-white/10 hover:text-white rounded-xl text-xs sm:text-sm px-2 sm:px-4"
         >
           {selectedCountry ? (
             <span className="flex items-center gap-2">
@@ -55,7 +55,7 @@ export function CountrySelector({ value, onChange, countries }: CountrySelectorP
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-[200px] p-0 bg-[#121212] border-white/10">
+      <PopoverContent className="w-[180px] sm:w-[200px] p-0 bg-[#121212] border-white/10">
         <Command className="bg-transparent">
           <CommandInput placeholder="Search country..." className="text-white" />
           <CommandList>
