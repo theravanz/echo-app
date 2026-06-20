@@ -3,7 +3,7 @@
 import React, { memo } from 'react';
 import { cn } from "@/lib/utils";
 import { LinkPreview } from "./link-preview";
-import { TbCheck as Check, TbChecks as CheckCheck, TbArrowBackUp as Reply, TbHeart as Heart, TbDotsVertical as MoreVertical, TbPencil as Pen } from "react-icons/tb";
+import { TbCheck as Check, TbChecks as CheckCheck, TbArrowBackUp as Reply, TbHeart as Heart, TbDotsVertical as MoreVertical, TbPencil as Pen, TbClock as Clock } from "react-icons/tb";
 import { Button } from "@/components/ui/button";
 
 interface MessageBubbleProps {
@@ -85,6 +85,7 @@ export const MessageBubble = memo(({
 }: MessageBubbleProps) => {
   const isJumbo = isJumboEmoji(msg.content, msg.type);
   const isMedia = msg.type === 'sticker' || msg.type === 'gif';
+  const displayContent = msg._pendingContent || msg.content; // для локальных pending сообщений показываем расшифрованный текст
 
   return (
     <div className={cn(
@@ -107,7 +108,7 @@ export const MessageBubble = memo(({
           )}
           
           <div className="whitespace-pre-wrap break-words">
-            {renderMessageContent(msg.content, msg.type || 'text')}
+            {renderMessageContent(displayContent, msg.type || 'text')}
           </div>
 
           <div className={cn(
@@ -117,7 +118,9 @@ export const MessageBubble = memo(({
           )}>
             {msg.is_edited && <Pen className="w-2.5 h-2.5 mr-1" />}
             <span>{new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-            {isMe && (msg.status === 'read' ? <CheckCheck className="w-3 h-3 text-primary-foreground" /> : <Check className="w-3 h-3" />)}
+            {isMe && msg.status === 'pending' && <Clock className="w-3 h-3 text-muted-foreground animate-pulse" />}
+            {isMe && msg.status === 'sent' && <Check className="w-3 h-3" />}
+            {isMe && msg.status === 'read' && <CheckCheck className="w-3 h-3 text-primary-foreground" />}
           </div>
           
           {/* Hover Actions */}

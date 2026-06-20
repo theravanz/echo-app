@@ -105,6 +105,7 @@ import { toast } from "sonner";
 import { useEchoApp } from "@/hooks/echo/use-echo-app";
 import { useTranslation } from "@/hooks/use-translation";
 import { useE2EE } from "@/hooks/echo/use-e2ee";
+import { useNotifications } from "@/hooks/echo/use-notifications";
 import { MessageBubble } from "@/components/echo/app/message-bubble";
 import { MediaPicker } from "@/components/echo/app/media-picker";
 import dynamic from "next/dynamic";
@@ -119,6 +120,44 @@ const SettingsModal = dynamic(
 
 type NetworkMode = 'direct' | 'relay' | 'normal';
 const QUARANTINE_HOURS = 32;
+
+// Генерация временного ID для локальных сообщений
+const generateTempId = () => `local_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
+// Реальная проверка соединения с Supabase через REST API
+const checkRealConnectivity = async (): Promise<boolean> => {
+  // Быстрая проверка navigator.onLine
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return false;
+
+  // Пробуем достучаться до Supabase REST API (без no-cors!)
+  // Если сервер ответил любым HTTP-статусом — соединение есть
+  // DPI/RKN блокируют на уровне TCP — fetch упадёт с ошибкой сети
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+    const res = await fetch(
+      `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/`,
+      {
+        method: 'GET',
+        signal: controller.signal,
+        cache: 'no-store',
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    clearTimeout(timeoutId);
+    
+    // Любой ответ от сервера (даже 401, 404, 406) = соединение есть
+    // Если fetch выкинул ошибку — значит RKN/DPI/TCP блокирует
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 // --- Helper Components ---
 
@@ -154,7 +193,6 @@ function EchoAppContent() {
   const [selectedChat, setSelectedChat] = useState<any | null>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [newMessage, setNewMessage] = useState("");
-  const [isSending, setIsSending] = useState(false);
   const [isRightPanelOpen, setIsRightPanelOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isQuarantined, setIsQuarantined] = useState(false);
@@ -163,6 +201,23 @@ function EchoAppContent() {
   const [editingMessage, setEditingMessage] = useState<any | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [searchOpen, setSearchOpen] = useState(false);
+  const [pendingQueue, setPendingQueue] = useState<any[]>([]); // Offline message queue
+
+  // Load pending queue from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('echo_pending_queue');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) setPendingQueue(parsed);
+      }
+    } catch (e) { /* ignore */ }
+  }, []);
+
+  // Save pending queue to localStorage whenever it changes
+  useEffect(() => {
+    localStorage.setItem('echo_pending_queue', JSON.stringify(pendingQueue));
+  }, [pendingQueue]);
 
   // Search state
   const [searchQuery, setSearchQuery] = useState("");
@@ -180,6 +235,7 @@ function EchoAppContent() {
 
   const { chats, setChats, onlineUsers, setOnlineUsers, lastSeenMap, fetchChats, drafts, saveDraft } = useEchoApp(user);
   const { encryptMessage, decryptMessage } = useE2EE(chats);
+  const { notifyNewMessage } = useNotifications(user, chats);
 
   // --- Ported Logic ---
 
@@ -320,7 +376,7 @@ useEffect(() => {
 
 const handleSendMessage = async (type: 'text' | 'sticker' | 'gif' = 'text', customContent?: string) => {
   const text = customContent || newMessage.trim();
-  if (!text || !selectedChat || !user || isSending) return;
+  if (!text || !selectedChat || !user) return;
 
   if (editingMessage && type === 'text') {
     const encrypted = await encryptMessage(text, selectedChat.id);
@@ -344,15 +400,14 @@ const handleSendMessage = async (type: 'text' | 'sticker' | 'gif' = 'text', cust
   }
 
   setNewMessage("");
-  setIsSending(true);
 
   const encrypted = await encryptMessage(text, selectedChat.id);
   if (!encrypted) { 
     toast.error("E2EE Key Error"); 
-    setIsSending(false); 
     return; 
   }
 
+  // === Пытаемся отправить ===
   try {
     const { data, error } = await supabase.from('messages').insert({
       sender_id: user.id,
@@ -366,16 +421,85 @@ const handleSendMessage = async (type: 'text' | 'sticker' | 'gif' = 'text', cust
 
     if (error) throw error;
     
-    // НЕ добавляем сообщение локально - оно придет через Realtime listener
-    // Это предотвращает дублирование
+    // Успешно отправлено — Realtime listener сам обновит список
     setReplyingTo(null);
   } catch (err) { 
-    console.error('Send error:', err);
-    toast.error("Failed to send message"); 
-    // Восстанавливаем сообщение при ошибке
-    setNewMessage(text);
-  } finally { 
-    setIsSending(false); 
+    console.error('Send error, adding to offline queue:', err);
+    
+    // === Офлайн: добавляем в очередь и показываем локально ===
+    const tempId = generateTempId();
+    const pendingMsg = {
+      id: tempId,
+      sender_id: user.id,
+      receiver_id: selectedChat.id,
+      content: encrypted.content,
+      nonce: encrypted.nonce,
+      type: type,
+      status: 'pending',        // ← статус "часики"
+      created_at: new Date().toISOString(),
+      reply_to_id: replyingTo?.id || null,
+      _pendingContent: text,    // расшифрованный текст для локального показа
+      _pending: true,           // флаг что это локальное сообщение
+    };
+
+    // Добавляем в очередь
+    setPendingQueue(prev => [...prev, pendingMsg]);
+
+    // Добавляем в локальные сообщения (если открыт нужный чат)
+    if (selectedChat.id === selectedChatRef.current?.id) {
+      setMessages(prev => [...prev, pendingMsg]);
+    }
+
+    setReplyingTo(null);
+  }
+};
+
+const processPendingQueue = async () => {
+  const queue = pendingQueue;
+  if (queue.length === 0) return;
+
+  console.log(`Processing ${queue.length} pending messages...`);
+
+  const remaining: any[] = [];
+
+  for (const msg of queue) {
+    try {
+      const { error } = await supabase.from('messages').insert({
+        sender_id: msg.sender_id,
+        receiver_id: msg.receiver_id,
+        content: msg.content,
+        nonce: msg.nonce,
+        type: msg.type,
+        status: 'sent',
+        reply_to_id: msg.reply_to_id || null,
+      });
+
+      if (error) throw error;
+
+      // Успешно отправлено — удаляем из очереди
+      console.log('Pending message sent successfully:', msg.id);
+
+      // Обновляем статус в локальных сообщениях с 'pending' на 'sent'
+      setMessages(prev => prev.map(m =>
+        m.id === msg.id ? { ...m, status: 'sent', _pending: false, id: undefined /* будет заменено Realtime */ } : m
+      ));
+
+      // Удаляем из очереди, если сообщение было для текущего чата
+      if (selectedChatRef.current?.id !== msg.receiver_id) {
+        // Для других чатов просто убираем из очереди
+      }
+    } catch (err) {
+      console.error('Failed to send pending message, will retry:', msg.id, err);
+      remaining.push(msg);
+    }
+  }
+
+  setPendingQueue(remaining);
+
+  if (remaining.length > 0) {
+    console.log(`${remaining.length} messages still in queue`);
+  } else {
+    console.log('All pending messages sent!');
   }
 };
 
@@ -384,6 +508,7 @@ const handleSendMessage = async (type: 'text' | 'sticker' | 'gif' = 'text', cust
 useEffect(() => {
   let msgChannel: any = null;
   let isMounted = true;
+  let pollInterval: ReturnType<typeof setInterval> | null = null;
 
   const init = async () => {
     try {
@@ -445,63 +570,155 @@ useEffect(() => {
 
       fetchChats(userData.id).catch(err => console.error('Fetch chats error:', err));
 
-      // === Realtime канал для сообщений (БЕЗ presence!) ===
-      msgChannel = supabase.channel('global-msgs');
+      // === Realtime канал для сообщений с авто-переподключением ===
+      // и мониторингом состояния WebSocket-соединения
 
-      msgChannel.on('postgres_changes', { 
-        event: 'INSERT', 
-        schema: 'public', 
-        table: 'messages' 
-      }, async (payload: any) => {
+      let reconnectAttempts = 0;
+      const MAX_RECONNECT_DELAY = 30000; // 30 секунд макс
+
+      const subscribeMsgChannel = () => {
         if (!isMounted) return;
-        const nm = payload.new as any;
-        if (nm.sender_id === userData.id) return; // Игнорируем свои
-        
-        if (nm.receiver_id === userData.id) {
-          fetchChats(userData.id);
-          if (selectedChatRef.current && nm.sender_id === selectedChatRef.current.id) {
+
+        // Удаляем старый канал если есть
+        if (msgChannel) {
+          supabase.removeChannel(msgChannel);
+        }
+
+        msgChannel = supabase.channel('global-msgs');
+
+        msgChannel.on('postgres_changes', { 
+          event: 'INSERT', 
+          schema: 'public', 
+          table: 'messages' 
+        }, async (payload: any) => {
+          if (!isMounted) return;
+          const nm = payload.new as any;
+          if (nm.sender_id === userData.id) return; // Игнорируем свои
+          
+          if (nm.receiver_id === userData.id) {
+            fetchChats(userData.id);
+
+            // Расшифровываем для уведомления (всегда, не только для выбранного чата)
+            let decryptedContent = nm.content;
             try {
-              const dec = await decryptMessage(nm.content, nm.nonce, nm.sender_id);
+              decryptedContent = await decryptMessage(nm.content, nm.nonce, nm.sender_id);
+            } catch (err) {
+              console.error('[Notify] Decrypt error:', err);
+            }
+
+            // Показываем в текущем чате
+            if (selectedChatRef.current && nm.sender_id === selectedChatRef.current.id) {
               setMessages(prev => {
                 if (prev.some(m => m.id === nm.id)) return prev;
-                return [...prev, { ...nm, content: dec }];
+                return [...prev, { ...nm, content: decryptedContent }];
               });
-            } catch (err) {
-              console.error('Decrypt error:', err);
+            }
+
+            // Уведомление (только если окно не в фокусе или открыт другой чат)
+            notifyNewMessage(nm.sender_id, decryptedContent, selectedChatRef.current?.id);
+          }
+        });
+
+        msgChannel.on('postgres_changes', { 
+          event: 'UPDATE', 
+          schema: 'public', 
+          table: 'messages' 
+        }, async (payload: any) => {
+          if (!isMounted) return;
+          const nm = payload.new as any;
+          if (nm.receiver_id === userData.id || nm.sender_id === userData.id) {
+            fetchChats(userData.id);
+            if (selectedChatRef.current && 
+                (nm.sender_id === selectedChatRef.current.id || 
+                 nm.receiver_id === selectedChatRef.current.id)) {
+              try {
+                const otherId = nm.sender_id === userData.id ? nm.receiver_id : nm.sender_id;
+                const dec = await decryptMessage(nm.content, nm.nonce, otherId);
+                setMessages(prev => {
+                  const exists = prev.some(m => m.id === nm.id);
+                  return exists 
+                    ? prev.map(m => m.id === nm.id ? { ...nm, content: dec } : m)
+                    : [...prev, { ...nm, content: dec }];
+                });
+              } catch (err) {
+                console.error('Decrypt error:', err);
+              }
             }
           }
-        }
-      });
+        });
 
-      msgChannel.on('postgres_changes', { 
-        event: 'UPDATE', 
-        schema: 'public', 
-        table: 'messages' 
-      }, async (payload: any) => {
-        if (!isMounted) return;
-        const nm = payload.new as any;
-        if (nm.receiver_id === userData.id || nm.sender_id === userData.id) {
-          fetchChats(userData.id);
-          if (selectedChatRef.current && 
-              (nm.sender_id === selectedChatRef.current.id || 
-               nm.receiver_id === selectedChatRef.current.id)) {
-            try {
-              const otherId = nm.sender_id === userData.id ? nm.receiver_id : nm.sender_id;
-              const dec = await decryptMessage(nm.content, nm.nonce, otherId);
-              setMessages(prev => {
-                const exists = prev.some(m => m.id === nm.id);
-                return exists 
-                  ? prev.map(m => m.id === nm.id ? { ...nm, content: dec } : m)
-                  : [...prev, { ...nm, content: dec }];
-              });
-            } catch (err) {
-              console.error('Decrypt error:', err);
+        // Подписываемся — только логируем и переподключаемся, НО НЕ трогаем connectionStatus
+        // Статус соединения определяется HTTP-проверкой (REST API), а не WebSocket'ом
+        msgChannel.subscribe((status: string, err?: Error) => {
+          if (!isMounted) return;
+
+          if (status === 'SUBSCRIBED') {
+            console.log('[Realtime] Channel subscribed successfully');
+            reconnectAttempts = 0;
+          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+            console.warn(`[Realtime] Channel ${status}:`, err?.message || 'unknown');
+            // НЕ ставим disconnected — соединение живое (HTTP работает), Realtime переподключится сам
+
+            // Авто-переподключение с exponential backoff
+            if (isMounted) {
+              const delay = Math.min(
+                1000 * Math.pow(2, reconnectAttempts),
+                MAX_RECONNECT_DELAY
+              );
+              reconnectAttempts++;
+              console.log(`[Realtime] Reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
+              setTimeout(subscribeMsgChannel, delay);
             }
           }
-        }
-      });
+        });
+      };
 
-      msgChannel.subscribe();
+      // Первая подписка
+      subscribeMsgChannel();
+
+      // === Polling fallback: когда Realtime не работает, опрашиваем через REST ===
+      const startPolling = () => {
+        if (pollInterval) clearInterval(pollInterval);
+        pollInterval = setInterval(async () => {
+          if (!isMounted || !userData?.id) return;
+
+          // Проверяем, живо ли Realtime-соединение по стейту сокета
+          const socketState = (supabase as any).realtime?.connectionState?.();
+          if (socketState === 'connected') {
+            // Realtime работает — не нужно поллить
+            return;
+          }
+
+          // Realtime упал — поллим вручную
+          try {
+            const { data, error } = await supabase
+              .from('messages')
+              .select('*')
+              .or(`receiver_id.eq.${userData.id},sender_id.eq.${userData.id}`)
+              .order('created_at', { ascending: false })
+              .limit(50);
+
+            if (error) throw error;
+            if (data && data.length > 0) {
+              fetchChats(userData.id);
+              // Если есть новые сообщения для открытого чата
+              if (selectedChatRef.current) {
+                const newMsgs = data.filter(m => 
+                  (m.receiver_id === userData.id && m.sender_id === selectedChatRef.current.id) ||
+                  (m.sender_id === userData.id && m.receiver_id === selectedChatRef.current.id)
+                );
+                if (newMsgs.length > 0) {
+                  fetchMessages(selectedChatRef.current.id, userData.id);
+                }
+              }
+            }
+          } catch (err) {
+            // silent — polling может падать, это ок
+          }
+        }, 5000); // Каждые 5 секунд
+      };
+
+      startPolling();
 
     } catch (error) {
       console.error('App init error:', error);
@@ -513,7 +730,11 @@ useEffect(() => {
 
   return () => {
     isMounted = false;
-    if (msgChannel) supabase.removeChannel(msgChannel);
+    if (msgChannel) {
+      supabase.removeChannel(msgChannel);
+      msgChannel = null;
+    }
+    if (pollInterval) clearInterval(pollInterval);
   };
 }, []); // Пустые зависимости — выполняется один раз при монтировании
 
@@ -525,25 +746,62 @@ useEffect(() => {
   }
 }, [selectedChat?.id, user?.id]);
 
-// === Монитор соединения ===
-useEffect(() => {
-  setConnectionStatus(navigator.onLine ? 'connected' : 'disconnected');
+// === Монитор соединения (только HTTP/REST — Realtime не влияет на статус) ===
+// Используем ref для колбэков, чтобы избежать stale closure
+const processPendingQueueRef = useRef(processPendingQueue);
+processPendingQueueRef.current = processPendingQueue;
 
-  const handleOnline = () => setConnectionStatus('connected');
-  const handleOffline = () => setConnectionStatus('disconnected');
+useEffect(() => {
+  let isActive = true;
+  let lastOnline: boolean | null = null; // null = первый запуск
+
+  const checkConnection = async () => {
+    const isOnline = await checkRealConnectivity();
+    if (!isActive) return;
+
+    if (isOnline) {
+      // Переход disconnected → connected
+      if (lastOnline === false) {
+        processPendingQueueRef.current();
+        setConnectionStatus('connected');
+      } else if (lastOnline === null) {
+        // Первичная проверка
+        setConnectionStatus('connected');
+      }
+      // Если уже connected — ничего не делаем (не флипаем!)
+      lastOnline = true;
+    } else {
+      setConnectionStatus('disconnected');
+      lastOnline = false;
+    }
+  };
+
+  // Первичная проверка
+  checkConnection();
+
+  // Обработчики от браузера
+  const handleOnline = () => {
+    setConnectionStatus('connecting');
+    setTimeout(checkConnection, 500);
+  };
+  const handleOffline = () => {
+    setConnectionStatus('disconnected');
+    lastOnline = false;
+  };
   window.addEventListener('online', handleOnline);
   window.addEventListener('offline', handleOffline);
 
-  const checkInterval = setInterval(() => {
-    if (!navigator.onLine) setConnectionStatus('disconnected');
-  }, 5000);
+  // Проверка каждые 15 секунд (не 5, чтобы не долбить сервер)
+  const checkInterval = setInterval(checkConnection, 15000);
 
   return () => {
+    isActive = false;
     window.removeEventListener('online', handleOnline);
     window.removeEventListener('offline', handleOffline);
     clearInterval(checkInterval);
   };
-}, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, []); // Пустые зависимости — используем ref'ы
 
 // === Автоскролл ===
 useEffect(() => {
@@ -1073,13 +1331,13 @@ useEffect(() => {
 
                       <button
                         onClick={() => handleSendMessage()}
-                        disabled={!newMessage.trim() || isSending}
+                        disabled={!newMessage.trim()}
                         className={cn(
                           "w-11 h-11 md:w-14 md:h-14 rounded-[28px] md:rounded-[32px] flex items-center justify-center transition-all duration-700 relative group/send",
                           newMessage.trim() ? "bg-primary text-primary-foreground shadow-2xl shadow-primary/30" : "bg-white/5 text-white/10"
                         )}
                       >
-                         {isSending ? <RefreshCw className="w-6 h-6 animate-spin" /> : <Send className="w-6 h-6 group-hover/send:translate-x-1 group-hover/send:-translate-y-1 transition-transform duration-500" />}
+                         <Send className="w-6 h-6 group-hover/send:translate-x-1 group-hover/send:-translate-y-1 transition-transform duration-500" />
                          {newMessage.trim() && <div className="absolute inset-0 bg-primary blur-xl opacity-30 rounded-[32px]" />}
                       </button>
                    </div>

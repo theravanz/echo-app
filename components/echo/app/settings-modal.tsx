@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { QRCodeCanvas } from "qrcode.react";
+import { useIsMobile } from "@/hooks/use-mobile";
 import { supabase } from "@/lib/supabase";
 import { cn, safeChar } from "@/lib/utils";
 import {
@@ -75,6 +77,8 @@ const menuSections = [
     items: [
       { id: "profile", icon: User, label: "Identity" },
       { id: "security", icon: ShieldCheck, label: "Security" },
+      { id: "privacy", icon: Shield, label: "Privacy", action: "privacy" },
+      { id: "devices", icon: HardDrive, label: "Devices", action: "devices" },
       { id: "alerts", icon: Bell, label: "Alerts" },
       { id: "interface", icon: Palette, label: "Interface" },
       { id: "network", icon: Wifi, label: "Network" },
@@ -84,8 +88,6 @@ const menuSections = [
   {
     label: "Advanced",
     items: [
-      { id: "privacy", icon: Shield, label: "Privacy", action: "privacy" },
-      { id: "devices", icon: HardDrive, label: "Devices", action: "devices" },
       {
         id: "language",
         icon: Language,
@@ -102,6 +104,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   isQuarantined,
 }) => {
+  const isMobile = useIsMobile();
   const [activeView, setActiveView] = useState<string | null>(null);
   const [devices, setDevices] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -109,6 +112,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isLastSeenVisible, setIsLastSeenVisible] = useState(
     user?.user_metadata?.privacy_last_seen !== false,
   );
+
+  const [qrSession, setQrSession] = useState<any | null>(null);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrError, setQrError] = useState<string | null>(null);
+  const [qrPolling, setQrPolling] = useState<ReturnType<typeof setInterval> | null>(null);
 
   const generateLocalHWID = () => {
     const canvas = document.createElement("canvas");
@@ -143,6 +151,30 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
     if (!error) setDevices(data || []);
     setLoading(false);
   };
+
+  const startQrAuth = async () => {
+    setQrError(null);
+    setQrLoading(true);
+    try {
+      const timestamp = Date.now();
+      const payload = JSON.stringify({ userId: user.id, hwid: currentHwid, ts: timestamp });
+      setQrSession({ payload });
+      const poll = setInterval(async () => {
+        // In backend this should read confirmed sessions and update profile keys
+      }, 2000);
+      setQrPolling(poll);
+    } catch (e: any) {
+      setQrError(e.message || "Failed to start QR auth");
+    } finally {
+      setQrLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (qrPolling) clearInterval(qrPolling);
+    };
+  }, [qrPolling]);
 
   const toggleLastSeen = async () => {
     const newValue = !isLastSeenVisible;
@@ -372,6 +404,55 @@ const SettingsModal: React.FC<SettingsModalProps> = ({
       </div>
     );
   }
+
+  const renderQrAuth = () => (
+    <div className="p-4 md:p-10 space-y-6">
+      <div className="flex items-center justify-between mb-4">
+        {isMobile && (
+          <button
+            className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white"
+            onClick={() => {
+              setActiveView(null);
+              if (qrPolling) {
+                clearInterval(qrPolling);
+                setQrPolling(null);
+              }
+            }}
+          >
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+        )}
+        <h2 className="text-2xl font-display font-bold tracking-tight">Authorize Device</h2>
+        <button
+          className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white"
+          onClick={onClose}
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+      <GlassPanel className="p-8 rounded-[28px]">
+        <CornerBrackets />
+        {qrSession ? (
+          <div className="flex flex-col items-center gap-6">
+            <div className="bg-white p-4 rounded-2xl">
+              <QRCodeCanvas value={qrSession.payload} size={220} />
+            </div>
+            <div className="text-xs text-white/40 font-mono text-center">Scan this QR from the new device and confirm on the old one.</div>
+          </div>
+        ) : (
+          <p className="text-xs text-white/60">Starting…</p>
+        )}
+        <button
+          onClick={startQrAuth}
+          disabled={qrLoading}
+          className="mt-6 w-full h-14 rounded-[28px] bg-primary text-primary-foreground font-bold uppercase tracking-widest text-sm disabled:opacity-40"
+        >
+          {qrLoading ? "Starting…" : "Show QR"}
+        </button>
+        {qrError && <p className="mt-3 text-xs text-destructive font-mono">{qrError}</p>}
+      </GlassPanel>
+    </div>
+  );
 
   // --- Privacy View ---
   if (activeView === "privacy") {
