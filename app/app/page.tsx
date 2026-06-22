@@ -101,13 +101,19 @@ import nacl from 'tweetnacl';
 // @ts-ignore
 import { decodeUTF8, encodeUTF8, decodeBase64, encodeBase64 } from 'tweetnacl-util';
 import { toast } from "sonner";
-import { useEchoApp } from "@/hooks/echo/use-echo-app";
 import { useTranslation } from "@/hooks/use-translation";
-import { useE2EE } from "@/hooks/echo/use-e2ee";
 import { useNotifications } from "@/hooks/echo/use-notifications";
+import { useNotificationSettings } from "@/hooks/echo/use-notification-settings";
+import { useChatList } from "@/hooks/echo/use-chat-list";
+import { useMessages } from "@/hooks/echo/use-messages";
+import { useNetworkQueue } from "@/hooks/echo/use-network-queue";
+import { useRealtime } from "@/hooks/echo/use-realtime";
+import { useConnection } from "@/hooks/echo/use-connection";
+import { useProfiles } from "@/hooks/echo/use-profiles";
 import { MessageBubble } from "@/components/echo/app/message-bubble";
 import { MediaPicker } from "@/components/echo/app/media-picker";
 import dynamic from "next/dynamic";
+import type { UserProfile, Chat, Message, NetworkMode, AppTab, ConnectionStatus } from "@/hooks/echo/types";
 
 const SettingsModal = dynamic(
   () => import("@/components/echo/app/settings-modal"),
@@ -117,46 +123,9 @@ const SettingsModal = dynamic(
 
 // --- Types & Constants ---
 
-type NetworkMode = 'direct' | 'relay' | 'normal';
 const QUARANTINE_HOURS = 32;
 
-// Генерация временного ID для локальных сообщений
-const generateTempId = () => `local_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
 
-// Реальная проверка соединения с Supabase через REST API
-const checkRealConnectivity = async (): Promise<boolean> => {
-  // Быстрая проверка navigator.onLine
-  if (typeof navigator !== 'undefined' && !navigator.onLine) return false;
-
-  // Пробуем достучаться до Supabase REST API (без no-cors!)
-  // Если сервер ответил любым HTTP-статусом — соединение есть
-  // DPI/RKN блокируют на уровне TCP — fetch упадёт с ошибкой сети
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 5000);
-
-    const res = await fetch(
-      `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/`,
-      {
-        method: 'GET',
-        signal: controller.signal,
-        cache: 'no-store',
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-
-    clearTimeout(timeoutId);
-    
-    // Любой ответ от сервера (даже 401, 404, 406) = соединение есть
-    // Если fetch выкинул ошибку — значит RKN/DPI/TCP блокирует
-    return true;
-  } catch {
-    return false;
-  }
-};
 
 // --- Helper Components ---
 
@@ -185,71 +154,39 @@ function EchoAppContent() {
   // App State
   const [appLoading, setAppLoading] = useState(true);
   const [loadingStatus, setLoadingStatus] = useState("Establishing Secure Node...");
-  const [activeTab, setActiveTab] = useState<'chats' | 'feed' | 'community'>('chats');
+  const [activeTab, setActiveTab] = useState<AppTab>('chats');
   const [activeMode, setActiveMode] = useState<NetworkMode>('direct');
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<UserProfile | null>(null);
   const [accounts, setAccounts] = useState<any[]>([]);
-  const [selectedChat, setSelectedChat] = useState<any | null>(null);
-  const [messages, setMessages] = useState<any[]>([]);
-  const [newMessage, setNewMessage] = useState("");
   const [isRightPanelOpen, setIsRightPanelOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isQuarantined, setIsQuarantined] = useState(false);
   const [quarantineTime, setQuarantineTime] = useState("");
-  const [replyingTo, setReplyingTo] = useState<any | null>(null);
-  const [editingMessage, setEditingMessage] = useState<any | null>(null);
-  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [pendingQueue, setPendingQueue] = useState<any[]>([]); // Offline message queue
-
-  // Load pending queue from localStorage on mount
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('echo_pending_queue');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) setPendingQueue(parsed);
-      }
-    } catch (e) { /* ignore */ }
-  }, []);
-
-  // Save pending queue to localStorage whenever it changes
-  useEffect(() => {
-    localStorage.setItem('echo_pending_queue', JSON.stringify(pendingQueue));
-  }, [pendingQueue]);
-
-  // Search state
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<any[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [isSearchFocused, setIsSearchFocused] = useState(false);
-  const [recentSearches, setRecentSearches] = useState<any[]>([]);
-  const searchTimeoutRef = useRef<any>(null);
-  const searchRef = useRef<HTMLDivElement>(null);
-
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const userRef = useRef<any>(null);
-  const selectedChatRef = useRef<any>(null);
+  const userRef = useRef<UserProfile | null>(null);
 
-  const { chats, setChats, onlineUsers, setOnlineUsers, lastSeenMap, fetchChats, drafts, saveDraft } = useEchoApp(user);
-  const { encryptMessage, decryptMessage } = useE2EE(chats);
-  const { notifyNewMessage } = useNotifications(user, chats);
+  const { chats, setChats, fetchChats, selectedChat, setSelectedChat, selectedChatRef, drafts, saveDraft, onlineUsers } = useChatList(user);
+  const { messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage } = useMessages();
+  const { addToQueue, processPendingQueue } = useNetworkQueue();
+  const { connectionStatus, setConnectionStatus } = useConnection(processPendingQueue);
+  const { searchOpen, setSearchOpen, searchQuery, searchResults, isSearching, isSearchFocused, setIsSearchFocused, recentSearches, searchRef, searchTimeoutRef, handleSearch, handleStartChat } = useProfiles();
+  const { settings: notificationSettings } = useNotificationSettings(user);
+  const { notifyNewMessage } = useNotifications({ user, chats, settings: notificationSettings, onNotificationClick: (chatId) => setSelectedChat(chats.find(c => c.id === chatId) || null) });
 
-  // --- Ported Logic ---
+ 
 
-const draftsRef = useRef(drafts);
-draftsRef.current = drafts;
-
+  // Drafts: load when switching chats
 useEffect(() => {
   if (!selectedChat?.id) return;
-  const draft = draftsRef.current[selectedChat.id] || "";
+  const draft = drafts[selectedChat.id] || "";
   setNewMessage(prev => prev === draft ? prev : draft);
-}, [selectedChat?.id]);
+}, [selectedChat?.id, drafts, setNewMessage]);
 
+// Drafts: save on typing
 useEffect(() => {
   if (!selectedChat?.id) return;
-  const currentDraft = draftsRef.current[selectedChat.id] || "";
+  const currentDraft = drafts[selectedChat.id] || "";
   if (newMessage === currentDraft) return;
 
   const timeout = setTimeout(() => {
@@ -257,257 +194,11 @@ useEffect(() => {
   }, 500);
 
   return () => clearTimeout(timeout);
-}, [newMessage, selectedChat?.id]);
-  const fetchMessages = async (chatId: string, currentUserId: string) => {
-    const cacheKey = `echo_msgs_cache_${currentUserId}_${chatId}`;
+}, [newMessage, selectedChat?.id, saveDraft, drafts]);
 
-    try {
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        if (parsed.messages && Array.isArray(parsed.messages)) {
-          setMessages(parsed.messages);
-        }
-      }
-    } catch (e) { /* ignore cache errors */ }
-
-    // 2. Fetch fresh data from server
-    try {
-      const { data, error } = await supabase
-        .from('messages')
-        .select('*')
-        .or(`and(sender_id.eq.${currentUserId},receiver_id.eq.${chatId}),and(sender_id.eq.${chatId},receiver_id.eq.${currentUserId})`)
-        .order('created_at', { ascending: true });
-
-      if (error) throw error;
-      const processed = await Promise.all((data || []).map(async (m) => {
-        if (!m) return null;
-        const otherId = m.sender_id === currentUserId ? m.receiver_id : m.sender_id;
-        return { ...m, content: await decryptMessage(m.content || '', m.nonce || '', otherId) };
-      }));
-      const decryptedMessages = processed.filter((msg): msg is any => msg !== null);
-      setMessages(decryptedMessages);
-
-      // 3. Save to cache
-      try {
-        localStorage.setItem(cacheKey, JSON.stringify({
-          messages: decryptedMessages,
-          timestamp: new Date().toISOString()
-        }));
-      } catch (e) { /* storage full — ignore */ }
-
-      const unreadIds = (data || []).filter(m => m.receiver_id === currentUserId && m.status !== 'read').map(m => m.id);
-      if (unreadIds.length > 0) {
-        await supabase.from('messages').update({ status: 'read', read_at: new Date().toISOString() }).in('id', unreadIds);
-      }
-    } catch (err) { console.error('Fetch messages error:', err); }
-  };
-  // --- Search Logic ---
-  const handleSearch = async (query: string) => {
-    setSearchQuery(query);
-    if (query.trim().length < 2) {
-      setSearchResults([]);
-      return;
-    }
-
-    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
-
-    searchTimeoutRef.current = setTimeout(async () => {
-      setIsSearching(true);
-      try {
-        const { data, error } = await supabase
-          .from('profiles')
-          .select('*')
-          .or('username.ilike.%' + query + '%,display_name.ilike.%' + query + '%')
-          .neq('id', userRef.current?.id)
-          .limit(10);
-
-        if (error) throw error;
-        setSearchResults(data || []);
-      } catch (err) {
-        console.error('Search error:', err);
-      } finally {
-        setIsSearching(false);
-      }
-    }, 300);
-  };
-
-  const handleStartChat = (profile: any) => {
-    const updated = [profile, ...recentSearches.filter((p: any) => p.id !== profile.id)].slice(0, 5);
-    setRecentSearches(updated);
-    localStorage.setItem('echo_recent_searches', JSON.stringify(updated));
-    setSearchQuery('');
-    setSearchResults([]);
-    setIsSearchFocused(false);
-    setSearchOpen(false);
-
-    const existingChat = chats.find((c: any) => c.id === profile.id);
-    if (existingChat) {
-      setSelectedChat(existingChat);
-    } else {
-      setSelectedChat(profile);
-      setChats((prev: any[]) => {
-        if (prev.find((c: any) => c.id === profile.id)) return prev;
-        return [{ ...profile, lastMessage: null, lastMessageTime: null, unreadCount: 0 }, ...prev];
-      });
-    }
-    toast.success('Chat with ' + (profile.display_name || profile.username) + ' opened');
-  };
-
-  // Load recent searches
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('echo_recent_searches');
-      if (saved) setRecentSearches(JSON.parse(saved));
-    } catch (e) { /* ignore corrupt cache */ }
-  }, []);
-
-  // Close search dropdown on outside click
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
-        setIsSearchFocused(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-const handleSendMessage = async (type: 'text' | 'sticker' | 'gif' = 'text', customContent?: string) => {
-  const text = customContent || newMessage.trim();
-  if (!text || !selectedChat || !user) return;
-
-  if (editingMessage && type === 'text') {
-    const encrypted = await encryptMessage(text, selectedChat.id);
-    if (!encrypted) return;
-    try {
-      await supabase.from('messages').update({
-        content: encrypted.content,
-        nonce: encrypted.nonce,
-        is_edited: true
-      }).eq('id', editingMessage.id);
-      
-      setMessages(prev => prev.map(m => 
-        m.id === editingMessage.id ? { ...m, content: text, is_edited: true } : m
-      ));
-      setEditingMessage(null);
-      setNewMessage("");
-    } catch (err) { 
-      toast.error("Failed to edit message"); 
-    }
-    return;
-  }
-
-  setNewMessage("");
-
-  const encrypted = await encryptMessage(text, selectedChat.id);
-  if (!encrypted) { 
-    toast.error("E2EE Key Error"); 
-    return; 
-  }
-
-  // === Пытаемся отправить ===
-  try {
-    const { data, error } = await supabase.from('messages').insert({
-      sender_id: user.id,
-      receiver_id: selectedChat.id,
-      content: encrypted.content,
-      nonce: encrypted.nonce,
-      type: type,
-      status: 'sent',
-      reply_to_id: replyingTo?.id || null
-    }).select().single();
-
-    if (error) throw error;
-    
-    // Успешно отправлено — Realtime listener сам обновит список
-    setReplyingTo(null);
-  } catch (err) { 
-    console.error('Send error, adding to offline queue:', err);
-    
-    // === Офлайн: добавляем в очередь и показываем локально ===
-    const tempId = generateTempId();
-    const pendingMsg = {
-      id: tempId,
-      sender_id: user.id,
-      receiver_id: selectedChat.id,
-      content: encrypted.content,
-      nonce: encrypted.nonce,
-      type: type,
-      status: 'pending',        // ← статус "часики"
-      created_at: new Date().toISOString(),
-      reply_to_id: replyingTo?.id || null,
-      _pendingContent: text,    // расшифрованный текст для локального показа
-      _pending: true,           // флаг что это локальное сообщение
-    };
-
-    // Добавляем в очередь
-    setPendingQueue(prev => [...prev, pendingMsg]);
-
-    // Добавляем в локальные сообщения (если открыт нужный чат)
-    if (selectedChat.id === selectedChatRef.current?.id) {
-      setMessages(prev => [...prev, pendingMsg]);
-    }
-
-    setReplyingTo(null);
-  }
-};
-
-const processPendingQueue = async () => {
-  const queue = pendingQueue;
-  if (queue.length === 0) return;
-
-  console.log(`Processing ${queue.length} pending messages...`);
-
-  const remaining: any[] = [];
-
-  for (const msg of queue) {
-    try {
-      const { error } = await supabase.from('messages').insert({
-        sender_id: msg.sender_id,
-        receiver_id: msg.receiver_id,
-        content: msg.content,
-        nonce: msg.nonce,
-        type: msg.type,
-        status: 'sent',
-        reply_to_id: msg.reply_to_id || null,
-      });
-
-      if (error) throw error;
-
-      // Успешно отправлено — удаляем из очереди
-      console.log('Pending message sent successfully:', msg.id);
-
-      // Обновляем статус в локальных сообщениях с 'pending' на 'sent'
-      setMessages(prev => prev.map(m =>
-        m.id === msg.id ? { ...m, status: 'sent', _pending: false, id: undefined /* будет заменено Realtime */ } : m
-      ));
-
-      // Удаляем из очереди, если сообщение было для текущего чата
-      if (selectedChatRef.current?.id !== msg.receiver_id) {
-        // Для других чатов просто убираем из очереди
-      }
-    } catch (err) {
-      console.error('Failed to send pending message, will retry:', msg.id, err);
-      remaining.push(msg);
-    }
-  }
-
-  setPendingQueue(remaining);
-
-  if (remaining.length > 0) {
-    console.log(`${remaining.length} messages still in queue`);
-  } else {
-    console.log('All pending messages sent!');
-  }
-};
-
-// --- Effects ---
-
+// === App Initialization ===
 useEffect(() => {
-  let msgChannel: any = null;
   let isMounted = true;
-  let pollInterval: ReturnType<typeof setInterval> | null = null;
 
   const init = async () => {
     try {
@@ -524,12 +215,12 @@ useEffect(() => {
         return;
       }
 
-      let userData: any;
+      let userData: UserProfile;
       try {
         const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
-        userData = { ...session.user, user_metadata: { ...session.user.user_metadata, ...(profile || {}) } };
+        userData = { ...session.user, user_metadata: { ...session.user.user_metadata, ...(profile || {}) } } as UserProfile;
       } catch {
-        userData = session.user;
+        userData = session.user as UserProfile;
       }
 
       if (!isMounted) return;
@@ -569,156 +260,6 @@ useEffect(() => {
 
       fetchChats(userData.id).catch(err => console.error('Fetch chats error:', err));
 
-      // === Realtime канал для сообщений с авто-переподключением ===
-      // и мониторингом состояния WebSocket-соединения
-
-      let reconnectAttempts = 0;
-      const MAX_RECONNECT_DELAY = 30000; // 30 секунд макс
-
-      const subscribeMsgChannel = () => {
-        if (!isMounted) return;
-
-        // Удаляем старый канал если есть
-        if (msgChannel) {
-          supabase.removeChannel(msgChannel);
-        }
-
-        msgChannel = supabase.channel('global-msgs');
-
-        msgChannel.on('postgres_changes', { 
-          event: 'INSERT', 
-          schema: 'public', 
-          table: 'messages' 
-        }, async (payload: any) => {
-          if (!isMounted) return;
-          const nm = payload.new as any;
-          if (nm.sender_id === userData.id) return; // Игнорируем свои
-          
-          if (nm.receiver_id === userData.id) {
-            fetchChats(userData.id);
-
-            // Расшифровываем для уведомления (всегда, не только для выбранного чата)
-            let decryptedContent = nm.content;
-            try {
-              decryptedContent = await decryptMessage(nm.content, nm.nonce, nm.sender_id);
-            } catch (err) {
-              console.error('[Notify] Decrypt error:', err);
-            }
-
-            // Показываем в текущем чате
-            if (selectedChatRef.current && nm.sender_id === selectedChatRef.current.id) {
-              setMessages(prev => {
-                if (prev.some(m => m.id === nm.id)) return prev;
-                return [...prev, { ...nm, content: decryptedContent }];
-              });
-            }
-
-            // Уведомление (только если окно не в фокусе или открыт другой чат)
-            notifyNewMessage(nm.sender_id, decryptedContent, selectedChatRef.current?.id);
-          }
-        });
-
-        msgChannel.on('postgres_changes', { 
-          event: 'UPDATE', 
-          schema: 'public', 
-          table: 'messages' 
-        }, async (payload: any) => {
-          if (!isMounted) return;
-          const nm = payload.new as any;
-          if (nm.receiver_id === userData.id || nm.sender_id === userData.id) {
-            fetchChats(userData.id);
-            if (selectedChatRef.current && 
-                (nm.sender_id === selectedChatRef.current.id || 
-                 nm.receiver_id === selectedChatRef.current.id)) {
-              try {
-                const otherId = nm.sender_id === userData.id ? nm.receiver_id : nm.sender_id;
-                const dec = await decryptMessage(nm.content, nm.nonce, otherId);
-                setMessages(prev => {
-                  const exists = prev.some(m => m.id === nm.id);
-                  return exists 
-                    ? prev.map(m => m.id === nm.id ? { ...nm, content: dec } : m)
-                    : [...prev, { ...nm, content: dec }];
-                });
-              } catch (err) {
-                console.error('Decrypt error:', err);
-              }
-            }
-          }
-        });
-
-        // Подписываемся — только логируем и переподключаемся, НО НЕ трогаем connectionStatus
-        // Статус соединения определяется HTTP-проверкой (REST API), а не WebSocket'ом
-        msgChannel.subscribe((status: string, err?: Error) => {
-          if (!isMounted) return;
-
-          if (status === 'SUBSCRIBED') {
-            console.log('[Realtime] Channel subscribed successfully');
-            reconnectAttempts = 0;
-          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-            console.warn(`[Realtime] Channel ${status}:`, err?.message || 'unknown');
-            // НЕ ставим disconnected — соединение живое (HTTP работает), Realtime переподключится сам
-
-            // Авто-переподключение с exponential backoff
-            if (isMounted) {
-              const delay = Math.min(
-                1000 * Math.pow(2, reconnectAttempts),
-                MAX_RECONNECT_DELAY
-              );
-              reconnectAttempts++;
-              console.log(`[Realtime] Reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
-              setTimeout(subscribeMsgChannel, delay);
-            }
-          }
-        });
-      };
-
-      // Первая подписка
-      subscribeMsgChannel();
-
-      // === Polling fallback: когда Realtime не работает, опрашиваем через REST ===
-      const startPolling = () => {
-        if (pollInterval) clearInterval(pollInterval);
-        pollInterval = setInterval(async () => {
-          if (!isMounted || !userData?.id) return;
-
-          // Проверяем, живо ли Realtime-соединение по стейту сокета
-          const socketState = (supabase as any).realtime?.connectionState?.();
-          if (socketState === 'connected') {
-            // Realtime работает — не нужно поллить
-            return;
-          }
-
-          // Realtime упал — поллим вручную
-          try {
-            const { data, error } = await supabase
-              .from('messages')
-              .select('*')
-              .or(`receiver_id.eq.${userData.id},sender_id.eq.${userData.id}`)
-              .order('created_at', { ascending: false })
-              .limit(50);
-
-            if (error) throw error;
-            if (data && data.length > 0) {
-              fetchChats(userData.id);
-              // Если есть новые сообщения для открытого чата
-              if (selectedChatRef.current) {
-                const newMsgs = data.filter(m => 
-                  (m.receiver_id === userData.id && m.sender_id === selectedChatRef.current.id) ||
-                  (m.sender_id === userData.id && m.receiver_id === selectedChatRef.current.id)
-                );
-                if (newMsgs.length > 0) {
-                  fetchMessages(selectedChatRef.current.id, userData.id);
-                }
-              }
-            }
-          } catch (err) {
-            // silent — polling может падать, это ок
-          }
-        }, 5000); // Каждые 5 секунд
-      };
-
-      startPolling();
-
     } catch (error) {
       console.error('App init error:', error);
       if (isMounted) setAppLoading(false);
@@ -729,19 +270,23 @@ useEffect(() => {
 
   return () => {
     isMounted = false;
-    if (msgChannel) {
-      supabase.removeChannel(msgChannel);
-      msgChannel = null;
-    }
-    if (pollInterval) clearInterval(pollInterval);
   };
-}, []); // Пустые зависимости — выполняется один раз при монтировании
+}, []);
 
-// === Загрузка сообщений при смене чата ===
+// === Realtime subscriptions ===
+useRealtime({
+  user,
+  selectedChatRef,
+  onNewMessage: (msg) => setMessages(prev => prev.some(m => m.id === msg.id) ? prev : [...prev, msg]),
+  onUpdateMessage: (msg) => setMessages(prev => prev.map(m => m.id === msg.id ? msg : m)),
+  onFetchChats: () => { if (user) fetchChats(user.id); },
+  onNotifyMessage: (senderId, content, currentChatId) => notifyNewMessage(senderId, content, currentChatId),
+});
+
+// === Fetch messages when switching chats ===
 useEffect(() => {
   if (selectedChat && user) {
     selectedChatRef.current = selectedChat;
-    // Reset scroll position when switching chats
     if (scrollRef.current) {
       scrollRef.current.scrollTop = 0;
     }
@@ -749,64 +294,7 @@ useEffect(() => {
   }
 }, [selectedChat?.id, user?.id]);
 
-// === Монитор соединения (только HTTP/REST — Realtime не влияет на статус) ===
-// Используем ref для колбэков, чтобы избежать stale closure
-const processPendingQueueRef = useRef(processPendingQueue);
-processPendingQueueRef.current = processPendingQueue;
-
-useEffect(() => {
-  let isActive = true;
-  let lastOnline: boolean | null = null; // null = первый запуск
-
-  const checkConnection = async () => {
-    const isOnline = await checkRealConnectivity();
-    if (!isActive) return;
-
-    if (isOnline) {
-      // Переход disconnected → connected
-      if (lastOnline === false) {
-        processPendingQueueRef.current();
-        setConnectionStatus('connected');
-      } else if (lastOnline === null) {
-        // Первичная проверка
-        setConnectionStatus('connected');
-      }
-      // Если уже connected — ничего не делаем (не флипаем!)
-      lastOnline = true;
-    } else {
-      setConnectionStatus('disconnected');
-      lastOnline = false;
-    }
-  };
-
-  // Первичная проверка
-  checkConnection();
-
-  // Обработчики от браузера
-  const handleOnline = () => {
-    setConnectionStatus('connecting');
-    setTimeout(checkConnection, 500);
-  };
-  const handleOffline = () => {
-    setConnectionStatus('disconnected');
-    lastOnline = false;
-  };
-  window.addEventListener('online', handleOnline);
-  window.addEventListener('offline', handleOffline);
-
-  // Проверка каждые 15 секунд (не 5, чтобы не долбить сервер)
-  const checkInterval = setInterval(checkConnection, 15000);
-
-  return () => {
-    isActive = false;
-    window.removeEventListener('online', handleOnline);
-    window.removeEventListener('offline', handleOffline);
-    clearInterval(checkInterval);
-  };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-}, []); // Пустые зависимости — используем ref'ы
-
-// === Автоскролл ===
+// === Autoscroll ===
 useEffect(() => {
   if (scrollRef.current) {
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -1002,7 +490,7 @@ useEffect(() => {
                     {searchResults.map((profile: any) => (
                       <button
                         key={profile.id}
-                        onClick={() => handleStartChat(profile)}
+                        onClick={() => handleStartChat(profile, chats, (chat) => setSelectedChat(chat), (p) => setChats(prev => { if (prev.find(c => c.id === p.id)) return prev; return [{ ...p, lastMessage: null, lastMessageTime: null, unreadCount: 0 }, ...prev]; }))}
                         className="w-full flex items-center gap-4 px-4 py-3 rounded-2xl hover:bg-white/5 transition-all group"
                       >
                         <div className="w-10 h-10 rounded-full flex items-center justify-center text-primary font-bold text-sm overflow-hidden shrink-0" style={{ backgroundColor: profile.avatar_color || 'oklch(0.2 0.02 280)' }}>
@@ -1034,7 +522,7 @@ useEffect(() => {
                     {recentSearches.map((profile: any) => (
                       <button
                         key={profile.id}
-                        onClick={() => handleStartChat(profile)}
+                        onClick={() => handleStartChat(profile, chats, (chat) => setSelectedChat(chat), (p) => setChats(prev => { if (prev.find(c => c.id === p.id)) return prev; return [{ ...p, lastMessage: null, lastMessageTime: null, unreadCount: 0 }, ...prev]; }))}
                         className="w-full flex items-center gap-4 px-4 py-3 rounded-2xl hover:bg-white/5 transition-all group"
                       >
                         <div className="w-10 h-10 rounded-full flex items-center justify-center text-primary font-bold text-sm overflow-hidden shrink-0" style={{ backgroundColor: profile.avatar_color || 'oklch(0.2 0.02 280)' }}>
@@ -1114,11 +602,11 @@ useEffect(() => {
                 <div className="flex-1 text-left min-w-0">
                    <div className="flex items-center justify-between mb-1">
                       <span className="font-bold text-sm truncate group-hover:text-primary transition-colors">{chat.display_name || chat.username}</span>
-                      <span className="text-[9px] font-mono text-white/20 uppercase tracking-tighter">{formatRelativeTime(chat.lastMessageTime)}</span>
+                      <span className="text-[9px] font-mono text-white/20 uppercase tracking-tighter">{formatRelativeTime(chat.lastMessageTime || new Date().toISOString())}</span>
                    </div>
                    <p className="text-xs text-muted-foreground line-clamp-1 font-medium group-hover:text-white/60 transition-colors">{chat.lastMessage || `@${chat.username}`}</p>
                 </div>
-                {chat.unreadCount > 0 && (
+                {(chat.unreadCount ?? 0) > 0 && (
                   <div className="absolute top-4 right-4 w-5 h-5 bg-primary rounded-full flex items-center justify-center text-[10px] font-bold text-primary-foreground shadow-lg shadow-primary/20 animate-in zoom-in duration-500">
                     {chat.unreadCount}
                   </div>
@@ -1244,7 +732,7 @@ useEffect(() => {
                         <div className="flex items-center gap-3 overflow-hidden">
                            <Reply className="w-4 h-4 text-primary shrink-0" />
                            <div className="text-xs truncate">
-                              <div className="font-bold">{replyingTo.sender_id === user.id ? 'You' : (selectedChat.display_name || selectedChat.username)}</div>
+                              <div className="font-bold">{replyingTo.sender_id === user?.id ? 'You' : (selectedChat.display_name || selectedChat.username)}</div>
                               <div className="opacity-60 truncate">{replyingTo.content}</div>
                            </div>
                         </div>
@@ -1279,8 +767,8 @@ useEffect(() => {
                             <PopoverContent side="top" align="start" className="p-0 border-none bg-transparent shadow-none">
                                <MediaPicker
                                   onEmojiSelect={(emoji) => setNewMessage(prev => prev + emoji)}
-                                  onStickerSelect={(url) => handleSendMessage('sticker', url)}
-                                  onGifSelect={(url) => handleSendMessage('gif', url)}
+                                  onStickerSelect={(url) => handleSendMessage(selectedChat, user!, '', 'sticker', url, addToQueue)}
+                                  onGifSelect={(url) => handleSendMessage(selectedChat, user!, '', 'gif', url, addToQueue)}
                                />
                             </PopoverContent>
                          </Popover>
@@ -1327,12 +815,12 @@ useEffect(() => {
                             e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
                           }}
                           className="w-full bg-transparent border-none py-3.5 px-2 text-base md:text-lg font-medium resize-none outline-none focus:ring-0 placeholder:text-white/10 leading-relaxed scrollbar-hide"
-                          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !isMobile) { e.preventDefault(); handleSendMessage(); } }}
+                          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !isMobile) { e.preventDefault(); handleSendMessage(selectedChat, user!, newMessage); } }}
                         />
                       </div>
 
                       <button
-                        onClick={() => handleSendMessage()}
+                        onClick={() => handleSendMessage(selectedChat, user!, newMessage)}
                         disabled={!newMessage.trim()}
                         className={cn(
                           "w-11 h-11 md:w-14 md:h-14 rounded-[28px] md:rounded-[32px] flex items-center justify-center transition-all duration-700 relative group/send",
