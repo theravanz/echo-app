@@ -76,7 +76,6 @@ import {
 import { cn, safeChar, formatRelativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -742,6 +741,10 @@ useEffect(() => {
 useEffect(() => {
   if (selectedChat && user) {
     selectedChatRef.current = selectedChat;
+    // Reset scroll position when switching chats
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = 0;
+    }
     fetchMessages(selectedChat.id, user.id);
   }
 }, [selectedChat?.id, user?.id]);
@@ -806,13 +809,12 @@ useEffect(() => {
 // === Автоскролл ===
 useEffect(() => {
   if (scrollRef.current) {
-    const viewport = scrollRef.current.querySelector('[data-radix-scroll-area-viewport]');
-    if (viewport) viewport.scrollTop = viewport.scrollHeight;
+    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }
 }, [messages, selectedChat]);
 
   if (appLoading) return (
-    <div className="h-svh bg-background flex flex-col items-center justify-center noise-overlay">
+    <div className="h-dvh bg-background flex flex-col items-center justify-center noise-overlay">
        <div className="relative w-24 h-24 mb-12">
           <div className="absolute inset-0 border-4 border-primary/10 rounded-full" />
           <div className="absolute inset-0 border-4 border-primary border-t-transparent rounded-full animate-spin shadow-[0_0_15px_rgba(var(--primary),0.3)]" />
@@ -824,7 +826,7 @@ useEffect(() => {
   );
 
   return (
-    <div className="flex h-svh bg-background text-foreground overflow-hidden selection:bg-primary/30 antialiased relative noise-overlay">
+    <div className="flex h-dvh bg-background text-foreground overflow-hidden selection:bg-primary/30 antialiased relative noise-overlay">
 
       {/* Immersive Background Orbs */}
       <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden opacity-30">
@@ -985,7 +987,7 @@ useEffect(() => {
                   </div>
                 </div>
               </div>
-              <div className="flex-1 overflow-y-auto px-4 pb-4">
+              <div className="flex-1 overflow-y-auto overscroll-contain scrollbar-hide px-4 pb-4">
                 {isSearching && (
                   <div className="flex items-center justify-center py-12">
                     <RefreshCw className="w-6 h-6 text-primary animate-spin" />
@@ -1070,7 +1072,7 @@ useEffect(() => {
           </div>
         )}
 
-        <ScrollArea className="flex-1 min-h-0 px-4" style={{ paddingBottom: isMobile ? "64px" : "0", touchAction: "pan-y" }}>
+        <div className="flex-1 min-h-0 px-4 overflow-y-auto overscroll-contain scrollbar-hide" style={{ paddingBottom: isMobile ? "64px" : "0", touchAction: "pan-y" }}>
           <div className="space-y-1 pb-8">
             {activeTab === 'community' && (
               <div className="flex flex-col items-center justify-center py-16 text-center">
@@ -1125,7 +1127,7 @@ useEffect(() => {
               </button>
             ))}
           </div>
-        </ScrollArea>
+        </div>
       </aside>
 
       {/* --- 3. Main Communication Area --- */}
@@ -1184,11 +1186,11 @@ useEffect(() => {
         </header>
 
         {/* Messaging Core */}
-        <ScrollArea className="flex-1 min-h-0 px-3 md:px-12 py-3 md:py-8" ref={scrollRef}>
+        <div className="flex-1 min-h-0 px-3 md:px-12 py-3 md:py-8 overflow-y-auto overscroll-contain scrollbar-hide" ref={scrollRef}>
           <div className="max-w-4xl mx-auto space-y-4 md:space-y-12">
 
             {!selectedChat && (
-              <div className="h-[60svh] flex flex-col items-center justify-center text-center space-y-8 animate-in fade-in zoom-in duration-1000">
+              <div className="h-[60dvh] flex flex-col items-center justify-center text-center space-y-8 animate-in fade-in zoom-in duration-1000">
                  <div className="relative group">
                     <div className="absolute inset-0 bg-primary/20 blur-3xl rounded-full animate-pulse group-hover:bg-primary/30 transition-all duration-1000" />
                     <div className="relative w-32 h-32 rounded-[48px] bg-card border border-primary/20 flex items-center justify-center shadow-2xl shadow-primary/10 transform -rotate-6 group-hover:rotate-0 transition-transform duration-700">
@@ -1228,11 +1230,11 @@ useEffect(() => {
                );
             })}
           </div>
-        </ScrollArea>
+        </div>
 
         {/* Input Interface */}
         {selectedChat && (
-          <footer className="p-4 md:p-10 shrink-0" style={{ touchAction: "none" }}>
+          <footer className="p-3 md:p-10 shrink-0" style={{ touchAction: "none" }}>
              <div className="max-w-4xl mx-auto">
                 <GlassPanel className="rounded-[32px] md:rounded-[40px] p-3 md:p-3 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.5)]">
                    <CornerBrackets />
@@ -1368,7 +1370,7 @@ useEffect(() => {
                 </button>
                 <span className="text-sm font-mono text-white/30 uppercase tracking-widest">Profile</span>
               </div>
-              <ScrollArea className="flex-1">
+              <div className="flex-1 overflow-y-auto overscroll-contain scrollbar-hide">
                 <div className="relative">
                   {/* Background Banner */}
                   <div className="h-32 md:h-44 w-full bg-gradient-to-br from-purple-800/40 via-black/30 to-black/80 backdrop-blur-md relative overflow-hidden">
@@ -1455,7 +1457,7 @@ useEffect(() => {
                    </Button>
                 </div>
               </div>
-            </ScrollArea>
+            </div>
             </div>
           )}
         </aside>
@@ -1514,10 +1516,16 @@ useEffect(() => {
           pointer-events: none;
           z-index: 100;
         }
-        .scrollbar-hide::-webkit-scrollbar {
+        html, body {
+          overflow: hidden;
+          height: 100%;
+          overscroll-behavior: none;
+        }
+        /* Hide scrollbars globally */
+        *::-webkit-scrollbar {
           display: none;
         }
-        .scrollbar-hide {
+        * {
           -ms-overflow-style: none;
           scrollbar-width: none;
         }
@@ -1544,6 +1552,10 @@ useEffect(() => {
           height: 10px;
           animation: scanline 8s linear infinite;
         }
+        /* Overscroll containment utility */
+        .overscroll-contain {
+          overscroll-behavior: contain;
+        }
       `}</style>
     </div>
   );
@@ -1552,7 +1564,7 @@ useEffect(() => {
 export default function EchoApp() {
   return (
     <Suspense fallback={
-      <div className="h-svh bg-background flex items-center justify-center noise-overlay">
+      <div className="h-dvh bg-background flex items-center justify-center noise-overlay">
         <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
       </div>
     }>
