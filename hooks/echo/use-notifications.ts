@@ -8,14 +8,19 @@ import type { NotificationSettings } from "./use-notification-settings";
 const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 // === Ленивый Notifier (singleton) ===
-type SendNotificationFn = (title: string, body: string, opts?: { icon?: string; chatId?: string }) => void;
+type SendNotificationFn = (title: string, body: string, opts?: { icon?: string; chatId?: string; channelId?: string }) => void;
 
 let notifier: SendNotificationFn | null = null;
 let notifierInitPromise: Promise<void> | null = null;
 
+/**
+ * Инициализация Tauri notifier через Rust-бэкенд.
+ * Использует команду show_local_notification для показа уведомлений через Rust.
+ */
 const initTauriNotifier = async (): Promise<SendNotificationFn | null> => {
   try {
-    const { isPermissionGranted, requestPermission, sendNotification } = await import(
+    // Запрашиваем разрешение через Tauri plugin
+    const { isPermissionGranted, requestPermission } = await import(
       "@tauri-apps/plugin-notification",
     );
 
@@ -26,21 +31,61 @@ const initTauriNotifier = async (): Promise<SendNotificationFn | null> => {
     }
 
     if (permitted) {
-      return (title: string, body: string, opts?: { icon?: string; chatId?: string }) => {
-        sendNotification({
-          title,
-          body,
-          icon: opts?.icon,
-          // @ts-ignore - extra data for click handling
-          data: { chatId: opts?.chatId },
-        });
+      // Используем Rust-команду для показа уведомлений
+      return async (title: string, body: string, opts?: { icon?: string; chatId?: string; channelId?: string }) => {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          await invoke("show_local_notification", {
+            title,
+            body,
+            chatId: opts?.chatId || null,
+          });
+        } catch {
+          // Fallback: прямой вызов Tauri plugin notification
+          const { sendNotification } = await import("@tauri-apps/plugin-notification");
+          sendNotification({
+            title,
+            body,
+            icon: opts?.icon,
+            channelId: opts?.channelId || "echo_messages",
+            data: { chatId: opts?.chatId },
+          } as any);
+        }
       };
     }
   } catch (e) {
-    console.warn("[Notifications] Tauri plugin failed:", e);
+    console.warn("[Notifications] Tauri Rust notifier failed:", e);
+
+    // Fallback: используем Tauri plugin напрямую
+    try {
+      const { isPermissionGranted, requestPermission, sendNotification } = await import(
+        "@tauri-apps/plugin-notification",
+      );
+
+      let permitted = await isPermissionGranted();
+      if (!permitted) {
+        const permission = await requestPermission();
+        permitted = permission === "granted";
+      }
+
+      if (permitted) {
+        return (title: string, body: string, opts?: { icon?: string; chatId?: string; channelId?: string }) => {
+          sendNotification({
+            title,
+            body,
+            icon: opts?.icon,
+            channelId: opts?.channelId || "echo_messages",
+            data: { chatId: opts?.chatId },
+          } as any);
+        };
+      }
+    } catch (e2) {
+      console.warn("[Notifications] Tauri plugin fallback also failed:", e2);
+    }
   }
   return null;
 };
+// === Web Notifier (fallback for web version) ===
 
 const initWebNotifier = async (): Promise<SendNotificationFn | null> => {
   if (typeof window === "undefined" || !("Notification" in window)) return null;
@@ -79,6 +124,8 @@ const initWebNotifier = async (): Promise<SendNotificationFn | null> => {
     }
   };
 };
+
+// === Lazy Notifier Singleton ===
 
 const ensureNotifier = async (): Promise<SendNotificationFn | null> => {
   if (notifier) return notifier;
@@ -179,6 +226,47 @@ export const useNotifications = ({
   // Initialize notifier on mount
   useEffect(() => {
     ensureNotifier();
+
+    // Start background polling in Rust backend (WebSocket-independent)
+    if (isTauri && settings.backgroundPolling) {
+      const startBgPolling = async () => {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          await invoke("start_background_polling");
+          console.log("[Notifications] Background polling started");
+        } catch (err) {
+          console.warn("[Notifications] Failed to start background polling:", err);
+        }
+      };
+      startBgPolling();
+    }
+  }, [settings.backgroundPolling]);
+
+  // Listen for background messages from Rust polling
+  useEffect(() => {
+    if (!isTauri) return;
+
+    let unlisten: (() => void) | undefined;
+
+    const setupListener = async () => {
+      try {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlisten = await listen<{ messages: any[] }>("background-messages", (event) => {
+          const { messages } = event.payload;
+          if (messages && messages.length > 0) {
+            console.log(`[Notifications] ${messages.length} messages from background polling`);
+          }
+        });
+      } catch (err) {
+        console.warn("[Notifications] Failed to listen for background messages:", err);
+      }
+    };
+
+    setupListener();
+
+    return () => {
+      unlisten?.();
+    };
   }, []);
 
   const notifyNewMessage = useCallback(

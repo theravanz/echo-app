@@ -188,4 +188,13 @@
       linear-gradient(135deg, var(--foreground) 25%, transparent 25%, transparent 50%, var(--foreground) 50%, var(--foreground) 75%, transparent 75%) border-box;
     background-size: 100% 100%, 8px 8px;
   }
+
+  /* Анимация появления сообщений (Slide-up + Fade-in) */
+  @keyframes slide-up-fade {
+    0% { opacity: 0; transform: translateY(12px) scale(0.98); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .animate-message-in {
+    animation: slide-up-fade 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
 }

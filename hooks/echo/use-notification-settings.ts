@@ -12,6 +12,8 @@ export interface NotificationSettings {
   messagePreview: boolean;
   groupByChat: boolean;
   directMessagesOnly: boolean;
+  pushNotifications?: boolean;
+  backgroundPolling?: boolean;
 }
 
 const DEFAULT_SETTINGS: NotificationSettings = {
@@ -20,7 +22,12 @@ const DEFAULT_SETTINGS: NotificationSettings = {
   messagePreview: true,
   groupByChat: true,
   directMessagesOnly: false,
+  pushNotifications: true,
+  backgroundPolling: true,
 };
+
+// Проверка Tauri окружения
+const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 interface UseNotificationSettingsReturn {
   settings: NotificationSettings;
@@ -87,8 +94,28 @@ export function useNotificationSettings(
           console.error("[NotificationSettings] Supabase sync failed:", err);
         }
       }
+
+      // Sync to Rust backend (Tauri)
+      if (isTauri) {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          await invoke("update_notification_settings", {
+            settings: {
+              enabled: newSettings.enabled,
+              sound: newSettings.sound,
+              message_preview: newSettings.messagePreview,
+              group_by_chat: newSettings.groupByChat,
+              direct_messages_only: newSettings.directMessagesOnly,
+              push_notifications: newSettings.pushNotifications ?? true,
+              background_polling: newSettings.backgroundPolling ?? true,
+            },
+          });
+        } catch (err) {
+          console.error("[NotificationSettings] Rust sync failed:", err);
+        }
+      }
     },
-    [user?.id],
+    [user?.id, isTauri],
   );
 
   const updateSetting = useCallback(

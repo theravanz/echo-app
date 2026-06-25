@@ -115,6 +115,8 @@ import { MediaPicker } from "@/components/echo/app/media-picker";
 import dynamic from "next/dynamic";
 import type { UserProfile, Chat, Message, NetworkMode, AppTab, ConnectionStatus } from "@/hooks/echo/types";
 
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { listen } from '@tauri-apps/api/event';
 const SettingsModal = dynamic(
   () => import("@/components/echo/app/settings-modal"),
   { ssr: false }
@@ -202,15 +204,37 @@ useEffect(() => {
 
   const init = async () => {
     try {
-      if (!navigator.onLine) {
+      // 1. Мгновенно читаем localStorage до проверки сессии
+      let isOffline = false;
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
         setConnectionStatus('disconnected');
-        setAppLoading(false);
+        isOffline = true;
+      }
+
+      // 2. Загружаем кэш аккаунтов из localStorage (синхронно)
+      try {
+        const saved = JSON.parse(localStorage.getItem('echo_accounts') || '[]');
+        if (isMounted) setAccounts(saved);
+      } catch (e) { if (isMounted) setAccounts([]); }
+
+      // 3. Показываем окно Tauri после того, как первый кадр отрисован
+      //    и данные из localStorage уже вставлены в стейт
+      requestAnimationFrame(async () => {
+        try {
+          const window = getCurrentWindow();
+          await window.show();
+        } catch {
+          // Не в Tauri-окружении (браузерный dev-режим)
+        }
+      });
+
+      // 4. Асинхронная инициализация (сессия, профиль, чаты)
+      if (isOffline) {
         return;
       }
 
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
-        setAppLoading(false);
         router.push('/auth');
         return;
       }
@@ -227,12 +251,6 @@ useEffect(() => {
       setUser(userData);
       userRef.current = userData;
 
-      try {
-        const saved = JSON.parse(localStorage.getItem('echo_accounts') || '[]');
-        if (isMounted) setAccounts(saved);
-      } catch (e) { if (isMounted) setAccounts([]); }
-
-      setAppLoading(false);
 
       // Check quarantine
       try {
@@ -300,18 +318,6 @@ useEffect(() => {
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }
 }, [messages, selectedChat]);
-
-  if (appLoading) return (
-    <div className="h-dvh bg-background flex flex-col items-center justify-center noise-overlay">
-       <div className="relative w-24 h-24 mb-12">
-          <div className="absolute inset-0 border-4 border-primary/10 rounded-full" />
-          <div className="absolute inset-0 border-4 border-primary border-t-transparent rounded-full animate-spin shadow-[0_0_15px_rgba(var(--primary),0.3)]" />
-          <Shield className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 text-primary/40" />
-       </div>
-       <img src="/logo-full.svg" alt="Echo" className="h-6 mb-4 animate-pulse" />
-       <div className="text-[10px] font-mono text-primary uppercase tracking-[0.5em] animate-pulse">{loadingStatus}</div>
-    </div>
-  );
 
   return (
     <div className="flex h-dvh bg-background text-foreground overflow-hidden selection:bg-primary/30 antialiased relative noise-overlay">

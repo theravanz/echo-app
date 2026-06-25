@@ -144,7 +144,7 @@ importers:
         specifier: latest
         version: 56.0.5(expo@56.0.12)(react-dom@19.2.3(react@19.2.3))(react-native@0.86.0(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
       firebase:
-        specifier: ^12.13.0
+        specifier: ^12.14.0
         version: 12.14.0
       framer-motion:
         specifier: ^12.40.0

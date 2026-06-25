@@ -1,0 +1,40 @@
+{
+  "project_info": {
+    "project_number": "185397829697",
+    "firebase_url": "https://echo-mes-default-rtdb.europe-west1.firebasedatabase.app",
+    "project_id": "echo-mes",
+    "storage_bucket": "echo-mes.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:185397829697:android:2faabf2ad921c9ecb9e6c0",
+        "android_client_info": {
+          "package_name": "com.theravanz.echo_tauri"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "185397829697-5l538iqmcjmle4ksj5r5etc5t4kdklg9.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDISJj1ktdPACuRXEK0b--KCA6ktJ3tkaQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "185397829697-5l538iqmcjmle4ksj5r5etc5t4kdklg9.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

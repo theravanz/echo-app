@@ -7,11 +7,9 @@ import { useTranslation } from '@/hooks/use-translation';
 import { CountrySelector } from '@/components/auth/country-selector';
 import { auth } from '@/lib/firebase';
 import { supabase } from '@/lib/supabase';
-import * as bip39 from 'bip39';
-import nacl from 'tweetnacl';
-// @ts-ignore
-import { encodeBase64 } from 'tweetnacl-util';
 import { QRCodeSVG } from 'qrcode.react';
+// @ts-ignore
+import { invoke } from '@tauri-apps/api/core';
 import {
   signInWithPhoneNumber,
   RecaptchaVerifier,
@@ -299,7 +297,14 @@ function AuthPageContent() {
         setVerifyLoading(false);
         goToStep(4);
       } else {
-        setMnemonic(bip39.generateMnemonic());
+        // Генерация мнемоники в Rust (фоновый поток, не блокирует UI)
+        try {
+          const newMnemonic = await invoke('generate_mnemonic');
+          setMnemonic(newMnemonic as string);
+        } catch (err) {
+          console.error('Mnemonic generation error:', err);
+          setMnemonic('error generating mnemonic');
+        }
         setVerifyLoading(false);
         goToStep(4);
       }
@@ -336,18 +341,16 @@ function AuthPageContent() {
     setConfirmRecoveryLoading(true);
 
     try {
-      const seed = bip39.mnemonicToSeedSync(mnemonic).slice(0, 32);
-      const publicKey = nacl.scalarMult.base(seed);
-      const publicKeyBase64 = encodeBase64(publicKey);
-      const privateKeyBase64 = encodeBase64(seed);
+      // Генерация ключей в Rust (BIP-39 seed + Curve25519 в фоновом потоке)
+      const keys = await invoke('generate_keys_from_mnemonic', { mnemonicPhrase: mnemonic }) as any;
 
-      localStorage.setItem('echo_private_key', privateKeyBase64);
-      localStorage.setItem('echo_public_key', publicKeyBase64);
+      localStorage.setItem('echo_private_key', keys.private_key);
+      localStorage.setItem('echo_public_key', keys.public_key);
       localStorage.setItem('echo_mnemonic_backup', mnemonic);
 
       const { error: authError } = await supabase.auth.updateUser({
         data: {
-          public_key: publicKeyBase64,
+          public_key: keys.public_key,
           e2ee_initialized: true
         }
       });
@@ -357,7 +360,7 @@ function AuthPageContent() {
       if (userData?.user) {
         await supabase.from('profiles').upsert({
           id: userData.user.id,
-          public_key: publicKeyBase64,
+          public_key: keys.public_key,
           e2ee_initialized: true,
           phone_number: authMode === 'sms' ? countryCode + phone.replace(/\D/g, '') : null,
           updated_at: new Date().toISOString()
@@ -380,29 +383,34 @@ function AuthPageContent() {
     setRestoreError('');
     const cleanMnemonic = mnemonicInput.trim().toLowerCase();
 
-    if (!bip39.validateMnemonic(cleanMnemonic)) {
+    // Валидация мнемоники через Rust (не блокирует поток)
+    try {
+      const isValid = await invoke('validate_mnemonic', { mnemonicPhrase: cleanMnemonic }) as boolean;
+      if (!isValid) {
+        setRestoreError(language === 'ru' ? 'Некорректная фраза.' : 'Invalid mnemonic phrase.');
+        return;
+      }
+    } catch {
       setRestoreError(language === 'ru' ? 'Некорректная фраза.' : 'Invalid mnemonic phrase.');
       return;
     }
 
     setConfirmRecoveryLoading(true);
     try {
-      const seed = bip39.mnemonicToSeedSync(cleanMnemonic).slice(0, 32);
-      const publicKey = nacl.scalarMult.base(seed);
-      const publicKeyBase64 = encodeBase64(publicKey);
-      const privateKeyBase64 = encodeBase64(seed);
+      // Генерация ключей в Rust (BIP-39 seed + Curve25519 в фоновом потоке)
+      const keys = await invoke('generate_keys_from_mnemonic', { mnemonicPhrase: cleanMnemonic }) as any;
 
       const { data: { user } } = await supabase.auth.getUser();
       const storedPublicKey = user?.user_metadata?.public_key;
 
-      if (storedPublicKey && storedPublicKey !== publicKeyBase64) {
+      if (storedPublicKey && storedPublicKey !== keys.public_key) {
         setRestoreError(language === 'ru' ? 'Фраза не подходит к этому аккаунту.' : 'Mnemonic does not match this account.');
         setConfirmRecoveryLoading(false);
         return;
       }
 
-      localStorage.setItem('echo_private_key', privateKeyBase64);
-      localStorage.setItem('echo_public_key', publicKeyBase64);
+      localStorage.setItem('echo_private_key', keys.private_key);
+      localStorage.setItem('echo_public_key', keys.public_key);
       localStorage.setItem('echo_mnemonic_backup', cleanMnemonic);
 
       setConfirmRecoveryLoading(false);

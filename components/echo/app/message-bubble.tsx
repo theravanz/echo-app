@@ -89,7 +89,7 @@ export const MessageBubble = memo(({
 
   return (
     <div className={cn(
-      "flex items-end gap-3 group animate-in fade-in slide-in-from-bottom-4 duration-500",
+      "flex items-end gap-3 group animate-message-in",
       isMe ? "flex-row-reverse" : "flex-row"
     )}>
       <div className={cn("flex flex-col", isMe ? "items-end" : "items-start")}>

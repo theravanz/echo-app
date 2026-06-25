@@ -5,46 +5,57 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence } from 'framer-motion';
 import { supabase } from '@/lib/supabase';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import WelcomeScreen from './components/WelcomeScreen';
 
 export default function Home() {
   const router = useRouter();
-  const [checkingAuth, setCheckingAuth] = useState(true);
+  const [showWelcome, setShowWelcome] = useState(false);
 
   useEffect(() => {
-    async function checkAuth() {
+    let isMounted = true;
+
+    const init = async () => {
+      // 1. Проверка сессии (асинхронно, не блокирует рендер)
+      let shouldShowWelcome = true;
       try {
         const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
+        if (session && isMounted) {
           router.push('/app');
-        } else {
-          setCheckingAuth(false);
+          shouldShowWelcome = false;
         }
       } catch (error) {
         console.error('Auth check error:', error);
-        setCheckingAuth(false);
       }
-    }
-    checkAuth();
-  }, [router]);
 
-  if (checkingAuth) {
-    return (
-      <div className="h-screen w-full flex flex-col items-center justify-center bg-[#0a0a0c]">
-        {/* Simple elegant modern loader */}
-        <div className="relative w-16 h-16">
-          <div className="absolute inset-0 border-2 border-white/5 rounded-full" />
-          <div className="absolute inset-0 border-2 border-white/30 border-t-transparent rounded-full animate-spin" />
-        </div>
-      </div>
-    );
-  }
+      // 2. Показываем окно Tauri только после того, как DOM отрисован
+      requestAnimationFrame(async () => {
+        try {
+          const window = getCurrentWindow();
+          await window.show();
+        } catch {
+          // Не в Tauri-окружении (dev-режим в браузере)
+        }
+      });
+
+      // 3. Разрешаем показ WelcomeScreen если нет сессии
+      if (isMounted && shouldShowWelcome) {
+        setShowWelcome(true);
+      }
+    };
+
+    init();
+
+    return () => { isMounted = false; };
+  }, [router]);
 
   return (
     <main className="relative h-screen w-full overflow-hidden bg-[#0a0a0c]">
-      <AnimatePresence>
-        <WelcomeScreen onComplete={() => router.push('/auth')} />
-      </AnimatePresence>
+      {showWelcome && (
+        <AnimatePresence>
+          <WelcomeScreen onComplete={() => router.push('/auth')} />
+        </AnimatePresence>
+      )}
     </main>
   );
 }

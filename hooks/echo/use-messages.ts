@@ -156,43 +156,65 @@ export function useMessages(): UseMessagesReturn {
         return;
       }
 
-      // Try to send
+      // === ОПТИМИСТИЧНАЯ ОТПРАВКА ===
+      // 1. Мгновенно добавляем сообщение в стейт со статусом 'pending' (часики)
+      const tempId = generateTempId();
+      const optimisticMsg: Message = {
+        id: tempId,
+        sender_id: user.id,
+        receiver_id: selectedChat.id,
+        content: encrypted.content,
+        nonce: encrypted.nonce,
+        type: type,
+        status: "pending",
+        created_at: new Date().toISOString(),
+        reply_to_id: replyingTo?.id || null,
+        _pendingContent: content,
+        _pending: true,
+      };
+      setMessages((prev) => [...prev, optimisticMsg]);
+      setReplyingTo(null);
+
+      // 2. В фоне отправляем в базу данных
       try {
-        const { error } = await supabase.from("messages").insert({
-          sender_id: user.id,
-          receiver_id: selectedChat.id,
-          content: encrypted.content,
-          nonce: encrypted.nonce,
-          type: type,
-          status: "sent",
-          reply_to_id: replyingTo?.id || null,
-        });
+        const { data, error } = await supabase
+          .from("messages")
+          .insert({
+            sender_id: user.id,
+            receiver_id: selectedChat.id,
+            content: encrypted.content,
+            nonce: encrypted.nonce,
+            type: type,
+            status: "sent",
+            reply_to_id: replyingTo?.id || null,
+          })
+          .select("id")
+          .single();
 
         if (error) throw error;
-        setReplyingTo(null);
+
+        // 3. Успешно: меняем часики на одну галочку ('sent'), подменяем временный id на реальный
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === tempId
+              ? { ...m, id: data.id, status: "sent" as const, _pending: false }
+              : m,
+          ),
+        );
       } catch (err) {
         console.error("Send error, adding to offline queue:", err);
 
-        // Create pending message for offline queue
-        const tempId = generateTempId();
+        // 4. Ошибка сети: помечаем как pending для очереди оффлайн-отправки
+        setMessages((prev) =>
+          prev.map((m) => (m.id === tempId ? { ...m, status: "pending" as const } : m)),
+        );
         const pendingMsg: PendingMessage = {
+          ...optimisticMsg,
           id: tempId,
-          sender_id: user.id,
-          receiver_id: selectedChat.id,
-          content: encrypted.content,
-          nonce: encrypted.nonce,
-          type: type,
           status: "pending",
-          created_at: new Date().toISOString(),
-          reply_to_id: replyingTo?.id || null,
-          _pendingContent: content,
           _pending: true,
-        };
-
-        // Add to local messages immediately
-        setMessages((prev) => [...prev, pendingMsg]);
+        } as PendingMessage;
         onAddToQueue?.(pendingMsg);
-        setReplyingTo(null);
       }
     },
     [editingMessage, replyingTo, encryptMessage, handleEditMessage],

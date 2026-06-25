@@ -1,13 +1,28 @@
 // components/WelcomeScreen.tsx
 'use client';
 
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import Image from 'next/image';
-import PixelBlast from './PixelBlast';
 import { useTranslation } from '@/hooks/use-translation';
+import dynamic from 'next/dynamic';
+
+// Динамический импорт WebGL-компонента — отложенная загрузка
+const PixelBlast = dynamic(
+  () => import('./PixelBlast'),
+  { ssr: false, loading: () => <div className="w-full h-full bg-[#0a0a0c]" /> }
+);
 
 export default function WelcomeScreen({ onComplete }: { onComplete: () => void }) {
   const { t, language, setLanguage } = useTranslation();
+  const [isWebGLReady, setIsWebGLReady] = useState(false);
+
+  // Откладываем монтирование WebGL на 400мс после первого рендера DOM
+  // Это предотвращает deadlock WebView на Android при "холодном" старте
+  useEffect(() => {
+    const timer = setTimeout(() => setIsWebGLReady(true), 400);
+    return () => clearTimeout(timer);
+  }, []);
 
   return (
     <motion.div
@@ -19,7 +34,7 @@ export default function WelcomeScreen({ onComplete }: { onComplete: () => void }
       {/* --- ФОН (без изменений) --- */}
       <div className="absolute inset-0 z-0">
         <div style={{ width: '100%', height: '100%', position: 'relative' }}>
-          <PixelBlast
+          {isWebGLReady && <PixelBlast
             variant="square"
             pixelSize={4}
             color="#B497CF"
@@ -37,7 +52,7 @@ export default function WelcomeScreen({ onComplete }: { onComplete: () => void }
             speed={0.5}
             edgeFade={0.25}
             transparent
-          />
+          />}
         </div>
       </div>
 

@@ -35,6 +35,8 @@ import {
   TbCheck as Check,
 } from "react-icons/tb";
 
+import type { UserProfile } from "@/hooks/echo/types";
+import { useNotificationSettings, type NotificationSettings } from "@/hooks/echo/use-notification-settings";
 interface SettingsModalProps {
   user: any;
   accounts?: any[];
@@ -70,7 +72,7 @@ const LANGUAGES = [
   { code: 'ar', label: 'Arabic', native: 'العربية' }
 ];
 
-type ViewType = 'privacy' | 'devices' | 'language' | null;
+type ViewType = 'privacy' | 'devices' | 'language' | 'alerts' | null;
 
 interface MenuItem {
   id: string;
@@ -91,7 +93,7 @@ const menuSections: MenuSection[] = [
     items: [
       { id: 'profile', icon: User, label: 'Identity' },
       { id: 'security', icon: ShieldCheck, label: 'Security' },
-      { id: 'alerts', icon: Bell, label: 'Alerts' },
+      { id: 'alerts', icon: Bell, label: 'Alerts', action: 'alerts' },
       { id: 'interface', icon: Palette, label: 'Interface' },
       { id: 'network', icon: Wifi, label: 'Network' },
       { id: 'storage', icon: HardDrive, label: 'Storage' },
@@ -120,6 +122,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
     }
     return 'ru';
   });
+
+  // Notifications settings (hook must be at component level)
+  const { settings: notifSettings, updateSetting: updateNotifSetting } = useNotificationSettings(user || null);
 
   const generateLocalHWID = () => {
     const canvas = document.createElement('canvas');
@@ -393,11 +398,85 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
       </div>
     );
   };
+  // --- Alerts / Notifications View ---
+  const renderAlerts = () => {
+    const toggleSetting = (key: keyof NotificationSettings) => {
+      updateNotifSetting(key as any, !notifSettings[key]);
+    };
+
+    const alertItems = [
+      { key: 'enabled', label: 'Push Notifications', desc: 'Receive notifications for new messages' },
+      { key: 'sound', label: 'Sound', desc: 'Play sound when receiving a notification' },
+      { key: 'messagePreview', label: 'Message Preview', desc: 'Show message content in notifications' },
+      { key: 'groupByChat', label: 'Group by Chat', desc: 'Group notifications by conversation' },
+      { key: 'directMessagesOnly', label: 'Direct Messages Only', desc: 'Only notify for direct messages' },
+      { key: 'pushNotifications', label: 'FCM Push', desc: 'Receive push notifications via Firebase (Android)' },
+      { key: 'backgroundPolling', label: 'Background Polling', desc: 'Poll for new messages when app is in background' },
+    ];
+
+    return (
+      <div className="p-4 md:p-10 space-y-6">
+        <div className="flex items-center justify-between mb-4">
+          {isMobile && (
+            <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView(null)}>
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+          )}
+          <h2 className="text-2xl font-display font-bold tracking-tight">Alerts &amp; Notifications</h2>
+          <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={onClose}>
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <GlassPanel className="p-6 rounded-[28px]">
+          <CornerBrackets />
+          <div className="space-y-4">
+            {alertItems.map((item) => {
+              const isEnabled = (notifSettings as any)[item.key] ?? false;
+              return (
+                <div key={item.key} className="flex items-center justify-between py-2">
+                  <div className="flex items-center gap-4">
+                    <div className="flex-1">
+                      <div className="font-bold text-sm">{item.label}</div>
+                      <div className="text-xs text-white/40 mt-0.5">{item.desc}</div>
+                    </div>
+                  </div>
+                  <div
+                    className={cn(
+                      "w-14 h-8 rounded-full p-1 transition-colors duration-300 cursor-pointer shrink-0",
+                      isEnabled ? "bg-primary" : "bg-white/10"
+                    )}
+                    onClick={() => toggleSetting(item.key as keyof typeof notifSettings)}
+                  >
+                    <div
+                      className={cn(
+                        "w-6 h-6 rounded-full bg-white shadow transition-transform duration-300",
+                        isEnabled ? "translate-x-6" : "translate-x-0"
+                      )}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </GlassPanel>
+
+        <div className="flex gap-4 p-5 rounded-[28px] bg-primary/5 border border-primary/10">
+          <Info className="w-5 h-5 text-primary shrink-0 mt-0.5" />
+          <p className="text-xs text-white/60 leading-relaxed">
+            Notification settings are synced across your devices. Changes take effect immediately.
+          </p>
+        </div>
+      </div>
+    );
+  };
+
+  // --- Main Render ---
 
   // --- Main Render ---
   // If a sub-view is active on mobile, show it fullscreen
   if (isMobile && activeView) {
-    const viewContent = activeView === 'devices' ? renderDevices() : activeView === 'privacy' ? renderPrivacy() : renderLanguage();
+    const viewContent = activeView === 'devices' ? renderDevices() : activeView === 'privacy' ? renderPrivacy() : activeView === 'alerts' ? renderAlerts() : renderLanguage();
     return (
       <div className="fixed inset-0 z-[200] bg-background flex flex-col" onClick={onClose}>
         <div className="flex-1 overflow-y-auto" onClick={e => e.stopPropagation()}>
@@ -521,6 +600,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
             {activeView === 'devices' ? renderDevices() :
              activeView === 'privacy' ? renderPrivacy() :
              activeView === 'language' ? renderLanguage() :
+             activeView === 'alerts' ? renderAlerts() :
             (
               <div className="p-10">
                 <div className="flex items-center justify-between mb-10">

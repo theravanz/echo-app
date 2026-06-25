@@ -377,6 +377,9 @@ const PixelBlast: React.FC<PixelBlastProps> = ({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const visibilityRef = useRef({ visible: true });
   const speedRef = useRef(speed);
+  const contextLostRef = useRef(false);
+  const contextRestoreInitRef = useRef<(() => void) | null>(null);
+
 
   const threeRef = useRef<{
     renderer: THREE.WebGLRenderer;
@@ -450,6 +453,43 @@ const PixelBlast: React.FC<PixelBlastProps> = ({
       renderer.domElement.style.height = '100%';
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       container.appendChild(renderer.domElement);
+
+      // === ЗАЩИТА ОТ ПОТЕРИ WebGL-КОНТЕКСТА НА ANDROID ===
+      const handleContextLost = (event: Event) => {
+        event.preventDefault(); // КРИТИЧНО: предотвращает краш WebView
+        contextLostRef.current = true;
+        // Останавливаем цикл рендеринга
+        if (threeRef.current?.raf) {
+          cancelAnimationFrame(threeRef.current.raf);
+          threeRef.current.raf = undefined;
+        }
+        console.warn('[PixelBlast] WebGL context lost — render stopped');
+      };
+      const handleContextRestored = () => {
+        contextLostRef.current = false;
+        console.log('[PixelBlast] WebGL context restored — reinitializing');
+        // При восстановлении контекста все шейдеры и текстуры потеряны,
+        // поэтому помечаем, что нужно полное пересоздание сцены
+        if (contextRestoreInitRef.current) {
+          contextRestoreInitRef.current();
+        }
+      };
+      renderer.domElement.addEventListener('webglcontextlost', handleContextLost, false);
+      renderer.domElement.addEventListener('webglcontextrestored', handleContextRestored, false);
+      // Сохраняем ссылку на функцию реинициализации
+      contextRestoreInitRef.current = () => {
+        if (!container || contextLostRef.current) return;
+        // Перезапускаем через requestAnimationFrame, чтобы дать браузеру восстановить контекст
+        requestAnimationFrame(() => {
+          if (contextLostRef.current || !threeRef.current) return;
+          const t = threeRef.current;
+          // Сбрасываем таймер, чтобы анимация не прыгала
+          t.clock = new THREE.Clock();
+          t.timeOffset = t.uniforms.uTime.value;
+          t.raf = requestAnimationFrame(t.raf ? animate : (animate as any));
+        });
+      };
+      // ====================================================
       if (transparent) renderer.setClearAlpha(0);
       else renderer.setClearColor(0x000000, 1);
       const uniforms = {
@@ -583,6 +623,10 @@ const PixelBlast: React.FC<PixelBlastProps> = ({
       });
       let raf = 0;
       const animate = () => {
+        if (contextLostRef.current) {
+          raf = requestAnimationFrame(animate);
+          return;
+        }
         if (autoPauseOffscreen && !visibilityRef.current.visible) {
           raf = requestAnimationFrame(animate);
           return;
