@@ -1,58 +1,10 @@
-import { createClient } from '@supabase/supabase-js'
+// Переход на нативную SQLite вместо localStorage.
+// Файл-мост: экспортирует supabase-клиент + функции сессий из db.ts
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+import { getSupabase as _getSupabase, getPersistedSession, persistSession, terminateSession, generateHWID, getDevices, deleteDevice, getLocalAccount, saveLocalAccount, ensureAuth } from './db'
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-    detectSessionInUrl: true,
-  },
-  global: {
-    headers: {
-      'X-Client-Info': 'echo-messenger',
-    },
-  },
-})
+// Экспортируем инстанс клиента (не функцию!) для обратной совместимости
+export const supabase = _getSupabase()
 
-// === ХЕЛПЕР ДЛЯ ПРИНУДИТЕЛЬНОГО ОБНОВЛЕНИЯ ===
-export const ensureAuth = async () => {
-  const { data: { session } } = await supabase.auth.getSession();
-  
-  if (!session) {
-    // Пробуем обновить
-    const { data: { session: refreshed }, error } = await supabase.auth.refreshSession();
-    if (error || !refreshed) {
-      throw new Error('No valid session');
-    }
-    return refreshed;
-  }
-  
-  // Проверяем, жив ли токен (делаем тестовый запрос)
-  try {
-    const test = await fetch(`${supabaseUrl}/rest/v1/`, {
-      headers: {
-        'apikey': supabaseAnonKey,
-        'Authorization': `Bearer ${session.access_token}`
-      }
-    });
-    if (test.status === 401) {
-      // Токен протух — обновляем
-      const { data: { session: refreshed }, error } = await supabase.auth.refreshSession();
-      if (error || !refreshed) {
-        throw new Error('Cannot refresh token');
-      }
-      return refreshed;
-    }
-  } catch (e) {
-    // Если тестовый запрос упал — пробуем обновить
-    const { data: { session: refreshed }, error } = await supabase.auth.refreshSession();
-    if (error || !refreshed) {
-      throw new Error('Cannot refresh token');
-    }
-    return refreshed;
-  }
-  
-  return session;
-};
+// Реэкспорт функций
+export { getSupabase, getPersistedSession, persistSession, terminateSession, generateHWID, getDevices, deleteDevice, getLocalAccount, saveLocalAccount, ensureAuth } from './db'

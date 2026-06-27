@@ -44,3 +44,8 @@ next-env.d.ts
 # Added by cargo
 
 /target
+
+*.apk
+*.idsig
+*.keystore
+.agents/

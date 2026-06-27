@@ -114,6 +114,7 @@ import { MessageBubble } from "@/components/echo/app/message-bubble";
 import { MediaPicker } from "@/components/echo/app/media-picker";
 import dynamic from "next/dynamic";
 import type { UserProfile, Chat, Message, NetworkMode, AppTab, ConnectionStatus } from "@/hooks/echo/types";
+import { hydrateSession } from '../../lib/auth-hydrator';
 
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
@@ -176,6 +177,24 @@ function EchoAppContent() {
   const { settings: notificationSettings } = useNotificationSettings(user);
   const { notifyNewMessage } = useNotifications({ user, chats, settings: notificationSettings, onNotificationClick: (chatId) => setSelectedChat(chats.find(c => c.id === chatId) || null) });
 
+  // === Android Back Button ===
+  useEffect(() => {
+    const unlisten = listen("android-back-button", () => {
+      if (typeof window !== "undefined") {
+        if (isSettingsOpen) {
+          setIsSettingsOpen(false);
+        } else if (isRightPanelOpen) {
+          setIsRightPanelOpen(false);
+        } else if (searchOpen) {
+          setSearchOpen(false);
+        } else {
+          window.history.back();
+        }
+      }
+    });
+    return () => { unlisten.then(f => f()); };
+  }, [isSettingsOpen, isRightPanelOpen, searchOpen, setSearchOpen]);
+
  
 
   // Drafts: load when switching chats
@@ -228,16 +247,24 @@ useEffect(() => {
         }
       });
 
-      // 4. Асинхронная инициализация (сессия, профиль, чаты)
-      if (isOffline) {
-        return;
-      }
+// 4. Асинхронная инициализация (сессия, профиль, чаты)
+if (isOffline) {
+  return;
+}
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        router.push('/auth');
-        return;
-      }
+const hydrated = await hydrateSession();
+if (!hydrated) {
+  console.log('[App] No session, redirecting to auth...');
+  router.push('/auth');
+  return;
+}
+
+// 4.2. Теперь Supabase знает о сессии
+const { data: { session } } = await supabase.auth.getSession();
+if (!session) {
+  router.push('/auth');
+  return;
+}
 
       let userData: UserProfile;
       try {

@@ -1,8 +1,14 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod crypto;
 mod notification;
+mod storage;
+mod vault;
 
 use notification::NotificationManager;
+use storage::StorageManager;
 use tauri::{AppHandle, Emitter, Listener, Manager};
+use vault::Vault;
 
 /// Команда, вызываемая из JS при клике на уведомление
 #[tauri::command]
@@ -25,10 +31,47 @@ fn init_notification_manager(app: &AppHandle<tauri::Wry>) {
     log::info!("[Notifications] Manager initialized");
 }
 
+/// Инициализация менеджера локального хранилища SQLite (rusqlite, одно соединение)
+fn init_storage_manager(app: &AppHandle<tauri::Wry>) {
+    // Логируем все возможные пути
+    if let Ok(dir) = app.path().app_data_dir() {
+        log::info!("[Storage] app_data_dir: {:?}", dir);
+    } else {
+        log::error!("[Storage] app_data_dir FAILED");
+    }
+    
+    if let Ok(dir) = app.path().app_local_data_dir() {
+        log::info!("[Storage] app_local_data_dir: {:?}", dir);
+    } else {
+        log::error!("[Storage] app_local_data_dir FAILED");
+    }
+    
+    let manager = StorageManager::new(app);
+    app.manage(manager);
+    log::info!("[Storage] Manager initialized (rusqlite monopoly)");
+}
+
+/// Инициализация Vault (AES-256-GCM шифрование с привязкой к устройству)
+fn init_vault(app: &AppHandle<tauri::Wry>) {
+    let mut vault = Vault::new();
+    match vault.initialize(app) {
+        Ok(()) => {
+            log::info!("[Vault] Initialized successfully (AES-256-GCM)");
+        }
+        Err(e) => {
+            log::error!("[Vault] Failed to initialize: {}", e);
+            // Не падаем — vault будет проверять ready флаг при каждой операции
+        }
+    }
+    app.manage(vault);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // tauri-plugin-sql УДАЛЁН — монополия rusqlite
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             // Notification commands
             handle_notification_click,
@@ -38,10 +81,25 @@ pub fn run() {
             notification::get_fcm_token,
             notification::show_local_notification,
             notification::start_background_polling,
-            // Crypto commands (BIP-39 + Curve25519 в фоновом потоке)
+            // Crypto commands (BIP-39 + x25519-dalek в фоновом потоке)
             crypto::generate_mnemonic,
             crypto::validate_mnemonic,
             crypto::generate_keys_from_mnemonic,
+            // Storage commands (rusqlite, AES-256-GCM через vault)
+            storage::save_session,
+            storage::get_session,
+            storage::delete_session,
+            storage::get_all_sessions,
+            storage::get_latest_session,
+            storage::save_device,
+            storage::get_devices,
+            storage::delete_device,
+            storage::save_account,
+            storage::get_account,
+            // Vault commands (AES-256-GCM encryption)
+            vault::vault_encrypt,
+            vault::vault_decrypt,
+            vault::vault_status,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {
@@ -52,21 +110,18 @@ pub fn run() {
                 )?;
             }
 
+            // Порядок важен: сначала storage (создаёт таблицы), потом vault (шифрует)
+            init_storage_manager(app.handle());
+            init_vault(app.handle());
             init_notification_manager(app.handle());
 
             app.listen("notification-clicked", |event| {
                 println!("[Notifications] Clicked: {:?}", event.payload());
             });
 
+            log::info!("[Setup] All managers initialized, ready for IPC");
             Ok(())
-        })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::BackButton = event {
-                // Отправляем событие во фронтенд вместо стандартного поведения
-                let _ = window.emit("android-back-button", ());
-            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
-

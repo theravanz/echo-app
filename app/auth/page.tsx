@@ -7,6 +7,10 @@ import { useTranslation } from '@/hooks/use-translation';
 import { CountrySelector } from '@/components/auth/country-selector';
 import { auth } from '@/lib/firebase';
 import { supabase } from '@/lib/supabase';
+import { persistSession } from '@/lib/db';
+import nacl from 'tweetnacl';
+// @ts-ignore
+import { encodeBase64 } from 'tweetnacl-util';
 import { QRCodeSVG } from 'qrcode.react';
 // @ts-ignore
 import { invoke } from '@tauri-apps/api/core';
@@ -264,7 +268,13 @@ function AuthPageContent() {
           setVerifyLoading(false);
           return;
         }
-        await confirmationResultRef.current.confirm(code);
+        const result = await confirmationResultRef.current.confirm(code);
+
+        // Сохраняем сессию в нативную SQLite (и параллельно в Supabase)
+        if (result?.user) {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session) await persistSession(session).catch(() => {});
+        }
 
         const { data: { user: sbUser } } = await supabase.auth.getUser();
         if (sbUser?.user_metadata?.e2ee_initialized) {
@@ -278,6 +288,10 @@ function AuthPageContent() {
         });
 
         if (error) throw error;
+
+        // Сохраняем сессию в нативную SQLite
+        const { data: { session: emailSession } } = await supabase.auth.getSession();
+        if (emailSession) await persistSession(emailSession).catch(() => {});
 
         if (data.user?.user_metadata?.e2ee_initialized) {
           setIsExistingUser(true);
@@ -341,16 +355,35 @@ function AuthPageContent() {
     setConfirmRecoveryLoading(true);
 
     try {
-      // Генерация ключей в Rust (BIP-39 seed + Curve25519 в фоновом потоке)
+      // Генерация ключей в Rust (BIP-39 seed через PBKDF2 в фоновом потоке)
       const keys = await invoke('generate_keys_from_mnemonic', { mnemonicPhrase: mnemonic }) as any;
 
+      // Публичный ключ вычисляем через tweetnacl (как в старой версии)
+      // Это гарантирует 100% совместимость со старыми чатами
+      const seedBytes = keys.seed_base64 ? (await import('tweetnacl-util')).decodeBase64(keys.seed_base64) : null;
+      const privateKeyBytes = (await import('tweetnacl-util')).decodeBase64(keys.private_key);
+
+      let publicKeyBase64 = keys.public_key;
+      if (seedBytes && seedBytes.length >= 32) {
+        const seed32 = seedBytes.slice(0, 32);
+        const publicKey = nacl.scalarMult.base(seed32);
+        publicKeyBase64 = encodeBase64(publicKey);
+      } else {
+        // Fallback: используем приватный ключ как seed (32 байта)
+        const publicKey = nacl.scalarMult.base(privateKeyBytes);
+        publicKeyBase64 = encodeBase64(publicKey);
+      }
+
+      const { data: { session: recoverySession } } = await supabase.auth.getSession();
+      if (recoverySession) await persistSession(recoverySession).catch(() => {});
+
       localStorage.setItem('echo_private_key', keys.private_key);
-      localStorage.setItem('echo_public_key', keys.public_key);
+      localStorage.setItem('echo_public_key', publicKeyBase64);
       localStorage.setItem('echo_mnemonic_backup', mnemonic);
 
       const { error: authError } = await supabase.auth.updateUser({
         data: {
-          public_key: keys.public_key,
+          public_key: publicKeyBase64,
           e2ee_initialized: true
         }
       });
@@ -360,7 +393,7 @@ function AuthPageContent() {
       if (userData?.user) {
         await supabase.from('profiles').upsert({
           id: userData.user.id,
-          public_key: keys.public_key,
+          public_key: publicKeyBase64,
           e2ee_initialized: true,
           phone_number: authMode === 'sms' ? countryCode + phone.replace(/\D/g, '') : null,
           updated_at: new Date().toISOString()
@@ -397,20 +430,32 @@ function AuthPageContent() {
 
     setConfirmRecoveryLoading(true);
     try {
-      // Генерация ключей в Rust (BIP-39 seed + Curve25519 в фоновом потоке)
+      // Генерация seed через Rust (PBKDF2), публичный ключ — через tweetnacl
       const keys = await invoke('generate_keys_from_mnemonic', { mnemonicPhrase: cleanMnemonic }) as any;
+
+      // Вычисляем публичный ключ из seed через tweetnacl.scalarMult.base
+      const privateKeyBytes = (await import('tweetnacl-util')).decodeBase64(keys.private_key);
+      let publicKeyBase64 = keys.public_key;
+      if (keys.seed_base64) {
+        const seedBytes = (await import('tweetnacl-util')).decodeBase64(keys.seed_base64);
+        if (seedBytes && seedBytes.length >= 32) {
+          publicKeyBase64 = encodeBase64(nacl.scalarMult.base(seedBytes.slice(0, 32)));
+        }
+      } else {
+        publicKeyBase64 = encodeBase64(nacl.scalarMult.base(privateKeyBytes));
+      }
 
       const { data: { user } } = await supabase.auth.getUser();
       const storedPublicKey = user?.user_metadata?.public_key;
 
-      if (storedPublicKey && storedPublicKey !== keys.public_key) {
+      if (storedPublicKey && storedPublicKey !== publicKeyBase64) {
         setRestoreError(language === 'ru' ? 'Фраза не подходит к этому аккаунту.' : 'Mnemonic does not match this account.');
         setConfirmRecoveryLoading(false);
         return;
       }
 
       localStorage.setItem('echo_private_key', keys.private_key);
-      localStorage.setItem('echo_public_key', keys.public_key);
+      localStorage.setItem('echo_public_key', publicKeyBase64);
       localStorage.setItem('echo_mnemonic_backup', cleanMnemonic);
 
       setConfirmRecoveryLoading(false);

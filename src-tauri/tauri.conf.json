@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "echo-tauri",
-  "version": "0.1.5",
+  "version": "0.1.7",
   "identifier": "com.theravanz.echo-tauri",
   "build": {
     "frontendDist": "../out",
@@ -17,7 +17,7 @@
         "height": 600,
         "resizable": true,
         "fullscreen": false,
-        "visible": false
+        "visible": true
       }
     ],
     "security": {
