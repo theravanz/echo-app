@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { AnimatePresence } from 'framer-motion';
-import { getPersistedSession } from '@/lib/db';
+import { supabase } from '@/lib/supabase';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import WelcomeScreen from './components/WelcomeScreen';
 
@@ -16,10 +16,10 @@ export default function Home() {
     let isMounted = true;
 
     const init = async () => {
-      // 1. Проверка сессии через SQLite + Supabase (асинхронно)
+      // 1. Проверка сессии (асинхронно, не блокирует рендер)
       let shouldShowWelcome = true;
       try {
-        const session = await getPersistedSession();
+        const { data: { session } } = await supabase.auth.getSession();
         if (session && isMounted) {
           router.push('/app');
           shouldShowWelcome = false;
