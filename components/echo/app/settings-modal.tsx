@@ -2,9 +2,9 @@
 
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
-import { getDevices, deleteDevice, generateHWID, saveDevice, type Device } from "@/lib/db";
 import { cn, safeChar } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { getDevices, deleteDevice, generateHWID, saveDevice, type Device } from "@/lib/db";
 import {
   TbX as X,
   TbArrowLeft as ArrowLeft,
@@ -34,17 +34,18 @@ import {
   TbAlertTriangle as AlertTriangle,
   TbUserPlus as UserPlus,
   TbCheck as Check,
-  TbDeviceMobile as Smartphone,
-  TbMoon as Moon,
 } from "react-icons/tb";
 
 import type { UserProfile } from "@/hooks/echo/types";
 import { useNotificationSettings, type NotificationSettings } from "@/hooks/echo/use-notification-settings";
+import { ProfileEditPanel, type EditableProfile } from "@/components/echo/app/profile-edit-panel";
+
 interface SettingsModalProps {
   user: any;
   accounts?: any[];
   onClose: () => void;
   isQuarantined?: boolean;
+  onUpdateUser?: (patch: Record<string, any>) => void;
 }
 
 const CornerBrackets = () => (
@@ -75,7 +76,7 @@ const LANGUAGES = [
   { code: 'ar', label: 'Arabic', native: 'العربية' }
 ];
 
-type ViewType = 'privacy' | 'devices' | 'language' | 'alerts' | null;
+type ViewType = 'profile' | 'privacy' | 'devices' | 'language' | 'alerts' | null;
 
 interface MenuItem {
   id: string;
@@ -94,7 +95,7 @@ const menuSections: MenuSection[] = [
   {
     label: 'Core System',
     items: [
-      { id: 'profile', icon: User, label: 'Identity' },
+      { id: 'profile', icon: User, label: 'Identity', action: 'profile' },
       { id: 'security', icon: ShieldCheck, label: 'Security' },
       { id: 'alerts', icon: Bell, label: 'Alerts', action: 'alerts' },
       { id: 'interface', icon: Palette, label: 'Interface' },
@@ -112,7 +113,7 @@ const menuSections: MenuSection[] = [
   }
 ];
 
-const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onClose, isQuarantined }) => {
+const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onClose, isQuarantined, onUpdateUser }) => {
   const isMobile = useIsMobile();
   const [activeView, setActiveView] = useState<ViewType>(null);
   const [devices, setDevices] = useState<any[]>([]);
@@ -126,10 +127,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
     return 'ru';
   });
 
-  // Notifications settings (hook must be at component level)
+  // Notifications settings
   const { settings: notifSettings, updateSetting: updateNotifSetting } = useNotificationSettings(user || null);
 
-  // Use native generateHWID from db.ts (SHA-256 based, consistent)
+  // Use native generateHWID from db.ts
   useEffect(() => {
     (async () => {
       try {
@@ -152,26 +153,33 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
     setLoading(true);
     try {
       if (!user?.id) { setLoading(false); return; }
-      // Priority: native SQLite (Rust backend)
-      const nativeDevices = await getDevices(user.id);
-      if (nativeDevices && nativeDevices.length > 0) {
-        setDevices(nativeDevices);
-      } else {
-        // Fallback: Supabase
-        const { data, error } = await supabase
+
+      // Merge devices from both sources
+      const allDevices: Record<string, any> = {};
+
+      // 1. From Supabase
+      try {
+        const { data: supabaseDevices } = await supabase
           .from('devices')
           .select('*')
-          .eq('user_id', user?.id)
+          .eq('user_id', user.id)
           .order('last_active', { ascending: false });
-        if (!error) setDevices(data || []);
-      }
-    } catch (err) {
-      console.warn('[Settings] fetchDevices error:', err);
-      // Final fallback
+        if (supabaseDevices) {
+          supabaseDevices.forEach(d => { allDevices[d.hwid || d.id] = d; });
+        }
+      } catch (e) { console.warn('[Settings] Supabase fetch failed:', e); }
+
+      // 2. From SQLite (native)
       try {
-        const { data } = await supabase.from('devices').select('*').eq('user_id', user?.id);
-        if (data) setDevices(data);
-      } catch {}
+        const nativeDevices = await getDevices(user.id);
+        if (nativeDevices) {
+          nativeDevices.forEach(d => { allDevices[d.hwid || d.id] = d; });
+        }
+      } catch (e) { console.warn('[Settings] SQLite fetch failed:', e); }
+
+      setDevices(Object.values(allDevices));
+    } catch (err) {
+      console.error('[Settings] fetchDevices fatal:', err);
     }
     setLoading(false);
   };
@@ -190,8 +198,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
       return;
     }
     if (!window.confirm('Terminate this session?')) return;
+
     // 1. Delete from native SQLite
     try { await deleteDevice(deviceId); } catch (e) { console.warn('[Settings] native deleteDevice failed:', e); }
+
     // 2. Try Supabase RPC
     try {
       const { error } = await supabase.rpc('terminate_device_session', {
@@ -202,6 +212,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
       // 3. Fallback to direct Supabase delete
       try { await supabase.from('devices').delete().eq('id', deviceId); } catch {}
     }
+
     setDevices(prev => prev.filter(d => d.id !== deviceId));
   };
 
@@ -215,16 +226,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
     let hasError = false;
     for (const device of devices) {
       if (device.hwid !== currentHwid) {
-        // Delete from native SQLite
         try { await deleteDevice(device.id); } catch (e) { hasError = true; }
-        // Try Supabase RPC
         try {
           const { error } = await supabase.rpc('terminate_device_session', {
             target_device_id: device.id, requester_hwid: currentHwid
           });
           if (error) throw error;
         } catch {
-          // Fallback: direct Supabase delete
           try { await supabase.from('devices').delete().eq('id', device.id); } catch { hasError = true; }
         }
       }
@@ -234,6 +242,13 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
   };
 
   const getDeviceDisplayName = (device: any): string => {
+    if (device.os_name) {
+      let name = device.os_name;
+      if (device.browser_name && device.browser_name !== 'Echo Web') {
+        name += ' • ' + device.browser_name;
+      }
+      return name;
+    }
     if (device.device_name && device.device_name !== 'Unknown Device') {
       const ua = device.device_name;
       if (ua.includes('Windows')) return 'Windows Desktop';
@@ -249,13 +264,45 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
     return device.platform || 'Unknown Device';
   };
 
-  const getOSIcon = (os: string) => {
+  const getOSIcon = (device: any) => {
+    const os = device.os_name || device.platform || device.device_name || '';
     if (os.includes('Windows')) return <BrandWindows className="w-5 h-5" />;
-    if (os.includes('Mac') || os.includes('iOS')) return <BrandApple className="w-5 h-5" />;
-    if (os.includes('Linux')) return <BrandUbuntu className="w-5 h-5" />;
+    if (os.includes('Mac') || os.includes('iOS') || os.includes('iPhone') || os.includes('Darwin')) return <BrandApple className="w-5 h-5" />;
+    if (os.includes('Linux') || os.includes('Ubuntu')) return <BrandUbuntu className="w-5 h-5" />;
     if (os.includes('Android')) return <BrandAndroid className="w-5 h-5" />;
+    if (device.browser_name === 'Chrome') return <BrandWindows className="w-5 h-5" />;
     return <Globe className="w-5 h-5" />;
   };
+
+  // --- Profile View ---
+  const renderProfile = () => (
+    <ProfileEditPanel
+      profile={{
+        id: user.id,
+        display_name: user.user_metadata?.display_name || "",
+        username: user.user_metadata?.username || "",
+        avatar_url: user.user_metadata?.avatar_url ?? null,
+        bio: user.user_metadata?.bio ?? null,
+        background: user.user_metadata?.background ?? null,
+        status_emoji: user.user_metadata?.status_emoji ?? null,
+        birth_date: user.user_metadata?.birth_date ?? null,
+        activity_type: user.user_metadata?.activity_type ?? null,
+        activity_title: user.user_metadata?.activity_title ?? null,
+        activity_subtitle: user.user_metadata?.activity_subtitle ?? null,
+        activity_cover_url: user.user_metadata?.activity_cover_url ?? null,
+        activity_file_url: user.user_metadata?.activity_file_url ?? null,
+        activity_gradient: user.user_metadata?.activity_gradient ?? null,
+        share_listening_activity: user.user_metadata?.share_listening_activity ?? false,
+        channel_id: user.user_metadata?.channel_id ?? null,
+        channel_name: user.user_metadata?.channel_name ?? null,
+        channel_username: user.user_metadata?.channel_username ?? null,
+      }}
+      onClose={() => setActiveView(null)}
+      onSaved={(patch) => {
+        onUpdateUser?.({ user_metadata: { ...user.user_metadata, ...patch } });
+      }}
+    />
+  );
 
   // --- Devices View ---
   const renderDevices = () => (
@@ -282,23 +329,42 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
         </div>
       </GlassPanel>
 
-      <div className="text-[10px] font-mono uppercase tracking-[0.3em] text-white/30 mb-4">Current Device</div>
-      <div className="space-y-3 mb-10">
-        {devices.filter(d => d.hwid === currentHwid).map(device => (
-          <div key={device.id} className="flex items-center gap-4 p-5 rounded-[28px] bg-primary/10 border border-primary/20">
-            <div className="w-12 h-12 rounded-2xl bg-primary/20 flex items-center justify-center text-primary shrink-0">
-              {getOSIcon(device.platform || device.device_name || '')}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-3 mb-1">
-                <span className="font-bold text-sm">{getDeviceDisplayName(device)}</span>
-                <span className="text-[9px] font-mono uppercase text-green-500 bg-green-500/10 px-2 py-0.5 rounded-full">online</span>
-              </div>
-              <div className="text-xs text-white/30 font-mono">{device.platform || 'Unknown OS'}</div>
-            </div>
+      {devices.filter(d => d.hwid === currentHwid).length === 0 && (
+        <div className="flex items-center gap-4 p-5 rounded-[28px] bg-primary/10 border border-primary/20">
+          <div className="w-12 h-12 rounded-2xl bg-primary/20 flex items-center justify-center text-primary shrink-0">
+            <HardDrive className="w-5 h-5" />
           </div>
-        ))}
-      </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-3 mb-1">
+              <span className="font-bold text-sm">This Device (Current)</span>
+              <span className="text-[9px] font-mono uppercase text-green-500 bg-green-500/10 px-2 py-0.5 rounded-full">online</span>
+            </div>
+            <div className="text-xs text-white/30 font-mono">Current session</div>
+          </div>
+        </div>
+      )}
+
+      {devices.filter(d => d.hwid === currentHwid).length > 0 && (
+        <>
+          <div className="text-[10px] font-mono uppercase tracking-[0.3em] text-white/30 mb-4">Current Device</div>
+          <div className="space-y-3 mb-10">
+            {devices.filter(d => d.hwid === currentHwid).map(device => (
+              <div key={device.id} className="flex items-center gap-4 p-5 rounded-[28px] bg-primary/10 border border-primary/20">
+                <div className="w-12 h-12 rounded-2xl bg-primary/20 flex items-center justify-center text-primary shrink-0">
+                  {getOSIcon(device)}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-3 mb-1">
+                    <span className="font-bold text-sm">{getDeviceDisplayName(device)}</span>
+                    <span className="text-[9px] font-mono uppercase text-green-500 bg-green-500/10 px-2 py-0.5 rounded-full">online</span>
+                  </div>
+                  <div className="text-xs text-white/30 font-mono">{device.platform || 'Unknown OS'}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
 
       <div className="text-[10px] font-mono uppercase tracking-[0.3em] text-white/30 mb-4">Active Sessions</div>
       <div className="space-y-3 mb-10">
@@ -312,145 +378,290 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
             No other active devices
           </div>
         ) : devices.filter(d => d.hwid !== currentHwid).map(device => (
-                        <div key={device.id} className="flex items-center gap-4 p-5 rounded-[28px] bg-white/[0.02] border border-white/5 hover:bg-white/5 transition-all group">
-              <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-white/40 shrink-0">
-                {getOSIcon(device.platform || device.device_name || '')}
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="font-bold text-sm">{getDeviceDisplayName(device)}</span>
-                </div>
-                <div className="text-xs text-white/30 font-mono mb-0.5">{device.platform || 'Unknown OS'}</div>
-                <div className="text-[10px] text-white/20 font-mono">
-                  Last active: {device.last_active ? new Date(device.last_active * 1000).toLocaleDateString() + ' ' + new Date(device.last_active * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Unknown'}
-                </div>
-              </div>
-              <button className="w-10 h-10 rounded-2xl hover:bg-destructive/10 hover:text-destructive flex items-center justify-center text-white/40 transition-all shrink-0" onClick={() => handleTerminateDevice(device.id)} title="Terminate session">
-                <LogOut className="w-4 h-4" />
-              </button>
+          <div key={device.id} className="flex items-center gap-4 p-5 rounded-[28px] bg-white/[0.02] border border-white/5 hover:bg-white/5 transition-all group">
+            <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center text-white/40 shrink-0">
+              {getOSIcon(device)}
             </div>
-          ))}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <span className="font-bold text-sm">{getDeviceDisplayName(device)}</span>
+              </div>
+              <div className="text-xs text-white/30 font-mono mb-0.5">{device.platform || 'Unknown OS'}</div>
+              <div className="text-[10px] text-white/20 font-mono">
+                Last active: {(() => {
+                  if (!device.last_active) return 'Unknown';
+                  const ts = typeof device.last_active === 'string'
+                    ? new Date(device.last_active).getTime()
+                    : device.last_active * 1000;
+                  if (isNaN(ts)) return 'Unknown';
+                  return new Date(ts).toLocaleDateString() + ' ' + new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                })()}
+              </div>
+            </div>
+            <button className="w-10 h-10 rounded-2xl hover:bg-destructive/10 hover:text-destructive flex items-center justify-center text-white/40 transition-all shrink-0" onClick={() => handleTerminateDevice(device.id)} title="Terminate session">
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        ))}
       </div>
     </div>
   );
 
   // --- Privacy View ---
   const renderPrivacy = () => (
-    <div className="p-10 space-y-8">
+    <div className="p-4 md:p-10 space-y-6">
       <div className="flex items-center justify-between mb-4">
+        {isMobile && (
+          <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView(null)}>
+            <ArrowLeft className="w-5 h-5" />
+          </button>
+        )}
         <h2 className="text-2xl font-display font-bold tracking-tight">Privacy</h2>
         <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={onClose}>
           <X className="w-5 h-5" />
         </button>
       </div>
 
-      <GlassPanel className="p-5 rounded-[28px]">
+      <GlassPanel className="p-6 rounded-[28px]">
         <CornerBrackets />
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Eye className="w-5 h-5 text-white/40" />
-              <div>
-                <div className="text-sm font-bold">Last Seen</div>
-                <div className="text-[10px] text-white/30 font-mono">Who can see your last active time</div>
-              </div>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-[#5856d6]/15 flex items-center justify-center" style={{ color: '#5856d6' }}>
+              <Eye className="w-5 h-5" />
             </div>
-            <button
-              className={cn(
-                "w-12 h-7 rounded-full transition-all relative",
-                isLastSeenVisible ? "bg-primary" : "bg-white/10"
-              )}
-              onClick={toggleLastSeen}
-            >
-              <div className={cn(
-                "absolute top-1 w-5 h-5 rounded-full bg-white shadow transition-all",
-                isLastSeenVisible ? "left-6" : "left-1"
-              )} />
-            </button>
+            <div>
+              <div className="font-bold text-sm">Last Seen</div>
+              <div className="text-xs text-white/40 mt-0.5">Who can see your last active time</div>
+            </div>
           </div>
-
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Fingerprint className="w-5 h-5 text-white/40" />
-              <div>
-                <div className="text-sm font-bold">E2EE Fingerprint</div>
-                <div className="text-[10px] text-white/30 font-mono">Verify encryption keys</div>
-              </div>
-            </div>
-            <button className="text-[10px] text-primary font-mono uppercase tracking-widest hover:underline">
-              Verify
-            </button>
-          </div>
-
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Shield className="w-5 h-5 text-white/40" />
-              <div>
-                <div className="text-sm font-bold">Forward Security</div>
-                <div className="text-[10px] text-white/30 font-mono">Perfect Forward Secrecy active</div>
-              </div>
-            </div>
-            <ShieldCheck className="w-5 h-5 text-primary" />
+          <div className={cn("w-14 h-8 rounded-full p-1 transition-colors duration-300 cursor-pointer shrink-0", isLastSeenVisible ? "bg-primary" : "bg-white/10")} onClick={toggleLastSeen}>
+            <div className={cn("w-6 h-6 rounded-full bg-white shadow transition-transform duration-300", isLastSeenVisible ? "translate-x-6" : "translate-x-0")} />
           </div>
         </div>
       </GlassPanel>
+
+      <div className="flex gap-4 p-5 rounded-[28px] bg-primary/5 border border-primary/10">
+        <Info className="w-5 h-5 text-primary shrink-0 mt-0.5" />
+        <p className="text-xs text-white/60 leading-relaxed">
+          If you hide your last seen time, you also won&apos;t be able to see other users&apos; last seen times.
+        </p>
+      </div>
     </div>
   );
 
   // --- Language View ---
-  const renderLanguage = () => (
-    <div className="p-10 space-y-8">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-2xl font-display font-bold tracking-tight">Language</h2>
-        <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={onClose}>
-          <X className="w-5 h-5" />
-        </button>
-      </div>
-
-      <div className="space-y-2">
-        {LANGUAGES.map(lang => (
-          <button
-            key={lang.code}
-            className={cn(
-              "w-full flex items-center justify-between p-4 rounded-2xl transition-all",
-              currentLang === lang.code
-                ? "bg-primary/10 border border-primary/20"
-                : "hover:bg-white/5 border border-transparent"
-            )}
-            onClick={() => {
-              setCurrentLang(lang.code);
-              localStorage.setItem('echo_language', lang.code);
-            }}
-          >
-            <div className="text-left">
-              <div className="text-sm font-bold">{lang.native}</div>
-              <div className="text-[10px] text-white/30 font-mono">{lang.label}</div>
-            </div>
-            {currentLang === lang.code && <Check className="w-5 h-5 text-primary" />}
+  const renderLanguage = () => {
+    return (
+      <div className="p-4 md:p-10 space-y-6">
+        <div className="flex items-center justify-between mb-4">
+          {isMobile && (
+            <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView(null)}>
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+          )}
+          <h2 className="text-2xl font-display font-bold tracking-tight">Language</h2>
+          <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={onClose}>
+            <X className="w-5 h-5" />
           </button>
-        ))}
+        </div>
+
+        <GlassPanel className="p-6 rounded-[28px]">
+          <CornerBrackets />
+          <div className="flex items-center gap-4 mb-4">
+            <div className="w-12 h-12 rounded-2xl bg-[#ff2d55]/15 flex items-center justify-center" style={{ color: '#ff2d55' }}>
+              <Globe className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="font-bold text-sm">App Language</div>
+              <div className="text-xs text-white/40 mt-0.5">Current: {currentLang.toUpperCase()}</div>
+            </div>
+          </div>
+        </GlassPanel>
+
+        <div className="space-y-1">
+          {LANGUAGES.map(lang => {
+            const isSelected = lang.code === currentLang;
+            return (
+              <button
+                key={lang.code}
+                className={cn(
+                  "w-full flex items-center gap-4 p-4 rounded-[24px] transition-all",
+                  isSelected ? "bg-primary/10 border border-primary/20" : "hover:bg-white/5 border border-transparent"
+                )}
+                onClick={() => {
+                  setCurrentLang(lang.code);
+                  localStorage.setItem('echo_language', lang.code);
+                }}
+              >
+                <div className="flex-1 text-left">
+                  <div className="text-sm font-bold">{lang.native}</div>
+                  <div className="text-xs text-white/40">{lang.label}</div>
+                </div>
+                {isSelected && <Check className="w-5 h-5 text-primary" />}
+              </button>
+            );
+          })}
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   // --- Alerts View ---
-  const renderAlerts = () => (
-    <div className="p-10 space-y-8">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-2xl font-display font-bold tracking-tight">Alerts</h2>
-        <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={onClose}>
-          <X className="w-5 h-5" />
-        </button>
-      </div>
+  const renderAlerts = () => {
+    const toggleSetting = (key: keyof NotificationSettings) => {
+      updateNotifSetting(key as any, !notifSettings[key]);
+    };
 
-      <GlassPanel className="p-5 rounded-[28px]">
-        <CornerBrackets />
-        <p className="text-xs text-white/40 leading-relaxed">
-          Notification and alert preferences will be available in the next update.
-        </p>
-      </GlassPanel>
-    </div>
-  );
+    const alertItems = [
+      { key: 'enabled', label: 'Push Notifications', desc: 'Receive notifications for new messages' },
+      { key: 'sound', label: 'Sound', desc: 'Play sound when receiving a notification' },
+      { key: 'messagePreview', label: 'Message Preview', desc: 'Show message content in notifications' },
+      { key: 'groupByChat', label: 'Group by Chat', desc: 'Group notifications by conversation' },
+      { key: 'directMessagesOnly', label: 'Direct Messages Only', desc: 'Only notify for direct messages' },
+      { key: 'pushNotifications', label: 'FCM Push', desc: 'Receive push notifications via Firebase (Android)' },
+      { key: 'backgroundPolling', label: 'Background Polling', desc: 'Poll for new messages when app is in background' },
+    ];
+
+    return (
+      <div className="p-4 md:p-10 space-y-6">
+        <div className="flex items-center justify-between mb-4">
+          {isMobile && (
+            <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView(null)}>
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+          )}
+          <h2 className="text-2xl font-display font-bold tracking-tight">Alerts &amp; Notifications</h2>
+          <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={onClose}>
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        <GlassPanel className="p-6 rounded-[28px]">
+          <CornerBrackets />
+          <div className="space-y-4">
+            {alertItems.map((item) => {
+              const isEnabled = (notifSettings as any)[item.key] ?? false;
+              return (
+                <div key={item.key} className="flex items-center justify-between py-2">
+                  <div className="flex items-center gap-4">
+                    <div className="flex-1">
+                      <div className="font-bold text-sm">{item.label}</div>
+                      <div className="text-xs text-white/40 mt-0.5">{item.desc}</div>
+                    </div>
+                  </div>
+                  <div
+                    className={cn(
+                      "w-14 h-8 rounded-full p-1 transition-colors duration-300 cursor-pointer shrink-0",
+                      isEnabled ? "bg-primary" : "bg-white/10"
+                    )}
+                    onClick={() => toggleSetting(item.key as keyof typeof notifSettings)}
+                  >
+                    <div
+                      className={cn(
+                        "w-6 h-6 rounded-full bg-white shadow transition-transform duration-300",
+                        isEnabled ? "translate-x-6" : "translate-x-0"
+                      )}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </GlassPanel>
+
+        <div className="flex gap-4 p-5 rounded-[28px] bg-primary/5 border border-primary/10">
+          <Info className="w-5 h-5 text-primary shrink-0 mt-0.5" />
+          <p className="text-xs text-white/60 leading-relaxed">
+            Notification settings are synced across your devices. Changes take effect immediately.
+          </p>
+        </div>
+      </div>
+    );
+  };
+
+  // --- Main Render ---
+  // If a sub-view is active on mobile, show it fullscreen
+  if (isMobile && activeView) {
+    const viewContent = activeView === 'profile' ? renderProfile() :
+                        activeView === 'devices' ? renderDevices() :
+                        activeView === 'privacy' ? renderPrivacy() :
+                        activeView === 'alerts' ? renderAlerts() :
+                        renderLanguage();
+    return (
+      <div className="fixed inset-0 z-[200] bg-background flex flex-col" onClick={onClose}>
+        <div className="flex-1 overflow-y-auto" onClick={e => e.stopPropagation()}>
+          {viewContent}
+        </div>
+      </div>
+    );
+  }
+
+  // Mobile: Main menu (full screen, categories list)
+  if (isMobile) {
+    return (
+      <div className="fixed inset-0 z-[200] bg-background flex flex-col" onClick={onClose}>
+        <div className="flex-1 overflow-y-auto" onClick={e => e.stopPropagation()}>
+          <div className="p-4">
+            <div className="flex items-center justify-between mb-6">
+              <h1 className="text-2xl font-display font-bold tracking-tight">Settings</h1>
+              <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40" onClick={onClose}>
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Mobile Profile */}
+            <div className="flex items-center gap-4 p-4 mb-6 bg-white/[0.02] border border-white/5 rounded-[28px]">
+              <div className="w-14 h-14 rounded-[24px] bg-primary flex items-center justify-center text-primary-foreground text-xl font-bold shadow-xl shrink-0">
+                {safeChar(user?.user_metadata?.display_name || user?.email, 'E')}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="font-bold">{user?.user_metadata?.display_name || user?.email?.split('@')[0]}</div>
+                <div className="text-xs text-white/40 font-mono">
+                  @{user?.user_metadata?.username || (user?.id || '').substring(0, 8)}
+                </div>
+              </div>
+            </div>
+
+            {/* Menu Categories */}
+            {menuSections.map(section => (
+              <div key={section.label} className="mb-6">
+                <div className="text-[9px] font-mono uppercase tracking-[0.4em] text-white/30 px-2 mb-3">{section.label}</div>
+                <div className="space-y-1">
+                  {section.items.map(item => {
+                    const Icon = item.icon;
+                    return (
+                      <button
+                        key={item.id}
+                        className="w-full flex items-center gap-4 p-4 rounded-[24px] hover:bg-white/5 transition-all"
+                        onClick={() => item.action ? setActiveView(item.action) : undefined}
+                      >
+                        <div className="w-10 h-10 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
+                          <Icon className="w-5 h-5 text-white/40" />
+                        </div>
+                        <div className="flex-1 text-left">
+                          <div className="text-sm font-bold">{item.label}</div>
+                          {(item.id === 'language' ? currentLang : item.sublabel) && (
+                            <div className="text-xs text-white/40">
+                              {item.id === 'language' ? LANGUAGES.find(l => l.code === currentLang)?.native || currentLang : item.sublabel}
+                            </div>
+                          )}
+                        </div>
+                        {item.action && (
+                          <div className="w-6 h-6 rounded-full bg-white/5 flex items-center justify-center">
+                            <ArrowLeft className="w-3.5 h-3.5 text-white/20 rotate-180" />
+                          </div>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // --- Desktop: Modal with sidebar + content ---
   return (
@@ -496,7 +707,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
 
           {/* Content */}
           <div className="flex-1 overflow-y-auto">
-            {activeView === 'devices' ? renderDevices() :
+            {activeView === 'profile' ? renderProfile() :
+             activeView === 'devices' ? renderDevices() :
              activeView === 'privacy' ? renderPrivacy() :
              activeView === 'language' ? renderLanguage() :
              activeView === 'alerts' ? renderAlerts() :

@@ -113,8 +113,10 @@ import { useProfiles } from "@/hooks/echo/use-profiles";
 import { MessageBubble } from "@/components/echo/app/message-bubble";
 import { MediaPicker } from "@/components/echo/app/media-picker";
 import { saveDevice, generateHWID } from "@/lib/db";
+import { ProfileViewPanel, type ViewedProfile } from "@/components/echo/app/profile-view-panel";
 import dynamic from "next/dynamic";
 import type { UserProfile, Chat, Message, NetworkMode, AppTab, ConnectionStatus } from "@/hooks/echo/types";
+import { useProfileDetails } from "@/hooks/echo/use-profile-details";
 
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
@@ -171,6 +173,7 @@ function EchoAppContent() {
   const userRef = useRef<UserProfile | null>(null);
 
   const { chats, setChats, fetchChats, selectedChat, setSelectedChat, selectedChatRef, drafts, saveDraft, onlineUsers } = useChatList(user);
+  const { profile: viewedProfile } = useProfileDetails(isRightPanelOpen ? selectedChat?.id ?? null : null);
 
   const { messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage } = useMessages(chats);
   const { addToQueue, processPendingQueue } = useNetworkQueue();
@@ -887,123 +890,42 @@ useEffect(() => {
         )}
       </main>
 
-            {/* --- 4. Identity Info Panel (Right) --- */}
-      {selectedChat && (
+      {/* --- Profile View Panel (Right) --- */}
+      {selectedChat && isRightPanelOpen && viewedProfile && (
         <aside className={cn(
-          "flex flex-col bg-black/95 backdrop-blur-3xl z-40 shrink-0 transition-all duration-500 ease-in-out",
-          isMobile
-            ? "fixed inset-0 w-full h-full"
-            : "border-l border-white/5 relative w-96",
-          isRightPanelOpen ? "opacity-100 translate-x-0" : "opacity-0 translate-x-full pointer-events-none"
+          "flex flex-col z-40 shrink-0",
+          isMobile ? "fixed inset-0 w-full h-full" : "border-l border-white/5 relative w-96"
         )}>
-          {isRightPanelOpen && (
-            <div className="flex flex-col h-full">
-              {/* Mobile header */}
-              <div className="flex items-center gap-3 px-4 pt-4 pb-2 md:hidden shrink-0">
-                <button
-                  onClick={() => setIsRightPanelOpen(false)}
-                  className="w-9 h-9 rounded-xl flex items-center justify-center text-white/40 hover:bg-white/5 hover:text-white transition-all"
-                >
-                  <ArrowLeft className="w-5 h-5" />
-                </button>
-                <span className="text-sm font-mono text-white/30 uppercase tracking-widest">Profile</span>
-              </div>
-              <div className="flex-1 overflow-y-auto overscroll-contain scrollbar-hide">
-                <div className="relative">
-                  {/* Background Banner */}
-                  <div className="h-32 md:h-44 w-full bg-gradient-to-br from-purple-800/40 via-black/30 to-black/80 backdrop-blur-md relative overflow-hidden">
-                    <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,rgba(168,85,247,0.15),transparent_70%)]" />
-                    <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_bottom_left,rgba(88,101,242,0.1),transparent_60%)]" />
-                  </div>
-
-                  {/* Avatar - overlapping banner */}
-                  <div className="flex justify-center -mt-14 md:-mt-18 relative z-10">
-                    <div className="relative group">
-                      <div className="absolute inset-0 bg-primary/20 blur-2xl rounded-full scale-150" />
-                      <Avatar className="w-24 h-24 md:w-28 md:h-28 rounded-[32px] md:rounded-[40px] border-4 border-background shadow-2xl relative z-10">
-                        <AvatarImage src={selectedChat?.avatar_url} className="object-cover" />
-                        <AvatarFallback className="bg-primary/10 text-primary text-3xl md:text-4xl font-display font-bold uppercase">{safeChar(selectedChat?.display_name || selectedChat?.username)}</AvatarFallback>
-                      </Avatar>
-                    </div>
-                  </div>
-
-                  {/* Name + @username */}
-                  <div className="text-center mt-3 md:mt-5 space-y-1">
-                    <h3 className="text-2xl md:text-3xl font-display font-bold tracking-tight">{selectedChat?.display_name || selectedChat?.username}</h3>
-                    <div className="inline-flex items-center gap-2 text-[11px] md:text-xs font-mono text-white/40 uppercase tracking-widest">
-                      <LinkIcon className="w-3 h-3" />
-                      <span>@{selectedChat?.username}</span>
-                    </div>
-                  </div>
-
-                {/* Bio / About */}
-                <div className="mt-8 md:mt-10 px-4 md:px-6">
-                  <h4 className="text-[10px] font-mono uppercase tracking-[0.3em] text-white/30 mb-3">About</h4>
-                  <p className="text-xs md:text-sm text-white/50 leading-relaxed">
-                    {selectedChat?.bio || (language === 'ru'
-                      ? 'Пользователь пока не добавил описание.'
-                      : 'User hasn\'t added a bio yet.')}
-                  </p>
-                </div>
-
-                {/* Collectible Gifts */}
-                <div className="mt-8 md:mt-10 px-4 md:px-6">
-                  <h4 className="text-[10px] font-mono uppercase tracking-[0.3em] text-white/30 mb-4">Collectible Gifts</h4>
-                  <div className="flex gap-3 overflow-x-auto pb-3 scrollbar-hide -mx-4 md:-mx-6 px-4 md:px-6">
-                    {[
-                      { emoji: '💎', name: 'Diamond Pack', color: 'from-cyan-500/30 to-blue-600/30' },
-                      { emoji: '🌊', name: 'Wave Surfer', color: 'from-blue-500/30 to-purple-600/30' },
-                      { emoji: '🔥', name: 'Flame Soul', color: 'from-orange-500/30 to-red-600/30' },
-                    ].map((gift, i) => (
-                      <div key={i} className="shrink-0 w-28 md:w-32 p-3 rounded-xl border border-white/5 bg-white/[0.03] shadow-lg space-y-2">
-                        <div className="text-3xl text-center">{gift.emoji}</div>
-                        <p className="text-[9px] font-mono text-white/40 uppercase tracking-widest text-center">{gift.name}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Node Intelligence — compact */}
-                <div className="mt-8 md:mt-10 px-4 md:px-6">
-                  <h4 className="text-[10px] font-mono uppercase tracking-[0.3em] text-white/20 mb-3">Node Intelligence</h4>
-                  <div className="space-y-2">
-                    {[
-                      { icon: ShieldCheck, label: 'E2EE', status: 'Active' },
-                      { icon: Wifi, label: 'Network', status: '12ms' },
-                      { icon: Database, label: 'Vault', status: '5.2GB' },
-                    ].map((item, i) => (
-                      <div key={i} className="flex items-center justify-between py-2.5 px-4 rounded-2xl bg-white/[0.02] border border-white/5">
-                        <div className="flex items-center gap-2.5">
-                          <item.icon className="w-3.5 h-3.5 text-primary/60" />
-                          <span className="text-[11px] font-bold text-white/40">{item.label}</span>
-                        </div>
-                        <span className="text-[10px] font-mono text-white/30 uppercase">{item.status}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Action buttons */}
-                <div className="mt-8 md:mt-10 px-4 md:px-6 pb-6 md:pb-8 space-y-3">
-                   <Button variant="outline" className="w-full h-12 md:h-14 rounded-[24px] md:rounded-[28px] border-white/5 bg-white/5 hover:bg-white/10 hover:border-white/10 font-bold group text-xs md:text-sm">
-                      <Bell className="w-4 h-4 md:w-5 md:h-5 mr-3 text-white/20 group-hover:text-primary transition-colors" />
-                      Mute Notifications
-                   </Button>
-                   <Button variant="outline" className="w-full h-12 md:h-14 rounded-[24px] md:rounded-[28px] border-white/5 bg-white/5 hover:bg-destructive/10 hover:border-destructive/20 hover:text-destructive font-bold group text-xs md:text-sm">
-                      <Trash2 className="w-4 h-4 md:w-5 md:h-5 mr-3 text-white/20 group-hover:text-destructive transition-colors" />
-                      Clear History
-                   </Button>
-                </div>
-              </div>
-            </div>
-            </div>
-          )}
+          <ProfileViewPanel
+            profile={{
+              ...viewedProfile,
+              is_online: onlineUsers.has(selectedChat.id),
+              last_seen_label: formatRelativeTime(selectedChat.lastMessageTime || new Date().toISOString()),
+            }}
+            onClose={() => setIsRightPanelOpen(false)}
+            onMuteToggle={() => {
+              // toggle mute — implement via supabase or local state
+            }}
+            onBlock={async () => {
+              await supabase.from("blocks").insert({ blocker_id: user?.id, blocked_id: selectedChat.id });
+            }}
+            onReport={() => {
+              // open a report dialog/modal
+            }}
+            onClearHistory={async () => {
+              if (user) {
+                await supabase.from("messages").delete().or(
+                  `and(sender_id.eq.${user.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${user.id})`
+                );
+              }
+            }}
+          />
         </aside>
       )}
 
       {/* --- Settings Modal --- */}
       {isSettingsOpen && (
-        <SettingsModal user={user} accounts={accounts} onClose={() => setIsSettingsOpen(false)} isQuarantined={isQuarantined} />
+        <SettingsModal user={user} accounts={accounts} onClose={() => setIsSettingsOpen(false)} isQuarantined={isQuarantined} onUpdateUser={(patch) => setUser(prev => prev ? { ...prev, ...patch } : prev)} />
       )}
       {/* --- Mobile Hotbar --- */}      {/* --- Mobile Hotbar --- */}
       {isMobile && !selectedChat && (
