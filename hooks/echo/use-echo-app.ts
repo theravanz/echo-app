@@ -12,7 +12,7 @@ export const useEchoApp = (user: any) => {
   const [lastSeenMap, setLastSeenMap] = useState<Record<string, string>>({});
   const { decryptMessage } = useE2EE(chats);
 
-  // === КРИТИЧНО: Ref для стабилизации зависимостей ===
+  // === Ref для актуальной decryptMessage ===
   const decryptMessageRef = useRef(decryptMessage);
   decryptMessageRef.current = decryptMessage;
 
@@ -29,7 +29,6 @@ export const useEchoApp = (user: any) => {
         const parsed = JSON.parse(cached);
         if (parsed.chats && Array.isArray(parsed.chats)) {
           setChats(prev => {
-            // Защита от лишних обновлений
             if (JSON.stringify(prev) === JSON.stringify(parsed.chats)) return prev;
             return parsed.chats;
           });
@@ -69,7 +68,6 @@ export const useEchoApp = (user: any) => {
       if (participantIds.length > 0) {
         const { data: profiles } = await supabase.from('profiles').select('*').in('id', participantIds);
         if (profiles) {
-          // Используем ref для стабильной ссылки
           const decrypt = decryptMessageRef.current;
 
           const finalChats = await Promise.all(profiles.map(async (p) => {
@@ -92,18 +90,16 @@ export const useEchoApp = (user: any) => {
           const filteredChats = finalChats.filter((c): c is any => c !== null);
           filteredChats.sort((a, b) => new Date(b.lastMessageTime).getTime() - new Date(a.lastMessageTime).getTime());
 
-          // Защита от лишних обновлений
           setChats(prev => {
             if (prev.length === filteredChats.length &&
                 prev.every((c, i) => c.id === filteredChats[i].id &&
                                      c.lastMessage === filteredChats[i].lastMessage &&
                                      c.unreadCount === filteredChats[i].unreadCount)) {
-              return prev; // Та же ссылка — нет перерендера
+              return prev;
             }
             return filteredChats;
           });
 
-          // Save to cache
           try {
             localStorage.setItem(cacheKey, JSON.stringify({
               chats: filteredChats,
@@ -115,9 +111,9 @@ export const useEchoApp = (user: any) => {
     } catch (err) {
       console.error('Fetch chats error:', err);
     }
-  }, []); // Пустые зависимости! Используем ref
+  }, []);
 
-  // === Инициализация — выполняется ТОЛЬКО при изменении user.id ===
+  // === Realtime подписки для user.id ===
   useEffect(() => {
     if (!user?.id) return;
 
@@ -132,7 +128,6 @@ export const useEchoApp = (user: any) => {
         config: { presence: { key: user.id } }
       });
 
-      // СНАЧАЛА все обработчики
       presenceChannel.on('presence', { event: 'sync' }, () => {
         if (!isMounted) return;
         const state = presenceChannel.presenceState();
@@ -169,14 +164,12 @@ export const useEchoApp = (user: any) => {
         });
       });
 
-      // ПОТОМ подписка (без колбэка внутри .on)
       presenceChannel.subscribe((status: string) => {
         if (status === 'SUBSCRIBED' && isMounted) {
           presenceChannel.track({ online_at: new Date().toISOString() });
         }
       });
 
-      // Messages listener
       msgChannel = supabase.channel('global-chat-updates');
       msgChannel.on('postgres_changes', {
         event: 'INSERT',
@@ -197,7 +190,7 @@ export const useEchoApp = (user: any) => {
       if (presenceChannel) supabase.removeChannel(presenceChannel);
       if (msgChannel) supabase.removeChannel(msgChannel);
     };
-  }, [user?.id]); // Только user.id, БЕЗ fetchChats!
+  }, [user?.id]);
 
   // === Drafts ===
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -221,7 +214,7 @@ export const useEchoApp = (user: any) => {
     if (!user) return;
 
     setDrafts(prev => {
-      if (prev[chatId] === text) return prev; // Нет изменений
+      if (prev[chatId] === text) return prev;
       const newDrafts = { ...prev, [chatId]: text };
       localStorage.setItem(`echo_drafts_${user.id}`, JSON.stringify(newDrafts));
       return newDrafts;
@@ -253,7 +246,7 @@ export const useEchoApp = (user: any) => {
     };
   }, [user?.id]);
 
-  // === Мемоизация возвращаемых значений ===
+  // === Стабилизация объектов ===
   const stableOnlineUsers = useMemo(() => onlineUsers, [onlineUsers]);
   const stableDrafts = useMemo(() => drafts, [drafts]);
   const stableLastSeenMap = useMemo(() => lastSeenMap, [lastSeenMap]);

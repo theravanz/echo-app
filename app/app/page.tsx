@@ -112,6 +112,7 @@ import { useConnection } from "@/hooks/echo/use-connection";
 import { useProfiles } from "@/hooks/echo/use-profiles";
 import { MessageBubble } from "@/components/echo/app/message-bubble";
 import { MediaPicker } from "@/components/echo/app/media-picker";
+import { saveDevice, generateHWID } from "@/lib/db";
 import dynamic from "next/dynamic";
 import type { UserProfile, Chat, Message, NetworkMode, AppTab, ConnectionStatus } from "@/hooks/echo/types";
 
@@ -164,12 +165,14 @@ function EchoAppContent() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isQuarantined, setIsQuarantined] = useState(false);
   const [quarantineTime, setQuarantineTime] = useState("");
+  const [currentHwid, setCurrentHwid] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const userRef = useRef<UserProfile | null>(null);
 
   const { chats, setChats, fetchChats, selectedChat, setSelectedChat, selectedChatRef, drafts, saveDraft, onlineUsers } = useChatList(user);
-  const { messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage } = useMessages();
+
+  const { messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage } = useMessages(chats);
   const { addToQueue, processPendingQueue } = useNetworkQueue();
   const { connectionStatus, setConnectionStatus } = useConnection(processPendingQueue);
   const { searchOpen, setSearchOpen, searchQuery, searchResults, isSearching, isSearchFocused, setIsSearchFocused, recentSearches, searchRef, searchTimeoutRef, handleSearch, handleStartChat } = useProfiles();
@@ -252,10 +255,50 @@ useEffect(() => {
       userRef.current = userData;
 
 
-      // Check quarantine
+      // Register this device + check quarantine
       try {
-        const hwid = localStorage.getItem('echo_device_hwid');
-        const { data: device } = await supabase.from('devices').select('*').eq('user_id', userData.id).eq('hwid', hwid).maybeSingle();
+        const hwid = await generateHWID();
+        localStorage.setItem('echo_device_hwid', hwid); // sync for old code
+        setCurrentHwid(hwid);
+
+        // Register device in native SQLite
+        const deviceId = `device_${userData.id}_${Date.now()}`;
+        try {
+          await saveDevice({
+            id: deviceId,
+            user_id: userData.id,
+            hwid,
+            device_name: navigator.userAgent || 'Echo Desktop',
+            platform: navigator.platform || 'unknown',
+            is_current: true,
+          });
+          console.log('[App] Device registered:', deviceId);
+        } catch (e) {
+          console.warn('[App] Device registration (native) failed:', e);
+        }
+
+        // Also register/check in Supabase for cloud sync + quarantine
+        const { data: supabaseDevice } = await supabase.from('devices').select('*').eq('user_id', userData.id).eq('hwid', hwid).maybeSingle();
+        
+        if (!supabaseDevice) {
+          // Register in Supabase too
+          await supabase.from('devices').insert({
+            id: deviceId,
+            user_id: userData.id,
+            hwid,
+            device_name: navigator.userAgent || 'Echo Desktop',
+            platform: navigator.platform || 'unknown',
+            os_name: navigator.platform || 'unknown',
+            browser_name: navigator.userAgent?.includes('Chrome') ? 'Chrome' : navigator.userAgent?.includes('Firefox') ? 'Firefox' : 'Echo Web',
+            is_current: true,
+            created_at: new Date().toISOString(),
+            last_active: new Date().toISOString(),
+          });
+          console.log('[App] Device registered in Supabase');
+        }
+
+        // Quarantine check (from Supabase)
+        const device = supabaseDevice;
         if (device && isMounted) {
           const created = new Date(device.created_at).getTime();
           const diff = (new Date().getTime() - created) / (1000 * 60 * 60);
@@ -274,7 +317,7 @@ useEffect(() => {
             }, 60000);
           }
         }
-      } catch (err) { console.error('Quarantine check error:', err); }
+      } catch (err) { console.error('Device init error:', err); }
 
       fetchChats(userData.id).catch(err => console.error('Fetch chats error:', err));
 
@@ -294,6 +337,7 @@ useEffect(() => {
 // === Realtime subscriptions ===
 useRealtime({
   user,
+  chats,
   selectedChatRef,
   onNewMessage: (msg) => setMessages(prev => prev.some(m => m.id === msg.id) ? prev : [...prev, msg]),
   onUpdateMessage: (msg) => setMessages(prev => prev.map(m => m.id === msg.id ? msg : m)),

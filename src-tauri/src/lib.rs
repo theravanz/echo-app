@@ -88,14 +88,18 @@ pub fn run() {
             // Storage commands (rusqlite, AES-256-GCM через vault)
             storage::save_session,
             storage::get_session,
+            storage::get_latest_session,
             storage::delete_session,
             storage::get_all_sessions,
-            storage::get_latest_session,
             storage::save_device,
             storage::get_devices,
             storage::delete_device,
             storage::save_account,
             storage::get_account,
+            // Auth progress commands (persist auth across app restarts)
+            storage::save_auth_progress,
+            storage::get_auth_progress,
+            storage::delete_auth_progress,
             // Vault commands (AES-256-GCM encryption)
             vault::vault_encrypt,
             vault::vault_decrypt,

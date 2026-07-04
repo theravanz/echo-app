@@ -158,7 +158,13 @@ impl StorageManager {
             );
             CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
             CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);"
+            CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
+
+            CREATE TABLE IF NOT EXISTS auth_progress (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+            );"
         ) {
             log::error!("[Storage] Schema creation failed: {}", e);
             panic!("[Storage] Schema failed");
@@ -539,4 +545,50 @@ pub async fn get_account(
         .ok();
 
     Ok(account)
+}
+// ═══════════════════════════════════════════════════════════════════
+// AUTH PROGRESS (3 команды — переживают выгрузку приложения)
+// ═══════════════════════════════════════════════════════════════════
+
+#[tauri::command]
+pub async fn save_auth_progress(
+    manager: State<'_, StorageManager>,
+    key: String,
+    value: String,
+) -> Result<(), String> {
+    let conn = manager.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO auth_progress (key, value, updated_at)
+         VALUES (?1, ?2, strftime('%s','now'))",
+        params![key, value],
+    )
+    .map_err(|e| format!("[Auth] save_progress: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_auth_progress(
+    manager: State<'_, StorageManager>,
+    key: String,
+) -> Result<Option<String>, String> {
+    let conn = manager.conn.lock().map_err(|e| e.to_string())?;
+    let result = conn
+        .query_row(
+            "SELECT value FROM auth_progress WHERE key = ?1",
+            params![key],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn delete_auth_progress(
+    manager: State<'_, StorageManager>,
+    key: String,
+) -> Result<(), String> {
+    let conn = manager.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM auth_progress WHERE key = ?1", params![key])
+        .map_err(|e| format!("[Auth] delete_progress: {}", e))?;
+    Ok(())
 }

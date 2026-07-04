@@ -1,33 +1,29 @@
-import { supabase } from './supabase';
-import { getPersistedSession } from './db';
+import { supabase } from './supabase'
 
+/**
+ * Supabase сам хранит сессию в localStorage (persistSession: true).
+ * При загрузке просто проверяем, есть ли активная сессия.
+ * Восстановление происходит автоматически.
+ */
 export async function hydrateSession(): Promise<boolean> {
   try {
-    // 1. Читаем сессию из локальной SQLite базы (Rust)
-    const localSession = await getPersistedSession();
+    const { data: { session } } = await supabase.auth.getSession()
+    if (session) {
+      console.log('[Auth] Session active:', session.user.id)
+      return true
+    }
     
-    if (!localSession) {
-      console.log('[Auth Hydrator] No local session found');
-      return false;
+    // Если сессии нет — пробуем рефреш (сработает если есть refresh_token в localStorage)
+    const { data, error } = await supabase.auth.refreshSession()
+    if (error || !data.session) {
+      console.log('[Auth] No session')
+      return false
     }
-
-    console.log('[Auth Hydrator] Local session found, restoring to Supabase...');
-
-    // 2. Восстанавливаем сессию в Supabase клиенте
-    const { data, error } = await supabase.auth.setSession({
-      access_token: localSession.access_token,
-      refresh_token: localSession.refresh_token,
-    });
-
-    if (error) {
-      console.error('[Auth Hydrator] Failed to restore session:', error);
-      return false;
-    }
-
-    console.log('[Auth Hydrator] Session restored successfully!');
-    return true;
+    
+    console.log('[Auth] Session refreshed:', data.session.user.id)
+    return true
   } catch (err) {
-    console.error('[Auth Hydrator] Hydration failed:', err);
-    return false;
+    console.error('[Auth] Hydrate error:', err)
+    return false
   }
 }

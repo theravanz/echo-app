@@ -7,6 +7,7 @@ import type { UserProfile, Chat, Message } from "./types";
 
 interface UseRealtimeProps {
   user: UserProfile | null;
+  chats: Chat[];
   selectedChatRef: React.MutableRefObject<Chat | null>;
   onNewMessage: (msg: Message) => void;
   onUpdateMessage: (msg: Message) => void;
@@ -20,6 +21,7 @@ interface UseRealtimeReturn {
 
 export function useRealtime({
   user,
+  chats,
   selectedChatRef,
   onNewMessage,
   onUpdateMessage,
@@ -27,9 +29,21 @@ export function useRealtime({
   onNotifyMessage,
 }: UseRealtimeProps): UseRealtimeReturn {
   const isMountedRef = useRef(true);
-  const { decryptMessage } = useE2EE([]);
+  const { decryptMessage } = useE2EE(chats);
   const decryptRef = useRef(decryptMessage);
   decryptRef.current = decryptMessage;
+
+  const lastKnownMessageIdRef = useRef<string | null>(null);
+  const fetchChatsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const debouncedFetchChats = useCallback(() => {
+    if (fetchChatsTimeoutRef.current) {
+      clearTimeout(fetchChatsTimeoutRef.current);
+    }
+    fetchChatsTimeoutRef.current = setTimeout(() => {
+      onFetchChats();
+    }, 1000);
+  }, [onFetchChats]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -58,7 +72,7 @@ export function useRealtime({
           if (nm.sender_id === user.id) return;
 
           if (nm.receiver_id === user.id) {
-            onFetchChats();
+            debouncedFetchChats();
 
             let decryptedContent = nm.content;
             try {
@@ -81,7 +95,7 @@ export function useRealtime({
           if (!isMountedRef.current) return;
           const nm = payload.new as any;
           if (nm.receiver_id === user.id || nm.sender_id === user.id) {
-            onFetchChats();
+            debouncedFetchChats();
             if (
               selectedChatRef.current &&
               (nm.sender_id === selectedChatRef.current.id ||
@@ -115,7 +129,6 @@ export function useRealtime({
 
     subscribeMsgChannel();
 
-    // Polling fallback
     const startPolling = () => {
       pollInterval = setInterval(async () => {
         if (!isMountedRef.current || !user?.id) return;
@@ -126,16 +139,20 @@ export function useRealtime({
         try {
           const { data } = await supabase
             .from("messages")
-            .select("*")
+            .select("id, created_at")
             .or(`receiver_id.eq.${user.id},sender_id.eq.${user.id}`)
             .order("created_at", { ascending: false })
-            .limit(50);
-
+            .limit(1);
           if (data && data.length > 0) {
-            onFetchChats();
+            const latestMessageId = data[0].id;
+
+            if (latestMessageId !== lastKnownMessageIdRef.current) {
+              lastKnownMessageIdRef.current = latestMessageId;
+              debouncedFetchChats();
+            }
           }
         } catch { /* silent */ }
-      }, 5000);
+      }, 10000);
     };
 
     startPolling();
@@ -144,6 +161,7 @@ export function useRealtime({
       isMountedRef.current = false;
       if (msgChannel) supabase.removeChannel(msgChannel);
       if (pollInterval) clearInterval(pollInterval);
+      if (fetchChatsTimeoutRef.current) clearTimeout(fetchChatsTimeoutRef.current);
     };
   }, [user?.id]);
 

@@ -32,8 +32,8 @@ interface UseMessagesReturn {
   messagesCacheKey: string;
 }
 
-export function useMessages(): UseMessagesReturn {
-  const { encryptMessage, decryptMessage } = useE2EE([]);
+export function useMessages(chats: Chat[] = []): UseMessagesReturn {
+  const { encryptMessage, decryptMessage } = useE2EE(chats); // ← Передаем chats!
   const [messages, setMessages] = useState<Message[]>([]);
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [editingMessage, setEditingMessage] = useState<Message | null>(null);
@@ -73,6 +73,7 @@ export function useMessages(): UseMessagesReturn {
           return {
             ...m,
             content: await decryptMessage(m.content || "", m.nonce || "", otherId),
+            // ✅ Теперь decryptMessage использует кэш из useE2EE!
           } as Message;
         }),
       );
@@ -156,8 +157,7 @@ export function useMessages(): UseMessagesReturn {
         return;
       }
 
-      // === ОПТИМИСТИЧНАЯ ОТПРАВКА ===
-      // 1. Мгновенно добавляем сообщение в стейт со статусом 'pending' (часики)
+      // === Оптимистичное обновление ===
       const tempId = generateTempId();
       const optimisticMsg: Message = {
         id: tempId,
@@ -175,7 +175,6 @@ export function useMessages(): UseMessagesReturn {
       setMessages((prev) => [...prev, optimisticMsg]);
       setReplyingTo(null);
 
-      // 2. В фоне отправляем в базу данных
       try {
         const { data, error } = await supabase
           .from("messages")
@@ -193,7 +192,6 @@ export function useMessages(): UseMessagesReturn {
 
         if (error) throw error;
 
-        // 3. Успешно: меняем часики на одну галочку ('sent'), подменяем временный id на реальный
         setMessages((prev) =>
           prev.map((m) =>
             m.id === tempId
@@ -204,7 +202,6 @@ export function useMessages(): UseMessagesReturn {
       } catch (err) {
         console.error("Send error, adding to offline queue:", err);
 
-        // 4. Ошибка сети: помечаем как pending для очереди оффлайн-отправки
         setMessages((prev) =>
           prev.map((m) => (m.id === tempId ? { ...m, status: "pending" as const } : m)),
         );

@@ -8,6 +8,7 @@ import { CountrySelector } from '@/components/auth/country-selector';
 import { auth } from '@/lib/firebase';
 import { supabase } from '@/lib/supabase';
 import { persistSession } from '@/lib/db';
+import { saveAuthProgress, loadAuthProgress, clearAuthProgress } from '@/lib/auth-storage';
 import nacl from 'tweetnacl';
 // @ts-ignore
 import { encodeBase64 } from 'tweetnacl-util';
@@ -123,6 +124,41 @@ function AuthPageContent() {
     const timer = setTimeout(() => setResendSeconds(resendSeconds - 1), 1000);
     return () => clearTimeout(timer);
   }, [resendSeconds]);
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Persistence: восстановить прогресс авторизации после обновления
+  // ═══════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    loadAuthProgress().then((saved) => {
+      if (!saved) return;
+      console.log('[Auth] Restored progress: step', saved.step, 'mode', saved.authMode);
+      setCurrentStep(saved.step as Step);
+      setAuthMode(saved.authMode);
+      if (saved.countryCode) setCountryCode(saved.countryCode);
+      if (saved.phone) setPhone(saved.phone);
+      if (saved.email) setEmail(saved.email);
+      if (saved.otp && saved.otp.length === 8) setOtp(saved.otp);
+      if (saved.resendSeconds) setResendSeconds(saved.resendSeconds);
+      if (saved.phoneVerificationFailed) setPhoneVerificationFailed(true);
+    }).catch(() => {});
+  }, []);
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Persistence: сохранять прогресс при каждом изменении ключевых полей
+  // ═══════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    if (currentStep === 1 && !phone) return; // Не сохраняем пустой начальный шаг
+    saveAuthProgress({
+      step: currentStep,
+      authMode,
+      phone,
+      countryCode,
+      email,
+      otp,
+      resendSeconds,
+      phoneVerificationFailed,
+    }).catch(() => {});
+  }, [currentStep, authMode, phone, countryCode, email, otp, resendSeconds, phoneVerificationFailed]);
 
   const goToStep = useCallback((step: Step) => {
     setDirection(step > currentStep ? 'forward' : 'backward');
@@ -262,6 +298,8 @@ function AuthPageContent() {
     setPhoneError('');
 
     try {
+      let userIsExisting = false;
+
       if (authMode === 'sms') {
         if (!confirmationResultRef.current) {
           setPhoneError(t('auth.error.sessionExpired'));
@@ -277,9 +315,8 @@ function AuthPageContent() {
         }
 
         const { data: { user: sbUser } } = await supabase.auth.getUser();
-        if (sbUser?.user_metadata?.e2ee_initialized) {
-          setIsExistingUser(true);
-        }
+        userIsExisting = !!(sbUser?.user_metadata?.e2ee_initialized);
+        setIsExistingUser(userIsExisting);
       } else {
         const { data, error } = await supabase.auth.verifyOtp({
           email,
@@ -293,21 +330,22 @@ function AuthPageContent() {
         const { data: { session: emailSession } } = await supabase.auth.getSession();
         if (emailSession) await persistSession(emailSession).catch(() => {});
 
-        if (data.user?.user_metadata?.e2ee_initialized) {
-          setIsExistingUser(true);
-          if (localStorage.getItem('echo_private_key')) {
-            setVerifyLoading(false);
-            goToStep(5);
-            setTimeout(() => {
-              setShowSuccess(true);
-              setTimeout(() => router.push('/app'), 5000);
-            }, 800);
-            return;
-          }
+        userIsExisting = !!(data.user?.user_metadata?.e2ee_initialized);
+        setIsExistingUser(userIsExisting);
+
+        if (userIsExisting && localStorage.getItem('echo_private_key')) {
+          setVerifyLoading(false);
+          goToStep(5);
+          setTimeout(() => {
+            setShowSuccess(true);
+            clearAuthProgress().catch(() => {});
+            setTimeout(() => router.push('/app'), 5000);
+          }, 800);
+          return;
         }
       }
 
-      if (isExistingUser) {
+      if (userIsExisting) {
         setVerifyLoading(false);
         goToStep(4);
       } else {
@@ -375,7 +413,15 @@ function AuthPageContent() {
       }
 
       const { data: { session: recoverySession } } = await supabase.auth.getSession();
-      if (recoverySession) await persistSession(recoverySession).catch(() => {});
+      if (recoverySession) {
+  try {
+    console.log('[Auth] Saving recovery session to local DB...');
+    await persistSession(recoverySession);
+    console.log('[Auth] Recovery session saved successfully!');
+  } catch (e) {
+    console.error('[Auth] Failed to save recovery session:', e);
+  }
+}
 
       localStorage.setItem('echo_private_key', keys.private_key);
       localStorage.setItem('echo_public_key', publicKeyBase64);

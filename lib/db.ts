@@ -24,7 +24,7 @@ export function getSupabase(): SupabaseClient {
 
     supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
-        persistSession: false, // Не используем localStorage
+        persistSession: true, // Supabase сам хранит токен в localStorage (как в legacy)
       },
     });
   }
@@ -102,29 +102,39 @@ export interface SaveAccountParams {
 // ═══════════════════════════════════════════════════════════════════
 
 let backendReadyPromise: Promise<void> | null = null;
-const MAX_BACKEND_RETRIES = 10;
-const BACKEND_RETRY_DELAY_MS = 200;
+const MAX_BACKEND_RETRIES = 20;
+const BACKEND_RETRY_DELAY_MS = 300;
 
 export function waitForBackend(): Promise<void> {
-  if (!backendReadyPromise) {
-    backendReadyPromise = (async () => {
-      for (let attempt = 1; attempt <= MAX_BACKEND_RETRIES; attempt++) {
-        try {
-          const ready = await invoke<boolean>("vault_status");
-          if (ready) {
-            console.info(`[DB] Backend ready on attempt ${attempt}`);
-            return;
-          }
-        } catch (err) {
-          console.warn(`[DB] Backend attempt ${attempt} failed:`, err);
-        }
-        await new Promise((r) => setTimeout(r, BACKEND_RETRY_DELAY_MS));
-      }
-      throw new Error(
-        `[DB] Backend not ready after ${MAX_BACKEND_RETRIES} attempts`
-      );
-    })();
+  if (backendReadyPromise) {
+    return backendReadyPromise;
   }
+
+  backendReadyPromise = (async () => {
+    console.log(
+      `[DB] Waiting for backend... (max ${MAX_BACKEND_RETRIES} attempts, ${BACKEND_RETRY_DELAY_MS}ms delay)`
+    );
+    for (let attempt = 1; attempt <= MAX_BACKEND_RETRIES; attempt++) {
+      try {
+        const ready = await invoke<boolean>("vault_status");
+        if (ready) {
+          console.info(`[DB] Backend ready on attempt ${attempt}`);
+          return;
+        }
+        console.warn(`[DB] Backend not ready on attempt ${attempt}/${MAX_BACKEND_RETRIES}`);
+      } catch (err) {
+        console.warn(`[DB] Backend attempt ${attempt}/${MAX_BACKEND_RETRIES} error:`, err);
+      }
+      await new Promise((r) => setTimeout(r, BACKEND_RETRY_DELAY_MS));
+    }
+
+    // Сбрасываем на случай, если бэкенд станет готов позже (особенно на Android)
+    backendReadyPromise = null;
+    throw new Error(
+      `[DB] Backend not ready after ${MAX_BACKEND_RETRIES} attempts`
+    );
+  })();
+
   return backendReadyPromise;
 }
 
