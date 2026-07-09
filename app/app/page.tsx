@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, memo, useCallback, Suspense } from "react";
+import { motion, AnimatePresence } from "framer-motion";
 import { useRouter } from "next/navigation";
 import {
   TbSearch as Search,
@@ -117,6 +118,8 @@ import { ProfileViewPanel, type ViewedProfile } from "@/components/echo/app/prof
 import dynamic from "next/dynamic";
 import type { UserProfile, Chat, Message, NetworkMode, AppTab, ConnectionStatus } from "@/hooks/echo/types";
 import { useProfileDetails } from "@/hooks/echo/use-profile-details";
+import { ChatSidebar } from "@/components/echo/app/chat-sidebar";
+import { MobileTabBar } from "@/components/echo/app/mobile-tab-bar";
 
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
@@ -281,28 +284,56 @@ useEffect(() => {
         }
 
         // Also register/check in Supabase for cloud sync + quarantine
-        const { data: supabaseDevice } = await supabase.from('devices').select('*').eq('user_id', userData.id).eq('hwid', hwid).maybeSingle();
-        
-        if (!supabaseDevice) {
-          // Register in Supabase too
-          await supabase.from('devices').insert({
-            id: deviceId,
-            user_id: userData.id,
-            hwid,
-            device_name: navigator.userAgent || 'Echo Desktop',
-            platform: navigator.platform || 'unknown',
-            os_name: navigator.platform || 'unknown',
-            browser_name: navigator.userAgent?.includes('Chrome') ? 'Chrome' : navigator.userAgent?.includes('Firefox') ? 'Firefox' : 'Echo Web',
-            is_current: true,
-            created_at: new Date().toISOString(),
-            last_active: new Date().toISOString(),
-          });
-          console.log('[App] Device registered in Supabase');
+        let supabaseDevice: any = null;
+        try {
+          const result = await supabase.from('devices').select('*').eq('user_id', userData.id).eq('hwid', hwid).maybeSingle();
+          supabaseDevice = result.data;
+        } catch (e) {
+          console.warn('[App] Supabase device check failed:', e);
         }
 
-        // Quarantine check (from Supabase)
+        if (!supabaseDevice) {
+          // Register in Supabase with .select() to get back the inserted row
+          try {
+            const { data: insertedDevice, error: insertError } = await supabase.from('devices').insert({
+              id: deviceId,
+              user_id: userData.id,
+              hwid,
+              device_name: navigator.userAgent || 'Echo Desktop',
+              platform: navigator.platform || 'unknown',
+              os_name: navigator.platform || 'unknown',
+              browser_name: navigator.userAgent?.includes('Chrome') ? 'Chrome' : navigator.userAgent?.includes('Firefox') ? 'Firefox' : 'Echo Web',
+              is_current: true,
+              created_at: new Date().toISOString(),
+              last_active: new Date().toISOString(),
+            }).select().maybeSingle();
+
+            if (insertError) {
+              console.warn('[App] Supabase device insert error:', insertError.message);
+              // RLS issue — try upsert as fallback
+              const { data: upserted } = await supabase.from('devices').upsert({
+                id: deviceId,
+                user_id: userData.id,
+                hwid,
+                device_name: navigator.userAgent || 'Echo Desktop',
+                platform: navigator.platform || 'unknown',
+                is_current: true,
+                created_at: new Date().toISOString(),
+                last_active: new Date().toISOString(),
+              }, { onConflict: 'hwid', ignoreDuplicates: false }).select().maybeSingle();
+              supabaseDevice = upserted;
+            } else {
+              supabaseDevice = insertedDevice;
+              console.log('[App] Device registered in Supabase:', deviceId);
+            }
+          } catch (e) {
+            console.warn('[App] Supabase device register error:', e);
+          }
+        }
+
+        // Quarantine check (use supabaseDevice even for newly inserted)
         const device = supabaseDevice;
-        if (device && isMounted) {
+        if (device?.created_at && isMounted) {
           const created = new Date(device.created_at).getTime();
           const diff = (new Date().getTime() - created) / (1000 * 60 * 60);
           if (diff < QUARANTINE_HOURS) {
@@ -426,250 +457,27 @@ useEffect(() => {
       )}
 
       {/* --- 2. List Sidebar --- */}
-      <aside className={cn(
-        "w-full md:w-[360px] border-r border-white/5 flex flex-col bg-black/10 backdrop-blur-2xl z-20 shrink-0 transition-all duration-700 ease-in-out",
-        isMobile && selectedChat ? "-translate-x-full absolute inset-y-0 opacity-0 pointer-events-none" : "opacity-100 translate-x-0 relative"
-      )}>
-        <div className="h-16 md:h-20 px-4 md:px-6 pt-2 md:pt-0 flex items-center justify-between shrink-0">
-          {activeTab === 'chats' ? (
-            <div className="flex items-center gap-2">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <button className="flex items-center gap-2 group">
-                    {connectionStatus === 'connected' && (
-                      <>
-                        <Wifi className="w-5 h-5 text-primary" />
-                        <span className="font-display font-bold text-2xl tracking-tight group-hover:text-primary transition-colors">Chats</span>
-                      </>
-                    )}
-                    {connectionStatus === 'connecting' && (
-                      <>
-                        <RefreshCw className="w-5 h-5 text-muted-foreground animate-spin" />
-                        <span className="font-display font-bold text-2xl tracking-tight text-muted-foreground">Connecting</span>
-                      </>
-                    )}
-                    {connectionStatus === 'disconnected' && (
-                      <>
-                        <ZapOff className="w-5 h-5 text-destructive" />
-                        <span className="font-display font-bold text-2xl tracking-tight text-destructive">Offline</span>
-                      </>
-                    )}
-                    <ChevronDown className="w-4 h-4 text-white/30 group-hover:text-white/60 transition-colors" />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-52 rounded-2xl border-white/10 bg-background/95 backdrop-blur-3xl p-2">
-                  <DropdownMenuLabel className="text-[9px] font-mono uppercase tracking-widest text-white/40 px-3 py-2">Network Mode</DropdownMenuLabel>
-                  <DropdownMenuItem className="rounded-xl gap-3 py-3 px-3 cursor-pointer">
-                    <div className="w-2 h-2 rounded-full bg-primary shrink-0" />
-                    <div>
-                      <div className="text-sm font-bold">Base</div>
-                      <div className="text-[10px] text-white/40 font-medium">Default Connection</div>
-                    </div>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem className="rounded-xl gap-3 py-3 px-3 cursor-pointer">
-                    <div className="w-2 h-2 rounded-full bg-amber-500 shrink-0" />
-                    <div>
-                      <div className="text-sm font-bold">Relay</div>
-                      <div className="text-[10px] text-white/40 font-medium">P2P · Servers</div>
-                    </div>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem className="rounded-xl gap-3 py-3 px-3 cursor-pointer">
-                    <div className="w-2 h-2 rounded-full bg-blue-500 shrink-0" />
-                    <div>
-                      <div className="text-sm font-bold">Mesh</div>
-                      <div className="text-[10px] text-white/40 font-medium">Decentralized Web</div>
-                    </div>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          ) : (
-            <h2 className="font-display font-bold text-2xl tracking-tight">
-              {activeTab === 'community' && 'Community'}
-              {activeTab === 'feed' && 'Feed'}
-            </h2>
-          )}
-          <div className="flex items-center gap-1.5">
-            <Button
-              variant="ghost"
-              size="icon"
-              className="rounded-2xl w-10 h-10 text-white/20 hover:text-primary hover:bg-primary/5 transition-all"
-              onClick={() => setSearchOpen(true)}
-            >
-              <Search className="w-5 h-5" />
-            </Button>
-            <Button variant="ghost" size="icon" className="rounded-2xl w-10 h-10 text-white/20 hover:text-white hover:bg-white/5 transition-all">
-              <MoreVertical className="w-5 h-5" />
-            </Button>
-          </div>
-        </div>
-        {searchOpen && (
-          <div className="absolute inset-0 z-30 bg-background backdrop-blur-2xl rounded-3xl overflow-hidden animate-in slide-in-from-top-2 fade-in duration-200">
-            <div className="flex flex-col h-full">
-              <div className="px-4 pt-4 pb-2 space-y-4">
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => setSearchOpen(false)}
-                    className="w-9 h-9 rounded-xl flex items-center justify-center text-white/40 hover:bg-white/5 hover:text-white transition-all"
-                  >
-                    <ArrowLeft className="w-5 h-5" />
-                  </button>
-                  <div className="flex-1 relative">
-                    <div className="absolute -inset-0.5 bg-primary/20 rounded-xl blur opacity-0 group-focus-within:opacity-100 transition duration-500" />
-                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
-                    <input
-                      autoFocus
-                      value={searchQuery}
-                      onChange={(e) => handleSearch(e.target.value)}
-                      onFocus={() => setIsSearchFocused(true)}
-                      placeholder="Search contacts, messages..."
-                      className="relative w-full h-10 bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 text-sm text-white outline-none focus:border-primary/50 transition-all placeholder:text-white/20"
-                    />
-                  </div>
-                </div>
-              </div>
-              <div className="flex-1 overflow-y-auto overscroll-contain scrollbar-hide px-4 pb-4">
-                {isSearching && (
-                  <div className="flex items-center justify-center py-12">
-                    <RefreshCw className="w-6 h-6 text-primary animate-spin" />
-                  </div>
-                )}
-
-                {!isSearching && searchResults.length > 0 && (
-                  <div>
-                    <div className="px-2 py-3 text-[9px] font-mono text-white/20 uppercase tracking-[0.2em]">
-                      {language === 'ru' ? 'Результаты поиска' : 'Search Results'}
-                    </div>
-                    {searchResults.map((profile: any) => (
-                      <button
-                        key={profile.id}
-                        onClick={() => handleStartChat(profile, chats, (chat) => setSelectedChat(chat), (p) => setChats(prev => { if (prev.find(c => c.id === p.id)) return prev; return [{ ...p, lastMessage: null, lastMessageTime: null, unreadCount: 0 }, ...prev]; }))}
-                        className="w-full flex items-center gap-4 px-4 py-3 rounded-2xl hover:bg-white/5 transition-all group"
-                      >
-                        <div className="w-10 h-10 rounded-full flex items-center justify-center text-primary font-bold text-sm overflow-hidden shrink-0" style={{ backgroundColor: profile.avatar_color || 'oklch(0.2 0.02 280)' }}>
-                          {profile.avatar_url ? <img src={profile.avatar_url} className="w-full h-full object-cover" alt="" /> : safeChar(profile.display_name || profile.username)}
-                        </div>
-                        <div className="flex-1 text-left min-w-0">
-                          <div className="text-sm font-bold truncate group-hover:text-primary transition-colors">{profile.display_name || profile.username}</div>
-                          <div className="text-[10px] text-white/30 font-mono">@{profile.username}</div>
-                        </div>
-                        <MessageSquare className="w-4 h-4 text-white/20 group-hover:text-primary transition-colors shrink-0" />
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {!isSearching && searchResults.length === 0 && searchQuery.trim().length >= 2 && (
-                  <div className="flex flex-col items-center justify-center py-16 text-center">
-                    <Ghost className="w-10 h-10 text-white/10 mb-3" />
-                    <div className="text-sm text-white/30 font-medium">{language === 'ru' ? 'Ничего не найдено' : 'No nodes found'}</div>
-                    <div className="text-[10px] text-white/20 font-mono mt-1">{language === 'ru' ? 'Попробуйте другой запрос' : 'Try a different query'}</div>
-                  </div>
-                )}
-
-                {!isSearching && searchQuery.trim().length < 2 && recentSearches.length > 0 && (
-                  <div>
-                    <div className="px-2 py-3 text-[9px] font-mono text-white/20 uppercase tracking-[0.2em]">
-                      {language === 'ru' ? 'Недавние поиски' : 'Recent Searches'}
-                    </div>
-                    {recentSearches.map((profile: any) => (
-                      <button
-                        key={profile.id}
-                        onClick={() => handleStartChat(profile, chats, (chat) => setSelectedChat(chat), (p) => setChats(prev => { if (prev.find(c => c.id === p.id)) return prev; return [{ ...p, lastMessage: null, lastMessageTime: null, unreadCount: 0 }, ...prev]; }))}
-                        className="w-full flex items-center gap-4 px-4 py-3 rounded-2xl hover:bg-white/5 transition-all group"
-                      >
-                        <div className="w-10 h-10 rounded-full flex items-center justify-center text-primary font-bold text-sm overflow-hidden shrink-0" style={{ backgroundColor: profile.avatar_color || 'oklch(0.2 0.02 280)' }}>
-                          {profile.avatar_url ? <img src={profile.avatar_url} className="w-full h-full object-cover" alt="" /> : safeChar(profile.display_name || profile.username)}
-                        </div>
-                        <div className="flex-1 text-left min-w-0">
-                          <div className="text-sm font-bold truncate group-hover:text-primary transition-colors">{profile.display_name || profile.username}</div>
-                          <div className="text-[10px] text-white/30 font-mono">@{profile.username}</div>
-                        </div>
-                        <Clock className="w-4 h-4 text-white/20 shrink-0" />
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {!isSearching && searchQuery.trim().length < 2 && recentSearches.length === 0 && (
-                  <div className="flex flex-col items-center justify-center py-16 text-center">
-                    <Search className="w-10 h-10 text-white/10 mb-3" />
-                    <div className="text-sm text-white/30 font-medium">{language === 'ru' ? 'Поиск пользователей' : 'Search for users'}</div>
-                    <div className="text-[10px] text-white/20 font-mono mt-1">{language === 'ru' ? 'Введите имя или username' : 'Enter name or username'}</div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {isQuarantined && (
-          <div className="mx-6 mb-6 p-4 rounded-[24px] bg-amber-500/5 border border-amber-500/10 flex gap-4 animate-in fade-in slide-in-from-top-4 duration-700">
-             <Shield className="w-6 h-6 text-amber-500 shrink-0 mt-0.5" />
-             <div>
-                <div className="text-[10px] font-mono text-amber-500 uppercase tracking-widest font-bold mb-1">New Node Protection</div>
-                <div className="text-xs text-amber-500/60 leading-relaxed font-medium">Node features restricted for <span className="text-amber-500 font-bold">{quarantineTime}</span></div>
-             </div>
-          </div>
-        )}
-
-        <div className="flex-1 min-h-0 px-4 overflow-y-auto overscroll-contain scrollbar-hide" style={{ paddingBottom: isMobile ? "64px" : "0", touchAction: "pan-y" }}>
-          <div className="space-y-1 pb-8">
-            {activeTab === 'community' && (
-              <div className="flex flex-col items-center justify-center py-16 text-center">
-                <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-4">
-                  <Users className="w-8 h-8 text-primary/60" />
-                </div>
-                <h3 className="text-lg font-display font-bold mb-2">Community</h3>
-                <p className="text-xs text-white/30 font-mono uppercase tracking-widest max-w-[240px]">
-                  {language === 'ru' ? 'Страница в разработке, пожалуйста загляните позже' : 'Page in development, please check back later'}
-                </p>
-              </div>
-            )}
-            {activeTab === 'feed' && (
-              <div className="flex flex-col items-center justify-center py-16 text-center">
-                <div className="w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center mb-4">
-                  <Compass className="w-8 h-8 text-primary/60" />
-                </div>
-                <h3 className="text-lg font-display font-bold mb-2">Feed</h3>
-                <p className="text-xs text-white/30 font-mono uppercase tracking-widest max-w-[240px]">
-                  {language === 'ru' ? 'Страница в разработке, пожалуйста загляните позже' : 'Page in development, please check back later'}
-                </p>
-              </div>
-            )}
-            {activeTab === 'chats' && chats.map(chat => (
-              <button
-                key={chat.id}
-                onClick={() => setSelectedChat(chat)}
-                className={cn(
-                  "w-full flex items-center gap-4 p-4 rounded-[28px] transition-all duration-500 group relative",
-                  selectedChat?.id === chat.id ? "bg-primary/10" : "hover:bg-white/5"
-                )}
-              >
-                <div className="relative shrink-0">
-                  <div className="w-14 h-14 rounded-full border-2 border-transparent group-hover:border-primary/20 transition-all flex items-center justify-center text-primary font-bold text-lg overflow-hidden shadow-2xl" style={{ backgroundColor: chat.avatar_color || 'oklch(0.2 0.02 280)' }}>
-                    {chat.avatar_url ? <img src={chat.avatar_url} className="w-full h-full object-cover" alt="" /> : safeChar(chat.display_name || chat.username)}
-                  </div>
-                  {onlineUsers.has(chat.id) && <div className="absolute bottom-0.5 right-0.5 w-4 h-4 bg-green-500 border-[3.5px] border-background rounded-full shadow-[0_0_10px_rgba(34,197,94,0.5)]" />}
-                </div>
-                <div className="flex-1 text-left min-w-0">
-                   <div className="flex items-center justify-between mb-1">
-                      <span className="font-bold text-sm truncate group-hover:text-primary transition-colors">{chat.display_name || chat.username}</span>
-                      <span className="text-[9px] font-mono text-white/20 uppercase tracking-tighter">{formatRelativeTime(chat.lastMessageTime || new Date().toISOString())}</span>
-                   </div>
-                   <p className="text-xs text-muted-foreground line-clamp-1 font-medium group-hover:text-white/60 transition-colors">{chat.lastMessage || `@${chat.username}`}</p>
-                </div>
-                {(chat.unreadCount ?? 0) > 0 && (
-                  <div className="absolute top-4 right-4 w-5 h-5 bg-primary rounded-full flex items-center justify-center text-[10px] font-bold text-primary-foreground shadow-lg shadow-primary/20 animate-in zoom-in duration-500">
-                    {chat.unreadCount}
-                  </div>
-                )}
-                {selectedChat?.id === chat.id && <div className="absolute left-0 top-1/4 bottom-1/4 w-1 bg-primary rounded-r-full" />}
-              </button>
-            ))}
-          </div>
-        </div>
-      </aside>
+      <ChatSidebar
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        connectionStatus={connectionStatus}
+        activeMode={activeMode}
+        chats={chats}
+        selectedChat={selectedChat}
+        onlineUsers={onlineUsers}
+        searchOpen={searchOpen}
+        searchQuery={searchQuery}
+        searchResults={searchResults}
+        isSearching={isSearching}
+        isSearchFocused={isSearchFocused}
+        recentSearches={recentSearches}
+        onSearchOpen={setSearchOpen}
+        onSearch={handleSearch}
+        onSearchFocus={setIsSearchFocused}
+        onStartChat={(p) => handleStartChat(p, chats, setSelectedChat, (prof) => setChats(prev => [...prev, prof as any]))}
+        onSelectChat={(chat) => { setSelectedChat(chat); fetchMessages(chat.id, user!.id); }}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+      />
 
       {/* --- 3. Main Communication Area --- */}
       <main className={cn(
@@ -891,78 +699,75 @@ useEffect(() => {
       </main>
 
       {/* --- Profile View Panel (Right) --- */}
-      {selectedChat && isRightPanelOpen && viewedProfile && (
-        <aside className={cn(
-          "flex flex-col z-40 shrink-0",
-          isMobile ? "fixed inset-0 w-full h-full" : "border-l border-white/5 relative w-96"
-        )}>
-          <ProfileViewPanel
-            profile={{
-              ...viewedProfile,
-              is_online: onlineUsers.has(selectedChat.id),
-              last_seen_label: formatRelativeTime(selectedChat.lastMessageTime || new Date().toISOString()),
-            }}
-            onClose={() => setIsRightPanelOpen(false)}
-            onMuteToggle={() => {
-              // toggle mute — implement via supabase or local state
-            }}
-            onBlock={async () => {
-              await supabase.from("blocks").insert({ blocker_id: user?.id, blocked_id: selectedChat.id });
-            }}
-            onReport={() => {
-              // open a report dialog/modal
-            }}
-            onClearHistory={async () => {
-              if (user) {
-                await supabase.from("messages").delete().or(
-                  `and(sender_id.eq.${user.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${user.id})`
-                );
-              }
-            }}
-          />
-        </aside>
-      )}
+      <AnimatePresence mode="wait">
+        {selectedChat && isRightPanelOpen && viewedProfile && (
+          <motion.aside
+            initial={isMobile ? { x: "100%", opacity: 0 } : { x: 100, opacity: 0, filter: "blur(10px)" }}
+            animate={{ x: 0, opacity: 1, filter: "blur(0px)" }}
+            exit={isMobile ? { x: "100%", opacity: 0 } : { x: 100, opacity: 0, filter: "blur(10px)" }}
+            transition={{ type: "spring", damping: 30, stiffness: 300, mass: 0.8 }}
+            className={cn(
+              "flex flex-col z-40 shrink-0",
+              isMobile ? "fixed inset-0 w-full h-full" : "border-l border-white/5 relative w-96"
+            )}
+          >
+            <ProfileViewPanel
+              profile={{
+                ...viewedProfile,
+                is_online: onlineUsers.has(selectedChat.id),
+                last_seen_label: formatRelativeTime(selectedChat.lastMessageTime || new Date().toISOString()),
+              }}
+              onClose={() => setIsRightPanelOpen(false)}
+              onMuteToggle={() => {}}
+              onBlock={async () => {
+                await supabase.from("blocks").insert({ blocker_id: user?.id, blocked_id: selectedChat.id });
+              }}
+              onReport={() => {}}
+              onClearHistory={async () => {
+                if (user) {
+                  await supabase.from("messages").delete().or(
+                    `and(sender_id.eq.${user.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${user.id})`
+                  );
+                }
+              }}
+            />
+          </motion.aside>
+        )}
+      </AnimatePresence>
 
       {/* --- Settings Modal --- */}
-      {isSettingsOpen && (
-        <SettingsModal user={user} accounts={accounts} onClose={() => setIsSettingsOpen(false)} isQuarantined={isQuarantined} onUpdateUser={(patch) => setUser(prev => prev ? { ...prev, ...patch } : prev)} />
-      )}
-      {/* --- Mobile Hotbar --- */}      {/* --- Mobile Hotbar --- */}
-      {isMobile && !selectedChat && (
-        <div className="fixed bottom-0 left-0 right-0 z-50 bg-black/80 backdrop-blur-2xl border-t border-white/5" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-          <div className="flex items-center justify-around h-14">
-            {[
-              { id: 'community' as const, icon: Users, label: 'Community' },
-              { id: 'chats' as const, icon: MessageSquare, label: 'Chats' },
-              { id: 'feed' as const, icon: Compass, label: 'Feed' },
-              { id: 'settings' as const, icon: Settings, label: 'Settings' },
-            ].map(tab => (
-              <button
-                key={tab.id}
-                onClick={() => {
-                  if (tab.id === 'settings') {
-                    setIsSettingsOpen(true);
-                  } else {
-                    setActiveTab(tab.id);
-                    setSelectedChat(null);
-                  }
-                }}
-                className={cn(
-                  'flex flex-col items-center gap-0.5 py-1.5 px-3 rounded-xl transition-all',
-                  tab.id === 'settings'
-                    ? 'text-white/30'
-                    : activeTab === tab.id ? 'text-primary' : 'text-white/30'
-                )}
-              >
-                <tab.icon className='w-5 h-5' />
-                <span className='text-[8px] font-mono uppercase tracking-wider'>{tab.label}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+      <AnimatePresence mode="wait">
+        {isSettingsOpen && (
+          <motion.div
+            key="settings"
+            initial={isMobile ? { x: "100%", opacity: 0 } : { opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={isMobile ? { x: "100%", opacity: 0 } : { opacity: 0 }}
+            transition={{ type: "spring", damping: 30, stiffness: 300, mass: 0.8 }}
+            className={cn(
+              "fixed inset-0 z-[100]",
+              !isMobile && "flex items-center justify-center p-4"
+            )}
+          >
+            <SettingsModal
+              user={user}
+              accounts={accounts}
+              onClose={() => setIsSettingsOpen(false)}
+              isQuarantined={isQuarantined}
+              onUpdateUser={(patch) => setUser(prev => prev ? { ...prev, ...patch } : prev)}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-      {/* Global CSS for advanced micro-interactions */}
+      {/* --- Mobile Hotbar --- */}
+      {isMobile && !selectedChat && (
+        <MobileTabBar
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+        />
+      )}
       <style jsx global>{`
         .noise-overlay::before {
           content: "";

@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "echo-tauri",
-  "version": "0.1.9",
+  "version": "0.2.0",
   "identifier": "com.theravanz.echo-tauri",
   "build": {
     "frontendDist": "../out",
@@ -21,7 +21,15 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; connect-src 'self' https://aoxzpqwiwuzypydexfrn.supabase.co https://api.microlink.io https://fonts.gstatic.com https://cdn.jsdelivr.net https://*.giphy.com; font-src 'self' data:; frame-src 'none'; object-src 'none'; media-src 'self' https:;",
+      "assetProtocol": {
+        "scope": [
+          "$APPDATA/**",
+          "$CACHE/**",
+          "$RESOURCE/**",
+          "$HOME/.cache/**"
+        ]
+      }
     }
   },
   "bundle": {

@@ -7,7 +7,7 @@ import { useTranslation } from '@/hooks/use-translation';
 import { CountrySelector } from '@/components/auth/country-selector';
 import { auth } from '@/lib/firebase';
 import { supabase } from '@/lib/supabase';
-import { persistSession } from '@/lib/db';
+import { persistSession, savePrivateKey, loadPrivateKey } from '@/lib/db';
 import { saveAuthProgress, loadAuthProgress, clearAuthProgress } from '@/lib/auth-storage';
 import nacl from 'tweetnacl';
 // @ts-ignore
@@ -333,7 +333,7 @@ function AuthPageContent() {
         userIsExisting = !!(data.user?.user_metadata?.e2ee_initialized);
         setIsExistingUser(userIsExisting);
 
-        if (userIsExisting && localStorage.getItem('echo_private_key')) {
+        if (userIsExisting && await loadPrivateKey()) {
           setVerifyLoading(false);
           goToStep(5);
           setTimeout(() => {
@@ -423,7 +423,7 @@ function AuthPageContent() {
   }
 }
 
-      localStorage.setItem('echo_private_key', keys.private_key);
+      await savePrivateKey(keys.private_key);
       localStorage.setItem('echo_public_key', publicKeyBase64);
       localStorage.setItem('echo_mnemonic_backup', mnemonic);
 
@@ -500,7 +500,7 @@ function AuthPageContent() {
         return;
       }
 
-      localStorage.setItem('echo_private_key', keys.private_key);
+      await savePrivateKey(keys.private_key);
       localStorage.setItem('echo_public_key', publicKeyBase64);
       localStorage.setItem('echo_mnemonic_backup', cleanMnemonic);
 
@@ -854,7 +854,7 @@ function AuthPageContent() {
                       <div className="bg-destructive/5 border border-destructive/10 rounded-2xl sm:rounded-3xl p-4 sm:p-6 flex gap-3 sm:gap-4 items-start relative overflow-hidden group/warning">
                         <div className="absolute top-0 left-0 w-1 h-full bg-destructive transition-transform duration-700 origin-top group-hover/warning:scale-y-110" />
                         <AlertTriangle className="w-5 h-5 sm:w-6 sm:h-6 text-destructive shrink-0 mt-0.5" />
-                        <p className="text-[10px] sm:text-xs text-destructive-foreground/80 leading-relaxed font-medium uppercase tracking-[0.05em]" dangerouslySetInnerHTML={{ __html: t('auth.recovery.warning') }} />
+                        <p className="text-[10px] sm:text-xs text-destructive-foreground/80 leading-relaxed font-medium uppercase tracking-[0.05em]">{t('auth.recovery.warning')}</p>
                       </div>
 
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">

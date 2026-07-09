@@ -127,6 +127,28 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
     return 'ru';
   });
 
+  // VPN Detection — check IP/timezone mismatch
+  const [isVpnDetected, setIsVpnDetected] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('https://ip-api.com/json/?fields=query,country,timezone', { signal: AbortSignal.timeout?.(5000) });
+        if (cancelled) return;
+        const data = await res.json();
+        if (data?.timezone) {
+          const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+          if (browserTz !== data.timezone) {
+            setIsVpnDetected(true);
+            console.warn('[VPN] Timezone mismatch:', data.timezone, 'vs', browserTz);
+          }
+        }
+      } catch { /* silent fail */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   // Notifications settings
   const { settings: notifSettings, updateSetting: updateNotifSetting } = useNotificationSettings(user || null);
 
@@ -338,6 +360,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
             <div className="flex items-center gap-3 mb-1">
               <span className="font-bold text-sm">This Device (Current)</span>
               <span className="text-[9px] font-mono uppercase text-green-500 bg-green-500/10 px-2 py-0.5 rounded-full">online</span>
+              {isVpnDetected && (
+                <span className="text-[9px] font-mono uppercase text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3" /> VPN
+                </span>
+              )}
             </div>
             <div className="text-xs text-white/30 font-mono">Current session</div>
           </div>
@@ -404,6 +431,25 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
           </div>
         ))}
       </div>
+
+      {/* Terminate Others */}
+      {devices.filter(d => d.hwid !== currentHwid).length > 0 && (
+        <div
+          className="flex items-center justify-between p-5 rounded-[28px] bg-destructive/5 border border-destructive/10 group hover:bg-destructive/10 transition-all cursor-pointer"
+          onClick={handleTerminateOthers}
+        >
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-destructive/20 flex items-center justify-center text-destructive shrink-0 group-hover:scale-110 transition-transform">
+              <LogOut className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="font-bold text-sm text-destructive">Terminate Other Sessions</div>
+              <div className="text-xs text-destructive-foreground/60 mt-0.5">End all other active sessions</div>
+            </div>
+          </div>
+          <LogOut className="w-4 h-4 text-destructive/60 group-hover:text-destructive transition-colors" />
+        </div>
+      )}
     </div>
   );
 

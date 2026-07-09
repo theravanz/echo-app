@@ -5,7 +5,7 @@
 //! - Таблицы создаются один раз в new() при старте приложения
 //! - Все 9 команд работают через State<'_, StorageManager>
 //! - Токены и мнемоника шифруются через vault.rs (AES-256-GCM) перед записью
-//! - Внешние ключи ОТКЛЮЧЕНЫ (PRAGMA foreign_keys = OFF) — всеядная схема
+//! - Внешние ключи ВКЛЮЧЕНЫ (PRAGMA foreign_keys = ON) — referential integrity
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -60,7 +60,7 @@ pub struct Account {
 // ═══════════════════════════════════════════════════════════════════
 
 pub struct StorageManager {
-    conn: Mutex<Connection>,
+    pub(crate) conn: Mutex<Connection>,
 }
 
 impl StorageManager {
@@ -96,9 +96,9 @@ impl StorageManager {
             }
         };
 
-        // Оптимизация SQLite
+        // Оптимизация SQLite с включёнными внешними ключами
         if let Err(e) = conn.execute_batch(
-            "PRAGMA foreign_keys = OFF;
+            "PRAGMA foreign_keys = ON;
              PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
              PRAGMA busy_timeout = 5000;"

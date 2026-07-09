@@ -185,3 +185,75 @@ pub async fn vault_status(app: AppHandle) -> Result<bool, String> {
     let vault = app.state::<Vault>();
     Ok(vault.is_ready())
 }
+
+/// Сохранить E2EE приватный ключ в защищённое vault-хранилище.
+/// Ключ шифруется AES-256-GCM и сохраняется в SQLite через storage.
+#[tauri::command]
+pub async fn vault_save_private_key(
+    app: AppHandle,
+    storage: tauri::State<'_, crate::storage::StorageManager>,
+    key_base64: String,
+) -> Result<(), String> {
+    let vault = app.state::<Vault>();
+    let encrypted = vault.encrypt_to_json(&key_base64)?;
+
+    // Сохраняем зашифрованный ключ в auth_progress (ключ = "echo_private_key")
+    let conn = storage.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO auth_progress (key, value, updated_at)
+         VALUES ('echo_private_key', ?1, strftime('%s','now'))",
+        rusqlite::params![encrypted],
+    )
+    .map_err(|e| format!("[Vault] save_private_key: {}", e))?;
+
+    log::info!("[Vault] E2EE private key saved securely");
+    Ok(())
+}
+
+/// Загрузить E2EE приватный ключ из защищённого vault-хранилища.
+#[tauri::command]
+pub async fn vault_load_private_key(
+    app: AppHandle,
+    storage: tauri::State<'_, crate::storage::StorageManager>,
+) -> Result<Option<String>, String> {
+    let vault = app.state::<Vault>();
+
+    let conn = storage.conn.lock().map_err(|e| e.to_string())?;
+    let result = conn.query_row(
+        "SELECT value FROM auth_progress WHERE key = 'echo_private_key'",
+        [],
+        |row| row.get::<_, String>(0),
+    );
+
+    match result {
+        Ok(encrypted_json) => {
+            let decrypted = vault.decrypt_from_json(&encrypted_json)?;
+            log::info!("[Vault] E2EE private key loaded securely");
+            Ok(Some(decrypted))
+        }
+        Err(e) => {
+            if matches!(&e, rusqlite::Error::QueryReturnedNoRows) {
+                log::warn!("[Vault] No private key found in storage");
+                Ok(None)
+            } else {
+                Err(format!("[Vault] load_private_key: {}", e))
+            }
+        }
+    }
+}
+
+/// Удалить E2EE приватный ключ из хранилища.
+#[tauri::command]
+pub async fn vault_delete_private_key(
+    storage: tauri::State<'_, crate::storage::StorageManager>,
+) -> Result<(), String> {
+    let conn = storage.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM auth_progress WHERE key = 'echo_private_key'",
+        [],
+    )
+    .map_err(|e| format!("[Vault] delete_private_key: {}", e))?;
+
+    log::info!("[Vault] E2EE private key deleted from storage");
+    Ok(())
+}

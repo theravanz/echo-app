@@ -2,6 +2,7 @@
 
 mod crypto;
 mod notification;
+mod stickers;
 mod storage;
 mod vault;
 
@@ -104,6 +105,20 @@ pub fn run() {
             vault::vault_encrypt,
             vault::vault_decrypt,
             vault::vault_status,
+            vault::vault_save_private_key,
+            vault::vault_load_private_key,
+            vault::vault_delete_private_key,
+            // Sticker commands
+            stickers::decode_webp_info,
+            stickers::decode_webp_to_rgba,
+            stickers::decode_tgs_info,
+            stickers::decode_tgs_frame,
+            stickers::decode_webm_info,
+            stickers::decode_webm_frame,
+            stickers::decode_png_info,
+            stickers::decode_png_to_rgba,
+            stickers::is_android,
+            stickers::is_mobile,
         ])
         .setup(|app| {
             if cfg!(debug_assertions) {

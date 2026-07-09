@@ -133,10 +133,16 @@ export function useChatList(user: UserProfile | null): UseChatListReturn {
                 chatData.lastMsgRaw.nonce || "",
                 p.id,
               );
+              // Format preview for media messages
+              const msgType = chatData.lastMsgRaw.type || 'text';
+              const preview = msgType === 'sticker' ? '📸 Sticker'
+                : msgType === 'gif' ? '🎥 GIF'
+                : decrypted;
               return {
                 ...p,
                 id: p.id,
-                lastMessage: decrypted,
+                lastMessage: preview,
+                lastMessageType: msgType,
                 lastMessageTime: chatData.lastMessageTime,
                 unreadCount: chatData.unreadCount,
               } as Chat;

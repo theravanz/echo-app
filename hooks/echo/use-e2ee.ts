@@ -1,13 +1,35 @@
 "use client";
 
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { savePrivateKey, loadPrivateKey, deletePrivateKey } from '@/lib/db';
 import nacl from 'tweetnacl';
 // @ts-ignore
 import { decodeUTF8, encodeUTF8, decodeBase64, encodeBase64 } from 'tweetnacl-util';
 
+/**
+ * Безопасное хранилище ключей через Tauri vault (AES-256-GCM).
+ * Ключ хранится зашифрованным в SQLite, расшифровывается только в памяти Rust.
+ * localStorage НЕ ИСПОЛЬЗУЕТСЯ для private key более.
+ */
+
 export const useE2EE = (chats: any[]) => {
   const publicKeyCacheRef = useRef<Map<string, string>>(new Map());
+  const privateKeyRef = useRef<string | null>(null);
+  const [isReady, setIsReady] = useState(false);
+
+  // Загружаем private key при монтировании
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const key = await loadPrivateKey();
+      if (!cancelled) {
+        privateKeyRef.current = key;
+        setIsReady(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const getPublicKeyWithFallback = useCallback(async (userId: string) => {
     if (publicKeyCacheRef.current.has(userId)) {
@@ -16,7 +38,7 @@ export const useE2EE = (chats: any[]) => {
 
     const chatFromList = chats.find(c => c.id === userId);
     if (chatFromList?.public_key) {
-      publicKeyCacheRef.current.set(userId, chatFromList.public_key); // ✅ Сохранить в кэш
+      publicKeyCacheRef.current.set(userId, chatFromList.public_key);
       return chatFromList.public_key;
     }
 
@@ -30,7 +52,7 @@ export const useE2EE = (chats: any[]) => {
       if (error) throw error;
 
       if (data?.public_key) {
-        publicKeyCacheRef.current.set(userId, data.public_key); // ✅ Сохранить в кэш
+        publicKeyCacheRef.current.set(userId, data.public_key);
       }
 
       return data?.public_key;
@@ -41,7 +63,7 @@ export const useE2EE = (chats: any[]) => {
 
   const encryptMessage = useCallback(async (text: string, recipientId: string) => {
     try {
-      const privateKeyBase64 = localStorage.getItem('echo_private_key');
+      const privateKeyBase64 = privateKeyRef.current;
       const recipientPublicKeyBase64 = await getPublicKeyWithFallback(recipientId);
 
       if (!privateKeyBase64 || !recipientPublicKeyBase64) return null;
@@ -66,7 +88,7 @@ export const useE2EE = (chats: any[]) => {
 
   const decryptMessage = useCallback(async (encryptedBase64: string, nonceBase64: string, otherPartyId: string) => {
     try {
-      const privateKeyBase64 = localStorage.getItem('echo_private_key');
+      const privateKeyBase64 = privateKeyRef.current;
       const otherPartyPublicKeyBase64 = await getPublicKeyWithFallback(otherPartyId);
 
       if (!privateKeyBase64 || !otherPartyPublicKeyBase64 || !nonceBase64) return '[E2EE Data Error]';
@@ -87,5 +109,23 @@ export const useE2EE = (chats: any[]) => {
     }
   }, [getPublicKeyWithFallback]);
 
-  return { encryptMessage, decryptMessage, getPublicKeyWithFallback };
+  /**
+   * Сохранить приватный ключ в защищённое хранилище.
+   * Вызывается после генерации seed на фронтенде.
+   */
+  const savePrivateKeySecurely = useCallback(async (keyBase64: string) => {
+    privateKeyRef.current = keyBase64;
+    await savePrivateKey(keyBase64);
+  }, []);
+
+  /**
+   * Удалить приватный ключ из хранилища.
+   * Вызывается при logout / purge.
+   */
+  const clearPrivateKey = useCallback(async () => {
+    privateKeyRef.current = null;
+    await deletePrivateKey();
+  }, []);
+
+  return { encryptMessage, decryptMessage, getPublicKeyWithFallback, savePrivateKey: savePrivateKeySecurely, clearPrivateKey, isReady };
 };

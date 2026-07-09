@@ -16,15 +16,19 @@ let supabaseClient: SupabaseClient | null = null;
 export function getSupabase(): SupabaseClient {
   if (!supabaseClient) {
     const supabaseUrl =
-      process.env.NEXT_PUBLIC_SUPABASE_URL ||
-      "https://aoxzpqwiwuzypydexfrn.supabase.co";
+      process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseAnonKey =
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-      "sb_publishable_AZAFBfQ2W5HPP9a78ty4hA_cokr8Y19";
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      throw new Error(
+        "[Supabase] MISSING_ENV: NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY must be set in environment"
+      );
+    }
 
     supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
-        persistSession: true, // Supabase сам хранит токен в localStorage (как в legacy)
+        persistSession: true,
       },
     });
   }
@@ -301,6 +305,54 @@ export async function persistSession(
 
 export async function terminateSession(sessionId: string): Promise<void> {
   return deleteSession(sessionId);
+}
+
+/**
+ * Безопасное хранение E2EE приватного ключа.
+ * В Tauri-окружении — через vault (AES-256-GCM).
+ * В браузере (dev) — через localStorage с префиксом _v2 (для обратной совместимости).
+ */
+export async function savePrivateKey(keyBase64: string): Promise<void> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('vault_save_private_key', { keyBase64 });
+    return;
+  } catch {
+    // not in Tauri
+  }
+  localStorage.setItem('echo_private_key_v2', keyBase64);
+}
+
+export async function loadPrivateKey(): Promise<string | null> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    const result: string | null = await invoke('vault_load_private_key');
+    if (result) return result;
+  } catch {
+    // not in Tauri
+  }
+  // Fallback #1: новый ключ v2
+  const v2 = localStorage.getItem('echo_private_key_v2');
+  if (v2) return v2;
+  // Fallback #2: старый ключ (миграция)
+  const legacy = localStorage.getItem('echo_private_key');
+  if (legacy) {
+    // Автоматическая миграция на v2
+    localStorage.setItem('echo_private_key_v2', legacy);
+    return legacy;
+  }
+  return null;
+}
+
+export async function deletePrivateKey(): Promise<void> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('vault_delete_private_key');
+  } catch {
+    // not in Tauri
+  }
+  localStorage.removeItem('echo_private_key_v2');
+  localStorage.removeItem('echo_private_key');
 }
 
 export async function generateHWID(): Promise<string> {

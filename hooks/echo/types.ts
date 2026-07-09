@@ -25,6 +25,7 @@ export interface Chat {
   bio?: string;
   public_key?: string;
   lastMessage?: string | null;
+  lastMessageType?: 'text' | 'sticker' | 'gif' | null;
   lastMessageTime?: string | null;
   unreadCount?: number;
 }
