@@ -138,7 +138,7 @@ export default function WelcomeScreen({ onComplete }: WelcomeScreenProps) {
 
   const handleLangSelect = (code: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setLanguage(code);
+    setLanguage(code as "en" | "ru");
     setLanguageKey(prev => prev + 1);
     setLangOpen(false);
   };

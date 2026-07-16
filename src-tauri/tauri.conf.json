@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "echo-tauri",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "identifier": "com.theravanz.echo-tauri",
   "build": {
     "frontendDist": "../out",
@@ -36,11 +36,7 @@
     "active": true,
     "targets": "all",
     "icon": [
-      "icons/32x32.png",
-      "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
+      "icons/icon.png"
     ],
     "android": {
     }
