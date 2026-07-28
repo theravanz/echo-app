@@ -1,6 +1,6 @@
 "use client";
 
-import React, { memo, useRef, useState } from "react";
+import React, { memo, useRef, useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { LinkPreview } from "./link-preview";
 import {
@@ -21,12 +21,21 @@ interface MessageBubbleProps {
   onReply: (msg: any) => void;
   onEdit: (msg: any) => void;
   onContextMenu?: (e: React.MouseEvent, msg: any, isMine: boolean, rect: DOMRect) => void;
+  onMentionClick?: (username: string) => void;
 }
 
 const renderFormattedText = (text: string) => {
   if (!text) return null;
 
-  let formatted = text
+  const mentionRegex = /(?<!\w)@([A-Za-z0-9_]{3,20})(?!\w)/g;
+  const mentions: { username: string }[] = [];
+
+  const textWithPlaceholders = text.replace(mentionRegex, (_, username) => {
+    mentions.push({ username });
+    return `\x00MENTION\x00${mentions.length - 1}\x00MENTION\x00`;
+  });
+
+  let formatted = textWithPlaceholders
     .replace(/\|\|(.*?)\|\|/g, '<span class="bg-foreground/20 text-transparent hover:text-inherit rounded px-1 transition-colors cursor-help" title="Spoiler">$1</span>')
     .replace(/```([\s\S]*?)```/g, '<pre class="bg-black/30 p-2 rounded-lg font-mono text-xs my-2 overflow-x-auto"><code>$1</code></pre>')
     .replace(/`(.*?)`/g, '<code class="bg-black/20 px-1 rounded font-mono text-xs">$1</code>')
@@ -34,6 +43,13 @@ const renderFormattedText = (text: string) => {
     .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>")
     .replace(/\*(.*?)\*/g, "<em>$1</em>")
     .replace(/~~(.*?)~~/g, "<del>$1</del>");
+
+  formatted = formatted.replace(/\x00MENTION\x00(\d+)\x00MENTION\x00/g, (_, idx) => {
+    const m = mentions[parseInt(idx, 10)];
+    if (!m) return _;
+    const safeUser = m.username.replace(/"/g, '&quot;');
+    return `<a href="#" data-mention="${safeUser}" class="text-primary hover:underline cursor-pointer">@${safeUser}</a>`;
+  });
 
   const urlRegex = /(https?:\/\/[^\s]+)/g;
   const parts = formatted.split(urlRegex);
@@ -58,6 +74,70 @@ const isJumboEmoji = (content: string, type: string) => {
   const matches = trimmed.match(emojiRegex);
   return matches && matches.length === 1 && matches[0] === trimmed;
 };
+
+const mentionRegex = /(?<!\w)@([A-Za-z0-9_]{3,20})(?!\w)/g;
+
+const extractMentions = (text: string) => {
+  const mentions: string[] = [];
+  let match;
+  while ((match = mentionRegex.exec(text)) !== null) {
+    if (!mentions.includes(match[1])) mentions.push(match[1]);
+  }
+  return mentions;
+};
+
+function MentionMiniCard({ username, onClick }: { username: string; onClick?: (u: string) => void }) {
+  const [profile, setProfile] = useState<{ display_name?: string; avatar_url?: string; bio?: string | null } | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setProfile(null);
+
+    (async () => {
+      try {
+        const { supabase } = await import("@/lib/supabase");
+        const { data } = await supabase.from("profiles").select("display_name,avatar_url,bio").eq("username", username).maybeSingle();
+        if (!cancelled) {
+          setProfile(data);
+          setLoading(false);
+        }
+      } catch (err) {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [username]);
+
+  return (
+    <button
+      type="button"
+      onClick={() => onClick?.(username)}
+      className="mt-3 flex w-full min-w-[260px] max-w-sm items-start gap-4 rounded-[28px] border border-white/10 bg-white/10 px-4 py-3 text-left backdrop-blur-xl transition hover:border-primary/50 hover:bg-white/[0.14]"
+    >
+      {loading ? (
+        <div className="h-14 w-14 shrink-0 rounded-full bg-white/10 animate-pulse" />
+      ) : profile?.avatar_url ? (
+        <img src={profile.avatar_url} alt="" className="h-14 w-14 shrink-0 rounded-full object-cover" />
+      ) : (
+        <div className="h-14 w-14 shrink-0 rounded-full bg-white/10" />
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-base font-semibold text-primary">@{username}</div>
+        {!loading && profile?.display_name && (
+          <div className="truncate text-sm text-white/80">{profile.display_name}</div>
+        )}
+        {!loading && profile?.bio && (
+          <div className="mt-1 line-clamp-2 text-xs text-white/60">{profile.bio}</div>
+        )}
+      </div>
+    </button>
+  );
+}
 
 const renderMessageContent = (content: string, type: string) => {
   if (type === "sticker" || type === "gif") {
@@ -226,7 +306,7 @@ function ImageBubble({ msg, onContextMenu, innerRef }: { msg: any; onContextMenu
   );
 }
 
-export const MessageBubble = memo(({ msg, isMe, showAvatar, activeChat, user, onReply, onEdit, onContextMenu }: MessageBubbleProps) => {
+export const MessageBubble = memo(({ msg, isMe, showAvatar, activeChat, user, onReply, onEdit, onContextMenu, onMentionClick }: MessageBubbleProps) => {
   const bubbleRef = useRef<HTMLDivElement>(null);
   const isJumbo = isJumboEmoji(msg.content, msg.type);
   const isMedia = msg.type === "sticker" || msg.type === "gif";
@@ -238,6 +318,23 @@ export const MessageBubble = memo(({ msg, isMe, showAvatar, activeChat, user, on
   }
 
   const time = new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+  const handleContentClick = (e: React.MouseEvent) => {
+    const target = e.target as HTMLElement;
+    const mentionLink = target.closest('a[data-mention]');
+    if (mentionLink) {
+      e.preventDefault();
+      const username = mentionLink.getAttribute('data-mention');
+      if (username) onMentionClick?.(username);
+    }
+  };
+
+  const isText = msg.type === "text" || msg.type === undefined;
+  const isOnlyMention = isText ? /^\s*@[A-Za-z0-9_]{3,20}\s*$/.test(msg.content || "") : false;
+  const mentions = isText ? extractMentions(msg.content || "") : [];
+  const mentionCards = mentions.map((username) => (
+    <MentionMiniCard key={username} username={username} onClick={onMentionClick} />
+  ));
 
   return (
     <div className={cn("flex items-end gap-3 group animate-in fade-in slide-in-from-bottom-4 duration-500", isMe ? "flex-row-reverse" : "flex-row")}>
@@ -253,11 +350,12 @@ export const MessageBubble = memo(({ msg, isMe, showAvatar, activeChat, user, on
             ref={bubbleRef}
             onContextMenu={handleContextMenu}
             className={cn(
-              "relative p-4 md:p-5 rounded-[32px] text-sm leading-relaxed max-w-[85%] md:max-w-[75%] transition-all duration-300 shadow-2xl cursor-default",
+              "relative p-4 md:p-5 rounded-[32px] text-sm leading-relaxed max-w-[85%] md:max-w-[75%] transition-all duration-300 shadow-2xl",
               isMe
                 ? "bg-primary text-primary-foreground rounded-br-none shadow-primary/10"
                 : "bg-white/[0.06] border border-white/[0.07] backdrop-blur-md rounded-bl-none shadow-black/60",
-              (isJumbo || isMedia) && "bg-transparent border-none shadow-none p-0"
+              (isJumbo || isMedia) && "bg-transparent border-none shadow-none p-0",
+              isOnlyMention && "p-0 bg-transparent border-none shadow-none rounded-none"
             )}
           >
             {msg.reply_to && (
@@ -266,10 +364,18 @@ export const MessageBubble = memo(({ msg, isMe, showAvatar, activeChat, user, on
                 <div className="truncate">{msg.reply_to.content}</div>
               </div>
             )}
-            <div className="whitespace-pre-wrap [overflow-wrap:break-word] [word-break:auto-phrase] hyphens-auto">{renderMessageContent(msg.content, msg.type || "text")}</div>
+            {!isOnlyMention && (
+              <div className="whitespace-pre-wrap [overflow-wrap:break-word] [word-break:auto-phrase] hyphens-auto" onClick={handleContentClick}>{renderMessageContent(msg.content, msg.type || "text")}</div>
+            )}
+            {isOnlyMention && (
+              <div className="flex flex-col">
+                {mentionCards}
+              </div>
+            )}
           </div>
         )}
 
+        {!isOnlyMention && mentionCards}
         <MessageMeta isMe={isMe} time={time} status={msg.status} deliveryPath={msg.delivery_path} />
       </div>
     </div>

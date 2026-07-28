@@ -177,9 +177,44 @@ function EchoAppContent() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const userRef = useRef<UserProfile | null>(null);
+  const originalChatRef = useRef<Chat | null>(null);
 
   const { chats, setChats, fetchChats, selectedChat, setSelectedChat, selectedChatRef, drafts, saveDraft, onlineUsers } = useChatList(user);
   const { profile: viewedProfile } = useProfileDetails(isRightPanelOpen ? selectedChat?.id ?? null : null);
+
+  const handleMentionClick = useCallback(async (username: string) => {
+    try {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("username", username)
+        .maybeSingle();
+
+      if (!profile) return;
+
+      const chat: Chat = {
+        id: profile.id,
+        username: profile.username,
+        display_name: profile.display_name,
+        avatar_url: profile.avatar_url,
+        avatar_color: profile.avatar_color,
+        bio: profile.bio,
+        public_key: profile.public_key,
+        lastMessage: null,
+        lastMessageType: null,
+        lastMessageTime: null,
+        unreadCount: 0,
+        wallpaper_preset: "solid",
+        wallpaper_photo_url: null,
+      };
+
+      originalChatRef.current = selectedChat;
+      setSelectedChat(chat);
+      setIsRightPanelOpen(true);
+    } catch (err) {
+      console.error("Failed to open profile from mention:", err);
+    }
+  }, [selectedChat, setSelectedChat]);
 
   // Chat wallpaper state
   const accentColor = useContactAccentColor(selectedChat?.avatar_url || null, selectedChat?.avatar_color || null);
@@ -678,6 +713,7 @@ useEffect(() => {
                       setNewMessage(m.content);
                       textareaRef.current?.focus();
                     }}
+                     onMentionClick={handleMentionClick}
                  />
                );
             })}
@@ -819,7 +855,13 @@ useEffect(() => {
                 is_online: onlineUsers.has(selectedChat.id),
                 last_seen_label: formatRelativeTime(selectedChat.lastMessageTime || new Date().toISOString()),
               }}
-              onClose={() => setIsRightPanelOpen(false)}
+              onClose={() => {
+                setIsRightPanelOpen(false);
+                if (originalChatRef.current) {
+                  setSelectedChat(originalChatRef.current);
+                  originalChatRef.current = null;
+                }
+              }}
               onMuteToggle={() => {}}
               onBlock={async () => {
                 await supabase.from("blocks").insert({ blocker_id: user?.id, blocked_id: selectedChat.id });
