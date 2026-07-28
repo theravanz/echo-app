@@ -634,7 +634,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
                         activeView === 'alerts' ? renderAlerts() :
                         renderLanguage();
     return (
-      <div className="fixed inset-0 z-[200] bg-background flex flex-col" onClick={onClose}>
+      <div className="fixed inset-0 z-[200] bg-background flex flex-col safe-top safe-bottom" onClick={onClose}>
         <div className="flex-1 overflow-y-auto" onClick={e => e.stopPropagation()}>
           {viewContent}
         </div>
@@ -645,9 +645,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
   // Mobile: Main menu (full screen, categories list)
   if (isMobile) {
     return (
-      <div className="fixed inset-0 z-[200] bg-background flex flex-col" onClick={onClose}>
+      <div className="fixed inset-0 z-[200] bg-background flex flex-col safe-top safe-bottom" onClick={onClose}>
         <div className="flex-1 overflow-y-auto" onClick={e => e.stopPropagation()}>
-          <div className="p-4">
+          <div className="p-4 pt-2">
             <div className="flex items-center justify-between mb-6">
               <h1 className="text-2xl font-display font-bold tracking-tight">Settings</h1>
               <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40" onClick={onClose}>
@@ -711,9 +711,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
 
   // --- Desktop: Modal with sidebar + content ---
   return (
-    <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="w-full max-w-3xl bg-background/95 border border-white/10 backdrop-blur-3xl rounded-[48px] shadow-2xl overflow-hidden noise-overlay" onClick={e => e.stopPropagation()}>
-        <div className="flex h-[640px]">
+    <div className={cn("fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm", isMobile ? "p-0 safe-y" : "p-4")} onClick={onClose}>
+      <div className={cn("w-full bg-background/95 border border-white/10 backdrop-blur-3xl shadow-2xl overflow-hidden noise-overlay", isMobile ? "h-full rounded-none" : "max-w-3xl rounded-[48px]")} onClick={e => e.stopPropagation()}>
+        <div className="flex h-full md:h-[640px]">
           {/* Sidebar */}
           <aside className="w-56 border-r border-white/5 bg-black/20 p-8 space-y-8 shrink-0 hidden sm:block">
             {menuSections.map(section => (

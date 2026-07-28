@@ -120,6 +120,9 @@ import type { UserProfile, Chat, Message, NetworkMode, AppTab, ConnectionStatus 
 import { useProfileDetails } from "@/hooks/echo/use-profile-details";
 import { ChatSidebar } from "@/components/echo/app/chat-sidebar";
 import { MobileTabBar } from "@/components/echo/app/mobile-tab-bar";
+import { ChatWallpaper, type WallpaperPreset } from "@/components/echo/app/chat-wallpaper";
+import { ChatBackgroundPicker } from "@/components/echo/app/chat-background-picker";
+import { useContactAccentColor } from "@/hooks/echo/use-contact-accent";
 
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
@@ -178,6 +181,14 @@ function EchoAppContent() {
   const { chats, setChats, fetchChats, selectedChat, setSelectedChat, selectedChatRef, drafts, saveDraft, onlineUsers } = useChatList(user);
   const { profile: viewedProfile } = useProfileDetails(isRightPanelOpen ? selectedChat?.id ?? null : null);
 
+  // Chat wallpaper state
+  const accentColor = useContactAccentColor(selectedChat?.avatar_url || null, selectedChat?.avatar_color || null);
+  const [chatWallpaper, setChatWallpaper] = useState<{ preset: WallpaperPreset; photoUrl: string | null }>({
+    preset: (selectedChat as any)?.wallpaper_preset || 'solid',
+    photoUrl: (selectedChat as any)?.wallpaper_photo_url || null,
+  });
+  const [bgPickerOpen, setBgPickerOpen] = useState(false);
+
   const { messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage } = useMessages(chats);
   const { addToQueue, processPendingQueue } = useNetworkQueue();
   const { connectionStatus, setConnectionStatus } = useConnection(processPendingQueue);
@@ -207,7 +218,64 @@ useEffect(() => {
   return () => clearTimeout(timeout);
 }, [newMessage, selectedChat?.id, saveDraft, drafts]);
 
-// === App Initialization ===
+// Chat wallpaper: sync when switching chats
+useEffect(() => {
+  if (!selectedChat) return;
+  if ((selectedChat as any).wallpaper_preset) {
+    setChatWallpaper({
+      preset: (selectedChat as any).wallpaper_preset || 'solid',
+      photoUrl: (selectedChat as any).wallpaper_photo_url || null,
+    });
+  } else {
+    // Fetch wallpaper data for this chat if not already loaded
+    supabase.from('chats').select('wallpaper_preset, wallpaper_photo_url').eq('id', selectedChat.id).maybeSingle().then(({ data }) => {
+      if (data) {
+        setChatWallpaper({
+          preset: (data as any).wallpaper_preset || 'solid',
+          photoUrl: (data as any).wallpaper_photo_url || null,
+        });
+      }
+    });
+  }
+}, [selectedChat?.id]);
+
+// Mobile keyboard: keep header visible when keyboard opens
+useEffect(() => {
+  if (!isMobile || typeof window === 'undefined') return;
+
+  const appRoot = document.getElementById('echo-app-root');
+  if (!appRoot) return;
+
+  const handler = () => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    // When keyboard is open, visualViewport is smaller than layout viewport
+    const isKeyboardOpen = vv.height < window.innerHeight - 80;
+    if (isKeyboardOpen) {
+      appRoot.style.height = `${vv.height}px`;
+      appRoot.style.position = 'fixed';
+      appRoot.style.top = '0';
+      appRoot.style.left = '0';
+      appRoot.style.right = '0';
+      appRoot.style.overflow = 'hidden';
+    } else {
+      appRoot.style.height = '';
+      appRoot.style.position = '';
+      appRoot.style.top = '';
+      appRoot.style.left = '';
+      appRoot.style.right = '';
+      appRoot.style.overflow = '';
+    }
+  };
+
+  window.visualViewport?.addEventListener('resize', handler);
+  window.visualViewport?.addEventListener('scroll', handler);
+  return () => {
+    window.visualViewport?.removeEventListener('resize', handler);
+    window.visualViewport?.removeEventListener('scroll', handler);
+  };
+}, [isMobile]);
+
 useEffect(() => {
   let isMounted = true;
 
@@ -398,7 +466,7 @@ useEffect(() => {
 }, [messages, selectedChat]);
 
   return (
-    <div className="flex h-dvh bg-background text-foreground overflow-hidden selection:bg-primary/30 antialiased relative noise-overlay">
+    <div id="echo-app-root" className="flex h-dvh bg-background text-foreground overflow-hidden selection:bg-primary/30 antialiased relative noise-overlay">
 
       {/* Immersive Background Orbs */}
       <div className="absolute inset-0 z-0 pointer-events-none overflow-hidden opacity-30">
@@ -457,27 +525,35 @@ useEffect(() => {
       )}
 
       {/* --- 2. List Sidebar --- */}
-      <ChatSidebar
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        connectionStatus={connectionStatus}
-        activeMode={activeMode}
-        chats={chats}
-        selectedChat={selectedChat}
-        onlineUsers={onlineUsers}
-        searchOpen={searchOpen}
-        searchQuery={searchQuery}
-        searchResults={searchResults}
-        isSearching={isSearching}
-        isSearchFocused={isSearchFocused}
-        recentSearches={recentSearches}
-        onSearchOpen={setSearchOpen}
-        onSearch={handleSearch}
-        onSearchFocus={setIsSearchFocused}
-        onStartChat={(p) => handleStartChat(p, chats, setSelectedChat, (prof) => setChats(prev => [...prev, prof as any]))}
-        onSelectChat={(chat) => { setSelectedChat(chat); fetchMessages(chat.id, user!.id); }}
-        onOpenSettings={() => setIsSettingsOpen(true)}
-      />
+      <div className={cn(isMobile && selectedChat ? "hidden" : "w-full md:w-auto flex shrink-0 h-full")}>
+        <ChatSidebar
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          connectionStatus={connectionStatus}
+          activeMode={activeMode}
+          chats={chats}
+          selectedChat={selectedChat}
+          onlineUsers={onlineUsers}
+          searchOpen={searchOpen}
+          searchQuery={searchQuery}
+          searchResults={searchResults}
+          isSearching={isSearching}
+          isSearchFocused={isSearchFocused}
+          recentSearches={recentSearches}
+          onSearchOpen={setSearchOpen}
+          onSearch={handleSearch}
+          onSearchFocus={setIsSearchFocused}
+          onStartChat={(p) => handleStartChat(p, chats, (chat) => {
+            setSelectedChat(chat);
+            if (user) fetchMessages(chat.id, user.id);
+          }, (prof) => setChats(prev => [...prev, prof as any]))}
+          onSelectChat={(chat) => {
+            setSelectedChat(chat);
+            if (user) fetchMessages(chat.id, user.id);
+          }}
+          onOpenSettings={() => setIsSettingsOpen(true)}
+        />
+      </div>
 
       {/* --- 3. Main Communication Area --- */}
       <main className={cn(
@@ -486,8 +562,8 @@ useEffect(() => {
       )}>
 
         {/* Terminal Header */}
-        <header className="h-14 md:h-20 border-b border-white/5 flex items-center justify-between px-4 md:px-8 bg-black/10 backdrop-blur-3xl shrink-0" style={{ touchAction: "none" }}>
-          <div className="flex items-center gap-6">
+        <header className="h-14 md:h-20 border-b border-white/5 flex items-center justify-between px-4 md:px-8 bg-black/10 backdrop-blur-3xl shrink-0 safe-top" style={{ touchAction: "none" }}>
+          <div className="flex items-center gap-6 min-w-0 flex-1">
             {isMobile && selectedChat && (
               <Button variant="ghost" size="icon" className="rounded-2xl text-white/40" onClick={() => { setSelectedChat(null); if (isMobile) setSearchOpen(false); }}>
                 <ArrowLeft className="w-5 h-5" />
@@ -504,13 +580,13 @@ useEffect(() => {
             )}
 
             {selectedChat && (
-              <div className="flex items-center gap-4 group cursor-pointer" onClick={() => { setIsRightPanelOpen(!isRightPanelOpen); }}>
-                 <div className="w-10 h-10 rounded-full border border-white/10 flex items-center justify-center text-primary font-bold text-sm shadow-xl" style={{ backgroundColor: selectedChat.avatar_color || 'oklch(0.2 0.02 280)' }}>
+              <div className="flex items-center gap-4 group cursor-pointer min-w-0 flex-1" onClick={() => { setIsRightPanelOpen(!isRightPanelOpen); }}>
+                 <div className="w-10 h-10 rounded-full border border-white/10 flex items-center justify-center text-primary font-bold text-sm shadow-xl shrink-0" style={{ backgroundColor: selectedChat.avatar_color || 'oklch(0.2 0.02 280)' }}>
                     {selectedChat.avatar_url ? <img src={selectedChat.avatar_url} className="w-full h-full object-cover rounded-full" alt="" /> : (selectedChat.display_name?.[0] || 'U')}
                  </div>
-                <div>
-                  <div className="font-bold text-base">{selectedChat.display_name || selectedChat.username}</div>
-                  <div className="text-[10px] font-mono text-white/30 uppercase tracking-widest">@{selectedChat.username}</div>
+                <div className="min-w-0">
+                  <div className="font-bold text-base truncate">{selectedChat.display_name || selectedChat.username}</div>
+                  <div className="text-[10px] font-mono text-white/30 uppercase tracking-widest truncate">@{selectedChat.username}</div>
                 </div>
               </div>
             )}
@@ -528,15 +604,42 @@ useEffect(() => {
                    <span className="text-[10px] font-mono font-bold uppercase tracking-widest">3.2MB</span>
                 </div>
              </div>
-             <Button variant="ghost" size="icon" className="rounded-2xl text-white/30 hover:text-white hover:bg-white/5 transition-all">
-                <MoreVertical className="w-5 h-5" />
-             </Button>
+             <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                   <Button variant="ghost" size="icon" className="rounded-2xl text-white/30 hover:text-white hover:bg-white/5 transition-all">
+                      <MoreVertical className="w-5 h-5" />
+                   </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48 bg-black/80 backdrop-blur-2xl border border-white/10 rounded-2xl">
+                   <DropdownMenuItem onClick={() => { setIsRightPanelOpen(true); }}>
+                      <User className="w-4 h-4 mr-2" /> Profile
+                   </DropdownMenuItem>
+                   <DropdownMenuItem onClick={() => setBgPickerOpen(true)}>
+                      <Palette className="w-4 h-4 mr-2" /> Change Wallpaper
+                   </DropdownMenuItem>
+                   <DropdownMenuSeparator className="bg-white/5" />
+                   <DropdownMenuItem onClick={async () => {
+                      if (!selectedChat || !user) return;
+                      const confirmed = window.confirm('Delete all messages in this chat?');
+                      if (!confirmed) return;
+                      await supabase.from("messages").delete().or(
+                         `and(sender_id.eq.${user.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${user.id})`
+                      );
+                      setMessages([]);
+                      toast.success('Chat cleared');
+                   }} className="text-destructive focus:text-destructive">
+                      <Trash2 className="w-4 h-4 mr-2" /> Clear Chat
+                   </DropdownMenuItem>
+                </DropdownMenuContent>
+             </DropdownMenu>
           </div>
         </header>
 
         {/* Messaging Core */}
-        <div className="flex-1 min-h-0 px-3 md:px-12 py-3 md:py-8 overflow-y-auto overscroll-contain scrollbar-hide" ref={scrollRef}>
-          <div className="max-w-4xl mx-auto space-y-4 md:space-y-12">
+        <div className="flex-1 min-h-0 relative overflow-hidden">
+          <ChatWallpaper preset={chatWallpaper.preset} accentColor={accentColor} photoUrl={chatWallpaper.photoUrl} />
+          <div className="relative z-[1] h-full px-3 md:px-12 py-3 md:py-8 overflow-y-auto overscroll-contain scrollbar-hide" ref={scrollRef}>
+            <div className="max-w-4xl mx-auto space-y-4 md:space-y-12">
 
             {!selectedChat && (
               <div className="h-[60dvh] flex flex-col items-center justify-center text-center space-y-8 animate-in fade-in zoom-in duration-1000">
@@ -580,13 +683,13 @@ useEffect(() => {
             })}
           </div>
         </div>
+        </div>
 
         {/* Input Interface */}
         {selectedChat && (
-          <footer className="p-3 md:p-10 shrink-0" style={{ touchAction: "none" }}>
-             <div className="max-w-4xl mx-auto">
-                <GlassPanel className="rounded-[32px] md:rounded-[40px] p-3 md:p-3 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.5)]">
-                   <CornerBrackets />
+          <footer className={cn("px-2 pb-2 md:px-10 md:pb-6 shrink-0", isMobile && "safe-bottom")} style={{ touchAction: "none" }}>
+             <div className="w-full mx-auto max-w-4xl">
+                <div className="flex items-end gap-2 bg-white/[0.04] border border-white/[0.06] rounded-[20px] md:rounded-[28px] px-3 py-2 md:px-5 md:py-3 backdrop-blur-xl transition-all duration-300 focus-within:border-white/10 focus-within:bg-white/[0.06] shadow-[0_8px_32px_-8px_rgba(0,0,0,0.4)]">
 
                    {replyingTo && (
                      <div className="px-4 py-2 bg-black/20 border-b border-white/5 flex items-center justify-between animate-in slide-in-from-bottom-2 duration-300">
@@ -668,14 +771,14 @@ useEffect(() => {
                         <textarea
                           ref={textareaRef}
                           rows={1}
-                          placeholder={editingMessage ? "Edit message..." : "Node_Terminal_Ready..."}
+                          placeholder={editingMessage ? "Изменить сообщение..." : "Сообщение..."}
                           value={newMessage}
                           onChange={(e) => {
                             setNewMessage(e.target.value);
                             e.target.style.height = 'auto';
                             e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
                           }}
-                          className="w-full bg-transparent border-none py-3.5 px-2 text-base md:text-lg font-medium resize-none outline-none focus:ring-0 placeholder:text-white/10 leading-relaxed scrollbar-hide"
+                          className="w-full bg-transparent border-none py-2.5 px-2 text-[15px] font-medium resize-none outline-none focus:ring-0 placeholder:text-white/10 leading-relaxed scrollbar-hide"
                           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !isMobile) { e.preventDefault(); handleSendMessage(selectedChat, user!, newMessage); } }}
                         />
                       </div>
@@ -684,15 +787,14 @@ useEffect(() => {
                         onClick={() => handleSendMessage(selectedChat, user!, newMessage)}
                         disabled={!newMessage.trim()}
                         className={cn(
-                          "w-11 h-11 md:w-14 md:h-14 rounded-[28px] md:rounded-[32px] flex items-center justify-center transition-all duration-700 relative group/send",
-                          newMessage.trim() ? "bg-primary text-primary-foreground shadow-2xl shadow-primary/30" : "bg-white/5 text-white/10"
+                          "w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center transition-all shrink-0",
+                          newMessage.trim() ? "bg-primary text-primary-foreground shadow-lg shadow-primary/20" : "bg-white/5 text-white/20"
                         )}
                       >
-                         <Send className="w-6 h-6 group-hover/send:translate-x-1 group-hover/send:-translate-y-1 transition-transform duration-500" />
-                         {newMessage.trim() && <div className="absolute inset-0 bg-primary blur-xl opacity-30 rounded-[32px]" />}
+                         <Send className="w-5 h-5" />
                       </button>
                    </div>
-                </GlassPanel>
+                </div>
              </div>
           </footer>
         )}
@@ -708,7 +810,7 @@ useEffect(() => {
             transition={{ type: "spring", damping: 30, stiffness: 300, mass: 0.8 }}
             className={cn(
               "flex flex-col z-40 shrink-0",
-              isMobile ? "fixed inset-0 w-full h-full" : "border-l border-white/5 relative w-96"
+              isMobile ? "fixed inset-0 w-full h-full safe-top safe-bottom bg-[#0a0a0d]" : "border-l border-white/5 relative w-96"
             )}
           >
             <ProfileViewPanel
@@ -746,7 +848,8 @@ useEffect(() => {
             transition={{ type: "spring", damping: 30, stiffness: 300, mass: 0.8 }}
             className={cn(
               "fixed inset-0 z-[100]",
-              !isMobile && "flex items-center justify-center p-4"
+              !isMobile && "flex items-center justify-center p-4",
+              isMobile && "safe-top safe-bottom"
             )}
           >
             <SettingsModal
@@ -759,6 +862,20 @@ useEffect(() => {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* --- Chat Background Picker --- */}
+      {selectedChat && (
+        <ChatBackgroundPicker
+          open={bgPickerOpen}
+          onClose={() => setBgPickerOpen(false)}
+          chatId={selectedChat.id}
+          accentColor={accentColor}
+          current={chatWallpaper}
+          onChange={(next) => {
+            setChatWallpaper(next);
+          }}
+        />
+      )}
 
       {/* --- Mobile Hotbar --- */}
       {isMobile && !selectedChat && (
@@ -799,12 +916,7 @@ useEffect(() => {
           -webkit-touch-callout: none;
           -webkit-user-select: none;
         }
-        @supports (padding: env(safe-area-inset-top)) {
-          body {
-            padding-top: env(safe-area-inset-top);
-            padding-bottom: env(safe-area-inset-bottom);
-          }
-        }
+        /* Safe-area handled via CSS variables (.safe-top, .safe-bottom, etc.) */
         @keyframes scanline {
           0% { transform: translateY(-100%); }
           100% { transform: translateY(100%); }

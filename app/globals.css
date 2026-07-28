@@ -240,9 +240,46 @@
 
 @layer base {
   body, html {
-    padding-top: env(safe-area-inset-top, 0px);
-    padding-bottom: env(safe-area-inset-bottom, 0px);
     box-sizing: border-box;
     min-height: 100vh;
+  }
+
+  :root {
+    --safe-area-top: env(safe-area-inset-top, 0px);
+    --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-area-left: env(safe-area-inset-left, 0px);
+    --safe-area-right: env(safe-area-inset-right, 0px);
+  }
+
+  /* Safe area utility classes for fixed/absolute UI elements */
+  .safe-top {
+    padding-top: var(--safe-area-top);
+  }
+  .safe-bottom {
+    padding-bottom: var(--safe-area-bottom);
+  }
+  .safe-left {
+    padding-left: var(--safe-area-left);
+  }
+  .safe-right {
+    padding-right: var(--safe-area-right);
+  }
+  .safe-y {
+    padding-top: var(--safe-area-top);
+    padding-bottom: var(--safe-area-bottom);
+  }
+  .safe-x {
+    padding-left: var(--safe-area-left);
+    padding-right: var(--safe-area-right);
+  }
+  .safe-inset {
+    padding: var(--safe-area-top) var(--safe-area-right) var(--safe-area-bottom) var(--safe-area-left);
+  }
+
+  .safe-pt-header {
+    padding-top: calc(var(--safe-area-top) + 0.75rem);
+  }
+  .safe-top-offset {
+    top: calc(var(--safe-area-top) + 1rem);
   }
 }

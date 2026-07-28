@@ -1601,10 +1601,20 @@ function ProfileEditor({
             <div className="absolute inset-0 transition-all duration-500" style={{ background: resolveBackground(draft.background) }} />
             <div className="absolute inset-0 bg-gradient-to-b from-transparent to-[#0a0a0d]" />
 
-            <motion.button whileTap={{ scale: 0.9 }} onClick={onClose} className="absolute top-4 left-4 z-10 w-9 h-9 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center">
+            <motion.button
+              whileTap={{ scale: 0.9 }}
+              onClick={onClose}
+              className="absolute z-10 w-9 h-9 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center"
+              style={{ top: 'calc(var(--safe-area-top) + 1rem)', left: '1rem' }}
+            >
               <ChevronLeft className="w-4 h-4" />
             </motion.button>
-            <motion.button whileTap={{ scale: 0.9 }} onClick={() => setBgPickerOpen((v) => !v)} className="absolute top-4 right-4 z-10 w-9 h-9 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center">
+            <motion.button
+              whileTap={{ scale: 0.9 }}
+              onClick={() => setBgPickerOpen((v) => !v)}
+              className="absolute z-10 w-9 h-9 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center"
+              style={{ top: 'calc(var(--safe-area-top) + 1rem)', right: '1rem' }}
+            >
               <Palette className="w-4 h-4" />
             </motion.button>
 

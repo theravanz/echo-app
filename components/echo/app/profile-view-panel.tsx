@@ -185,7 +185,9 @@ export function ProfileViewPanel({
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="absolute top-4 right-4 z-10 w-9 h-9 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center">
+              <button
+                className="absolute top-4 right-4 z-10 w-9 h-9 rounded-full bg-black/40 backdrop-blur-sm flex items-center justify-center"
+              >
                 <MoreVertical className="w-4 h-4" />
               </button>
             </DropdownMenuTrigger>
@@ -240,10 +242,10 @@ export function ProfileViewPanel({
                 </div>
 
                 {/* Ник по центру под аватаром */}
-                <div className="mt-3 text-center px-4">
+                <div className="mt-3 text-center px-4 max-w-full">
                   <div className="text-[20px] font-bold flex items-center justify-center gap-1.5">
-                    {profile.display_name}
-                    {profile.status_emoji && <span className="text-base leading-none">{profile.status_emoji}</span>}
+                    <span className="truncate">{profile.display_name}</span>
+                    {profile.status_emoji && <span className="text-base leading-none shrink-0">{profile.status_emoji}</span>}
                   </div>
                   <div className="text-[13px] text-white/40 mt-1">
                     {profile.is_online ? "в сети" : profile.last_seen_label || "не в сети"}
@@ -288,10 +290,10 @@ export function ProfileViewPanel({
                   transition={{ delay: 0.15, type: "spring", stiffness: 300, damping: 30 }}
                   className="absolute bottom-6 left-5 right-5 flex items-end justify-between"
                 >
-                  <div>
+                  <div className="min-w-0">
                     <div className="text-[22px] font-bold flex items-center gap-1.5">
-                      {profile.display_name}
-                      {profile.status_emoji && <span className="text-lg">{profile.status_emoji}</span>}
+                      <span className="truncate">{profile.display_name}</span>
+                      {profile.status_emoji && <span className="text-lg shrink-0">{profile.status_emoji}</span>}
                     </div>
                     <div className="text-[13px] text-white/60 mt-1">
                       {profile.is_online ? "в сети" : profile.last_seen_label || "не в сети"}
@@ -447,7 +449,7 @@ export function ProfileViewPanel({
           {profile.bio && (
             <div className="p-4">
               <div className="text-[11px] font-semibold text-white/40 uppercase tracking-wider mb-2">О себе</div>
-              <p className="text-[13px] text-white/60 leading-relaxed">{profile.bio}</p>
+              <p className="text-[13px] text-white/60 leading-relaxed break-words whitespace-pre-wrap">{profile.bio}</p>
             </div>
           )}
 

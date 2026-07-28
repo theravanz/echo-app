@@ -79,7 +79,7 @@ export function ChatSidebar({
   };
 
   return (
-    <aside className="w-full md:w-[360px] border-r border-white/5 flex flex-col bg-black/10 backdrop-blur-2xl z-20 shrink-0 transition-all duration-700 ease-in-out h-full">
+    <aside className="w-full md:w-[360px] border-r border-white/5 flex flex-col bg-black/10 backdrop-blur-2xl z-20 shrink-0 transition-all duration-700 ease-in-out h-full safe-top">
       <div className="h-16 md:h-20 px-4 md:px-6 pt-2 md:pt-0 flex items-center justify-between shrink-0">
         {activeTab === 'chats' ? (
           <div className="flex items-center gap-2">
@@ -123,7 +123,7 @@ export function ChatSidebar({
       {/* Search Overlay */}
       <AnimatePresence>
         {searchOpen && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-30 bg-background backdrop-blur-2xl rounded-3xl overflow-hidden">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-30 bg-background backdrop-blur-2xl rounded-3xl overflow-hidden safe-top">
             <div className="flex flex-col h-full">
               <div className="px-4 pt-4 pb-2 space-y-4">
                 <div className="flex items-center gap-3">
