@@ -23,6 +23,10 @@ export const viewport = {
 export const metadata: Metadata = {
   title: "Echo",
   description: "Secure Encrypted Messenger",
+  icons: {
+    icon: "/logo1.png",
+    apple: "/logo1.png",
+  },
 };
 
 export default function RootLayout({

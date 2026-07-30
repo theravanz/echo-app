@@ -49,6 +49,10 @@ function AuthPageContent() {
   // Multi-account context
   const addingAccount = searchParams.get('addingAccount') === 'true';
 
+  // Return target for post-login redirect (validated to internal paths only)
+  const rawReturnTo = searchParams.get('returnTo') || '/app';
+  const returnTo = rawReturnTo.startsWith('/') ? rawReturnTo : '/app';
+
   // Auth mode: 'sms' (normal) or 'email' (fallback when SMS failed)
   const [authMode, setAuthMode] = useState<'sms' | 'email'>('sms');
   const [phoneVerificationFailed, setPhoneVerificationFailed] = useState(false);
@@ -339,7 +343,7 @@ function AuthPageContent() {
           setTimeout(() => {
             setShowSuccess(true);
             clearAuthProgress().catch(() => {});
-            setTimeout(() => router.push('/app'), 5000);
+            setTimeout(() => router.push(returnTo), 5000);
           }, 800);
           return;
         }
@@ -450,7 +454,7 @@ function AuthPageContent() {
       goToStep(5);
       setTimeout(() => {
         setShowSuccess(true);
-        setTimeout(() => router.push('/app'), 5000);
+        setTimeout(() => router.push(returnTo), 5000);
       }, 800);
     } catch (error: any) {
       setConfirmRecoveryLoading(false);
@@ -508,7 +512,7 @@ function AuthPageContent() {
       goToStep(5);
       setTimeout(() => {
         setShowSuccess(true);
-        setTimeout(() => router.push('/app'), 5000);
+        setTimeout(() => router.push(returnTo), 5000);
       }, 800);
     } catch (error) {
       setRestoreError(t('auth.error.unknown'));

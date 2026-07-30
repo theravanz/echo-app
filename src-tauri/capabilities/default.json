@@ -13,6 +13,7 @@
     "core:event:allow-emit",
     "core:event:allow-listen",
     "core:event:default",
+    "deep-link:default",
     "shell:default",
     "shell:allow-open"
   ]

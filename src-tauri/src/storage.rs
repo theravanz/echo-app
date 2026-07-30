@@ -164,6 +164,28 @@ impl StorageManager {
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
                 updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS themes (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                author TEXT DEFAULT 'Echo',
+                description TEXT DEFAULT '',
+                is_builtin INTEGER DEFAULT 0,
+                css_variables TEXT NOT NULL DEFAULT '{}',
+                metadata_json TEXT NOT NULL DEFAULT '{}',
+                created_at INTEGER DEFAULT (strftime('%s', 'now')),
+                updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS chat_wallpapers (
+                chat_id TEXT PRIMARY KEY,
+                wallpaper_type TEXT NOT NULL DEFAULT 'solid',
+                wallpaper_value TEXT NOT NULL DEFAULT '',
+                blur REAL DEFAULT 0.0,
+                opacity REAL DEFAULT 1.0,
+                brightness REAL DEFAULT 1.0,
+                updated_at INTEGER DEFAULT (strftime('%s', 'now'))
             );"
         ) {
             log::error!("[Storage] Schema creation failed: {}", e);
@@ -547,7 +569,192 @@ pub async fn get_account(
     Ok(account)
 }
 // ═══════════════════════════════════════════════════════════════════
-// AUTH PROGRESS (3 команды — переживают выгрузку приложения)
+// THEMES & WALLPAPERS — DTO
+// ═══════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Theme {
+    pub id: String,
+    pub name: String,
+    pub author: String,
+    pub description: String,
+    pub is_builtin: bool,
+    pub css_variables: String,
+    pub metadata_json: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatWallpaper {
+    pub chat_id: String,
+    pub wallpaper_type: String,
+    pub wallpaper_value: String,
+    pub blur: f64,
+    pub opacity: f64,
+    pub brightness: f64,
+    pub updated_at: i64,
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// THEMES (7 команд)
+// ═══════════════════════════════════════════════════════════════════
+
+#[tauri::command]
+pub async fn save_theme(
+    manager: State<'_, StorageManager>,
+    id: String,
+    name: String,
+    author: String,
+    description: String,
+    is_builtin: bool,
+    css_variables: String,
+    metadata_json: String,
+) -> Result<(), String> {
+    let conn = manager.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO themes
+         (id, name, author, description, is_builtin, css_variables, metadata_json, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7,
+                 COALESCE((SELECT created_at FROM themes WHERE id=?1), strftime('%s','now')),
+                 strftime('%s','now'))",
+        params![id, name, author, description, if is_builtin { 1 } else { 0 }, css_variables, metadata_json],
+    )
+    .map_err(|e| format!("[Storage] save_theme: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_theme(
+    manager: State<'_, StorageManager>,
+    id: String,
+) -> Result<Option<Theme>, String> {
+    let conn = manager.conn.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, name, author, description, is_builtin, css_variables, metadata_json, created_at, updated_at FROM themes WHERE id = ?1 LIMIT 1")
+        .map_err(|e| format!("[Storage] get_theme prepare: {}", e))?;
+    let theme = stmt.query_row(params![id], |row| {
+        Ok(Theme {
+            id: row.get(0)?, name: row.get(1)?, author: row.get(2)?,
+            description: row.get(3)?, is_builtin: row.get::<_, i32>(4)? != 0,
+            css_variables: row.get(5)?, metadata_json: row.get(6)?,
+            created_at: row.get(7)?, updated_at: row.get(8)?,
+        })
+    }).ok();
+    Ok(theme)
+}
+
+#[tauri::command]
+pub async fn get_all_themes(
+    manager: State<'_, StorageManager>,
+) -> Result<Vec<Theme>, String> {
+    let conn = manager.conn.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT id, name, author, description, is_builtin, css_variables, metadata_json, created_at, updated_at FROM themes ORDER BY is_builtin DESC, name ASC")
+        .map_err(|e| format!("[Storage] get_all_themes prepare: {}", e))?;
+    let themes: Vec<Theme> = stmt.query_map([], |row| {
+        Ok(Theme {
+            id: row.get(0)?, name: row.get(1)?, author: row.get(2)?,
+            description: row.get(3)?, is_builtin: row.get::<_, i32>(4)? != 0,
+            css_variables: row.get(5)?, metadata_json: row.get(6)?,
+            created_at: row.get(7)?, updated_at: row.get(8)?,
+        })
+    }).map_err(|e| format!("[Storage] get_all_themes query: {}", e))?
+    .filter_map(|r| r.ok()).collect();
+    Ok(themes)
+}
+
+#[tauri::command]
+pub async fn delete_theme(
+    manager: State<'_, StorageManager>,
+    id: String,
+) -> Result<(), String> {
+    let conn = manager.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM themes WHERE id = ?1 AND is_builtin = 0", params![id])
+        .map_err(|e| format!("[Storage] delete_theme: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_active_theme_id(
+    manager: State<'_, StorageManager>,
+) -> Result<Option<String>, String> {
+    let conn = manager.conn.lock().map_err(|e| e.to_string())?;
+    let result = conn.query_row(
+        "SELECT value FROM auth_progress WHERE key = 'active_theme_id'",
+        [], |row| row.get::<_, String>(0),
+    ).ok();
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn set_active_theme_id(
+    manager: State<'_, StorageManager>,
+    theme_id: String,
+) -> Result<(), String> {
+    let conn = manager.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO auth_progress (key, value, updated_at) VALUES ('active_theme_id', ?1, strftime('%s','now'))",
+        params![theme_id],
+    ).map_err(|e| format!("[Storage] set_active_theme: {}", e))?;
+    Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CHAT WALLPAPERS (3 команды)
+// ═══════════════════════════════════════════════════════════════════
+
+#[tauri::command]
+pub async fn save_chat_wallpaper(
+    manager: State<'_, StorageManager>,
+    chat_id: String,
+    wallpaper_type: String,
+    wallpaper_value: String,
+    blur: f64,
+    opacity: f64,
+    brightness: f64,
+) -> Result<(), String> {
+    let conn = manager.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO chat_wallpapers (chat_id, wallpaper_type, wallpaper_value, blur, opacity, brightness, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, strftime('%s','now'))",
+        params![chat_id, wallpaper_type, wallpaper_value, blur, opacity, brightness],
+    ).map_err(|e| format!("[Storage] save_chat_wallpaper: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_chat_wallpaper(
+    manager: State<'_, StorageManager>,
+    chat_id: String,
+) -> Result<Option<ChatWallpaper>, String> {
+    let conn = manager.conn.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT chat_id, wallpaper_type, wallpaper_value, blur, opacity, brightness, updated_at FROM chat_wallpapers WHERE chat_id = ?1 LIMIT 1")
+        .map_err(|e| format!("[Storage] get_chat_wallpaper prepare: {}", e))?;
+    let wallpaper = stmt.query_row(params![chat_id], |row| {
+        Ok(ChatWallpaper {
+            chat_id: row.get(0)?, wallpaper_type: row.get(1)?,
+            wallpaper_value: row.get(2)?, blur: row.get(3)?,
+            opacity: row.get(4)?, brightness: row.get(5)?,
+            updated_at: row.get(6)?,
+        })
+    }).ok();
+    Ok(wallpaper)
+}
+
+#[tauri::command]
+pub async fn delete_chat_wallpaper(
+    manager: State<'_, StorageManager>,
+    chat_id: String,
+) -> Result<(), String> {
+    let conn = manager.conn.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM chat_wallpapers WHERE chat_id = ?1", params![chat_id])
+        .map_err(|e| format!("[Storage] delete_chat_wallpaper: {}", e))?;
+    Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// AUTH PROGRESS (3 команды)
 // ═══════════════════════════════════════════════════════════════════
 
 #[tauri::command]

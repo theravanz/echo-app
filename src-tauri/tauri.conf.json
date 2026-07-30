@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "echo-tauri",
-  "version": "0.2.1",
+  "productName": "Echo",
+  "version": "0.2.2",
   "identifier": "com.theravanz.echo-tauri",
   "build": {
     "frontendDist": "../out",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "echo-tauri",
+        "title": "Echo",
         "width": 800,
         "height": 600,
         "resizable": true,
@@ -39,6 +39,18 @@
       "icons/icon.png"
     ],
     "android": {
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "mobile": [
+        {
+          "scheme": ["echomes"]
+        }
+      ],
+      "desktop": {
+        "schemes": ["echomes"]
+      }
     }
   }
 }

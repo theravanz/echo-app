@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, memo, useCallback, Suspense } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   TbSearch as Search,
   TbPlus as Plus,
@@ -159,6 +159,7 @@ const GlassPanel = ({ children, className }: { children: React.ReactNode, classN
 
 function EchoAppContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const isMobile = useIsMobile();
   const { language } = useTranslation();
 
@@ -229,6 +230,70 @@ function EchoAppContent() {
   const { connectionStatus, setConnectionStatus } = useConnection(processPendingQueue);
   const { searchOpen, setSearchOpen, searchQuery, searchResults, isSearching, isSearchFocused, setIsSearchFocused, recentSearches, searchRef, searchTimeoutRef, handleSearch, handleStartChat } = useProfiles();
   const { settings: notificationSettings } = useNotificationSettings(user);
+
+  // === Reusable function to open chat by username ===
+  const openChatByUsername = useCallback(async (rawUsername: string) => {
+    if (!user) return;
+    const username = rawUsername.replace(/^@/, '');
+    
+    // Reset UI state to ensure the chat becomes visible
+    setIsSettingsOpen(false);
+    setActiveTab('chats');
+
+    // 1. Try to find in current chat list
+    let existing = chats.find(
+      (c) => (c.username || '').toLowerCase() === username.toLowerCase(),
+    );
+
+    // 2. If not found, fetch from Supabase
+    if (!existing) {
+      try {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('username', username)
+          .maybeSingle();
+
+        if (profile) {
+          existing = {
+            id: profile.id,
+            username: profile.username,
+            display_name: profile.display_name,
+            avatar_url: profile.avatar_url || undefined,
+            avatar_color: profile.avatar_color || undefined,
+            bio: profile.bio || undefined,
+            public_key: profile.public_key || undefined,
+            unreadCount: 0,
+          } as Chat;
+          setChats((prev) => prev.some((c) => c.id === existing!.id) ? prev : [existing!, ...prev]);
+        } else {
+          const { data: channel } = await supabase
+            .from('channels')
+            .select('*')
+            .eq('username', username)
+            .maybeSingle();
+          if (channel) {
+            existing = {
+              id: channel.id,
+              username: channel.username,
+              display_name: channel.name,
+              avatar_url: channel.avatar_url || undefined,
+              unreadCount: 0,
+            } as Chat;
+            setChats((prev) => prev.some((c) => c.id === existing!.id) ? prev : [existing!, ...prev]);
+          }
+        }
+      } catch (err) {
+        console.error('[Deep-link] Error resolving user:', err);
+      }
+    }
+
+    if (existing) {
+      setSelectedChat(existing);
+      fetchMessages(existing.id, user.id);
+    }
+  }, [user, chats, setChats, setSelectedChat, fetchMessages]);
+
   const { notifyNewMessage } = useNotifications({ user, chats, settings: notificationSettings, onNotificationClick: (chatId) => setSelectedChat(chats.find(c => c.id === chatId) || null) });
 
  
@@ -310,6 +375,48 @@ useEffect(() => {
     window.visualViewport?.removeEventListener('scroll', handler);
   };
 }, [isMobile]);
+
+  // Deep link listener — warm start (echomes://...) when app is already open
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    (async () => {
+      try {
+        const fn = await listen<string[]>('deep-link://new-url', async (event) => {
+          console.log('[DeepLink] Warm start received:', event.payload);
+          
+          // В Tauri v2 payload — это уже массив строк, парсить его не нужно
+          const urls = Array.isArray(event.payload) ? event.payload : [event.payload];
+          const url = urls[0];
+          if (!url) return;
+
+          const match = url.match(/echomes:\/\/(?:@)?([^/?#\s]+)/);
+          if (match && match[1]) {
+            const username = match[1];
+            console.log('[DeepLink] Opening chat with:', username);
+            
+            // Принудительно выводим окно на передний план
+            try {
+              const win = getCurrentWindow();
+              await win.unminimize();
+              await win.show();
+              await win.setFocus();
+            } catch (e) {
+              console.warn('[DeepLink] Failed to focus window:', e);
+            }
+
+            // Вызываем функцию открытия чата
+            openChatByUsername(username);
+          }
+        });
+        unlisten = fn;
+      } catch (err) {
+        console.error('[DeepLink] Listener setup failed:', err);
+      }
+    })();
+
+    return () => { if (unlisten) unlisten(); };
+  }, [openChatByUsername]);
 
 useEffect(() => {
   let isMounted = true;
@@ -470,6 +577,17 @@ useEffect(() => {
     isMounted = false;
   };
 }, []);
+
+// === Open chat by ?chat=username parameter from initial load ===
+const deepLinkChat = searchParams.get('chat');
+const initialChatHandled = useRef(false);
+useEffect(() => {
+  if (user && deepLinkChat && !initialChatHandled.current) {
+    initialChatHandled.current = true;
+    openChatByUsername(deepLinkChat);
+    router.replace('/app', { scroll: false });
+  }
+}, [user, deepLinkChat, openChatByUsername, router]);
 
 // === Realtime subscriptions ===
 useRealtime({

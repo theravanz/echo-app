@@ -282,4 +282,144 @@
   .safe-top-offset {
     top: calc(var(--safe-area-top) + 1rem);
   }
+
+  /* ═══ Echo Glassmorphism Mode ═══ */
+  /* Default CSS variables for glass effects */
+  :root {
+    --glass-blur: 12px;
+    --glass-opacity: 0.6;
+    --glass-saturation: 0%;
+    --chat-wallpaper: '';
+    --chat-wallpaper-size: cover;
+    --chat-wallpaper-repeat: no-repeat;
+    --chat-wallpaper-blur: 0px;
+  }
+
+  /* When glass mode is enabled, panels get backdrop-filter */
+  body.echo-glass-mode .bg-card\/30,
+  body.echo-glass-mode .backdrop-blur-2xl {
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturation));
+  }
+
+  body.echo-glass-mode .bg-card {
+    background-color: color-mix(in oklch, var(--card) var(--glass-opacity), transparent);
+  }
+
+  /* Chat wallpaper background layer */
+  .chat-wallpaper-layer {
+    position: absolute;
+    inset: 0;
+    background-image: var(--chat-wallpaper);
+    background-size: var(--chat-wallpaper-size);
+    background-repeat: var(--chat-wallpaper-repeat);
+    filter: blur(var(--chat-wallpaper-blur));
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ═══ Echo Color Override Mode ═══ */
+  /* When echo-color-override is active on body, all hardcoded text-white/X
+     and bg-white/X utility classes are remapped to use CSS variables.
+     This allows the modular theme system to control icon & text colors
+     that were originally hardcoded with Tailwind's text-white utility. */
+
+  /* ── Text color overrides ── */
+  body.echo-color-override .text-white {
+    color: var(--icon-primary) !important;
+  }
+  body.echo-color-override .text-white\/90 {
+    color: color-mix(in oklch, var(--icon-primary) 90%, transparent) !important;
+  }
+  body.echo-color-override .text-white\/80 {
+    color: color-mix(in oklch, var(--icon-primary) 80%, transparent) !important;
+  }
+  body.echo-color-override .text-white\/70 {
+    color: color-mix(in oklch, var(--icon-primary) 70%, transparent) !important;
+  }
+  body.echo-color-override .text-white\/60 {
+    color: color-mix(in oklch, var(--icon-muted) 100%, transparent) !important;
+  }
+  body.echo-color-override .text-white\/50 {
+    color: color-mix(in oklch, var(--icon-muted) 85%, transparent) !important;
+  }
+  body.echo-color-override .text-white\/40 {
+    color: color-mix(in oklch, var(--icon-muted) 70%, transparent) !important;
+  }
+  body.echo-color-override .text-white\/35 {
+    color: color-mix(in oklch, var(--icon-muted) 60%, transparent) !important;
+  }
+  body.echo-color-override .text-white\/30 {
+    color: color-mix(in oklch, var(--icon-muted) 50%, transparent) !important;
+  }
+  body.echo-color-override .text-white\/25 {
+    color: color-mix(in oklch, var(--icon-muted) 42%, transparent) !important;
+  }
+  body.echo-color-override .text-white\/20 {
+    color: color-mix(in oklch, var(--icon-muted) 35%, transparent) !important;
+  }
+  body.echo-color-override .text-white\/15 {
+    color: color-mix(in oklch, var(--icon-muted) 25%, transparent) !important;
+  }
+  body.echo-color-override .text-white\/10 {
+    color: color-mix(in oklch, var(--icon-muted) 18%, transparent) !important;
+  }
+  body.echo-color-override .text-white\/5 {
+    color: color-mix(in oklch, var(--icon-muted) 10%, transparent) !important;
+  }
+
+  /* ── Background color overrides (buttons, borders, surfaces) ── */
+  body.echo-color-override .bg-white {
+    background-color: var(--surface-white) !important;
+  }
+  body.echo-color-override .bg-white\/90 {
+    background-color: color-mix(in oklch, var(--surface-white) 90%, transparent) !important;
+  }
+  body.echo-color-override .bg-white\/80 {
+    background-color: color-mix(in oklch, var(--surface-white) 80%, transparent) !important;
+  }
+  body.echo-color-override .bg-white\/70 {
+    background-color: color-mix(in oklch, var(--surface-white) 70%, transparent) !important;
+  }
+  body.echo-color-override .bg-white\/60 {
+    background-color: color-mix(in oklch, var(--surface-white) 60%, transparent) !important;
+  }
+  body.echo-color-override .bg-white\/50 {
+    background-color: color-mix(in oklch, var(--surface-white) 50%, transparent) !important;
+  }
+  body.echo-color-override .bg-white\/40 {
+    background-color: color-mix(in oklch, var(--surface-white) 40%, transparent) !important;
+  }
+  body.echo-color-override .bg-white\/30 {
+    background-color: color-mix(in oklch, var(--surface-white) 30%, transparent) !important;
+  }
+  body.echo-color-override .bg-white\/20 {
+    background-color: color-mix(in oklch, var(--surface-white) 20%, transparent) !important;
+  }
+  body.echo-color-override .bg-white\/10 {
+    background-color: color-mix(in oklch, var(--surface-white) 10%, transparent) !important;
+  }
+  body.echo-color-override .bg-white\/5 {
+    background-color: color-mix(in oklch, var(--surface-white) 5%, transparent) !important;
+  }
+  body.echo-color-override .bg-white\/\[0\.02\] {
+    background-color: color-mix(in oklch, var(--surface-white) 2%, transparent) !important;
+  }
+  body.echo-color-override .bg-white\/\[0\.04\] {
+    background-color: color-mix(in oklch, var(--surface-white) 4%, transparent) !important;
+  }
+
+  /* ── Border color overrides ── */
+  body.echo-color-override .border-white {
+    border-color: var(--surface-white) !important;
+  }
+  body.echo-color-override .border-white\/10 {
+    border-color: color-mix(in oklch, var(--surface-white) 10%, transparent) !important;
+  }
+  body.echo-color-override .border-white\/5 {
+    border-color: color-mix(in oklch, var(--surface-white) 5%, transparent) !important;
+  }
+  body.echo-color-override .border-white\/20 {
+    border-color: color-mix(in oklch, var(--surface-white) 20%, transparent) !important;
+  }
 }

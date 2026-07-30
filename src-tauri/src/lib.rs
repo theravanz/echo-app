@@ -69,10 +69,29 @@ fn init_vault(app: &AppHandle<tauri::Wry>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // tauri-plugin-sql УДАЛЁН — монополия rusqlite
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_deep_link::init());
+
+    // Single-instance плагин доступен только на десктопе (Windows/Linux/macOS).
+    // На Android/iOS он не нужен и не компилируется.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+        // Перехватываем второй экземпляр (warm start на десктопе).
+        // Если в CLI-аргументах есть echomes:// — эмитим событие
+        // для уже работающего фронтенда.
+        if let Some(url) = args.iter().find(|a| a.starts_with("echomes://")) {
+            let _ = app.emit("deep-link://new-url", vec![url.clone()]);
+        }
+        // Выводим окно на передний план
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.set_focus();
+        }
+    }));
+
+    builder
         .invoke_handler(tauri::generate_handler![
             // Notification commands
             handle_notification_click,
@@ -97,6 +116,17 @@ pub fn run() {
             storage::delete_device,
             storage::save_account,
             storage::get_account,
+            // Theme commands
+            storage::save_theme,
+            storage::get_theme,
+            storage::get_all_themes,
+            storage::delete_theme,
+            storage::get_active_theme_id,
+            storage::set_active_theme_id,
+            // Chat wallpaper commands
+            storage::save_chat_wallpaper,
+            storage::get_chat_wallpaper,
+            storage::delete_chat_wallpaper,
             // Auth progress commands (persist auth across app restarts)
             storage::save_auth_progress,
             storage::get_auth_progress,

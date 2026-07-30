@@ -39,6 +39,7 @@ import {
 import type { UserProfile } from "@/hooks/echo/types";
 import { useNotificationSettings, type NotificationSettings } from "@/hooks/echo/use-notification-settings";
 import { ProfileEditPanel, type EditableProfile } from "@/components/echo/app/profile-edit-panel";
+import InterfaceSettings from "@/components/echo/app/interface-settings";
 
 interface SettingsModalProps {
   user: any;
@@ -76,7 +77,7 @@ const LANGUAGES = [
   { code: 'ar', label: 'Arabic', native: 'العربية' }
 ];
 
-type ViewType = 'profile' | 'privacy' | 'devices' | 'language' | 'alerts' | null;
+type ViewType = 'profile' | 'privacy' | 'devices' | 'language' | 'alerts' | 'interface' | null;
 
 interface MenuItem {
   id: string;
@@ -98,7 +99,7 @@ const menuSections: MenuSection[] = [
       { id: 'profile', icon: User, label: 'Identity', action: 'profile' },
       { id: 'security', icon: ShieldCheck, label: 'Security' },
       { id: 'alerts', icon: Bell, label: 'Alerts', action: 'alerts' },
-      { id: 'interface', icon: Palette, label: 'Interface' },
+      { id: 'interface', icon: Palette, label: 'Interface', action: 'interface' },
       { id: 'network', icon: Wifi, label: 'Network' },
       { id: 'storage', icon: HardDrive, label: 'Storage' },
     ]
@@ -632,6 +633,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
                         activeView === 'devices' ? renderDevices() :
                         activeView === 'privacy' ? renderPrivacy() :
                         activeView === 'alerts' ? renderAlerts() :
+                        activeView === 'interface' ? <InterfaceSettings user={user} onBack={() => setActiveView(null)} onClose={onClose} /> :
                         renderLanguage();
     return (
       <div className="fixed inset-0 z-[200] bg-background flex flex-col safe-top safe-bottom" onClick={onClose}>
@@ -758,6 +760,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
              activeView === 'privacy' ? renderPrivacy() :
              activeView === 'language' ? renderLanguage() :
              activeView === 'alerts' ? renderAlerts() :
+             activeView === 'interface' ? <InterfaceSettings user={user} onBack={() => setActiveView(null)} onClose={onClose} /> :
             (
               <div className="p-10">
                 <div className="flex items-center justify-between mb-10">
