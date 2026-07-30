@@ -8,6 +8,7 @@ import { getDevices, deleteDevice, generateHWID, saveDevice, type Device } from 
 import {
   TbX as X,
   TbArrowLeft as ArrowLeft,
+  TbChevronDown as ChevronDownIcon,
   TbBell as Bell,
   TbDatabase as Database,
   TbShield as Shield,
@@ -77,7 +78,7 @@ const LANGUAGES = [
   { code: 'ar', label: 'Arabic', native: 'العربية' }
 ];
 
-type ViewType = 'profile' | 'privacy' | 'devices' | 'language' | 'alerts' | 'interface' | null;
+type ViewType = 'profile' | 'privacy' | 'devices' | 'language' | 'alerts' | 'interface' | 'security' | null;
 
 interface MenuItem {
   id: string;
@@ -85,31 +86,46 @@ interface MenuItem {
   label: string;
   sublabel?: string;
   action?: ViewType;
+  badge?: 'beta' | 'wip';
 }
 
 interface MenuSection {
   label: string;
   items: MenuItem[];
+  isSecurity?: boolean;
 }
+
+const Badge = ({ type }: { type: 'beta' | 'wip' }) => (
+  <span className={`text-[8px] font-mono uppercase tracking-widest px-1.5 py-0.5 rounded-full border ${
+    type === 'beta' ? 'text-primary border-primary/30 bg-primary/10' : 'text-amber-500 border-amber-500/30 bg-amber-500/10'
+  }`}>
+    {type === 'beta' ? 'Beta' : 'In Development'}
+  </span>
+);
 
 const menuSections: MenuSection[] = [
   {
     label: 'Core System',
     items: [
       { id: 'profile', icon: User, label: 'Identity', action: 'profile' },
-      { id: 'security', icon: ShieldCheck, label: 'Security' },
-      { id: 'alerts', icon: Bell, label: 'Alerts', action: 'alerts' },
-      { id: 'interface', icon: Palette, label: 'Interface', action: 'interface' },
-      { id: 'network', icon: Wifi, label: 'Network' },
-      { id: 'storage', icon: HardDrive, label: 'Storage' },
+      { id: 'alerts', icon: Bell, label: 'Alerts', action: 'alerts', badge: 'beta' },
+      { id: 'interface', icon: Palette, label: 'Interface', action: 'interface', badge: 'beta' },
+      { id: 'storage', icon: HardDrive, label: 'Storage', badge: 'wip' },
+      { id: 'network', icon: Wifi, label: 'Network', badge: 'wip' },
+    ]
+  },
+  {
+    label: 'Security',
+    isSecurity: true,
+    items: [
+      { id: 'privacy', icon: Shield, label: 'Privacy', action: 'privacy' },
+      { id: 'devices', icon: HardDrive, label: 'Devices', action: 'devices' },
     ]
   },
   {
     label: 'Advanced',
     items: [
-      { id: 'privacy', icon: Shield, label: 'Privacy', action: 'privacy' },
-      { id: 'devices', icon: HardDrive, label: 'Devices', action: 'devices' },
-      { id: 'language', icon: Language, label: 'Language', action: 'language' },
+      { id: 'language', icon: Language, label: 'Language', action: 'language', badge: 'wip' },
     ]
   }
 ];
@@ -130,6 +146,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
 
   // VPN Detection — check IP/timezone mismatch
   const [isVpnDetected, setIsVpnDetected] = useState(false);
+  const [securityExpanded, setSecurityExpanded] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -629,12 +646,86 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
   // --- Main Render ---
   // If a sub-view is active on mobile, show it fullscreen
   if (isMobile && activeView) {
-    const viewContent = activeView === 'profile' ? renderProfile() :
-                        activeView === 'devices' ? renderDevices() :
-                        activeView === 'privacy' ? renderPrivacy() :
-                        activeView === 'alerts' ? renderAlerts() :
-                        activeView === 'interface' ? <InterfaceSettings user={user} onBack={() => setActiveView(null)} onClose={onClose} /> :
-                        renderLanguage();
+    let viewContent: React.ReactNode;
+    switch (activeView) {
+      case 'profile':
+        viewContent = renderProfile();
+        break;
+      case 'devices':
+        viewContent = renderDevices();
+        break;
+      case 'privacy':
+        viewContent = renderPrivacy();
+        break;
+      case 'alerts':
+        viewContent = (
+          <div className="p-4 md:p-10 space-y-2">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-2xl font-display font-bold tracking-tight flex items-center gap-2">Alerts <Badge type="beta" /></h2>
+              <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40" onClick={onClose}>
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            {renderAlerts()}
+          </div>
+        );
+        break;
+      case 'interface':
+        viewContent = (
+          <div className="p-4 md:p-10 space-y-2">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-2xl font-display font-bold tracking-tight flex items-center gap-2">Interface <Badge type="beta" /></h2>
+              <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40" onClick={onClose}>
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <InterfaceSettings user={user} onBack={() => setActiveView(null)} onClose={onClose} />
+          </div>
+        );
+        break;
+      case 'security':
+        viewContent = (
+          <div className="p-4 md:p-10 space-y-4">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-2xl font-display font-bold tracking-tight">Security</h2>
+              <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40" onClick={() => setActiveView(null)}>
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+            </div>
+            {menuSections.find(s => s.isSecurity)?.items.map(item => {
+              const Icon = item.icon;
+              return (
+                <button key={item.id} onClick={() => item.action && setActiveView(item.action)} className="w-full flex items-center gap-4 p-5 rounded-[28px] border border-white/5 bg-white/[0.02] hover:bg-white/5 transition-all">
+                  <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
+                    <Icon className="w-5 h-5 text-white/60" />
+                  </div>
+                  <div className="flex-1 text-left">
+                    <div className="text-sm font-bold">{item.label}</div>
+                    <div className="text-xs text-white/40">Manage {item.label.toLowerCase()} settings</div>
+                  </div>
+                  <ArrowLeft className="w-4 h-4 text-white/20 rotate-180" />
+                </button>
+              );
+            })}
+          </div>
+        );
+        break;
+      default:
+        viewContent = (
+          <div className="p-4 md:p-10 space-y-2">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-2xl font-display font-bold tracking-tight">
+                {activeView === 'language' ? 'Language' : activeView === 'network' ? 'Network' : 'Storage'} <Badge type="wip" />
+              </h2>
+              <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40" onClick={onClose}>
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            {activeView === 'language' ? renderLanguage() : <div className="text-xs text-white/40 font-mono uppercase tracking-widest">Coming soon</div>}
+          </div>
+        );
+    }
+
     return (
       <div className="fixed inset-0 z-[200] bg-background flex flex-col safe-top safe-bottom" onClick={onClose}>
         <div className="flex-1 overflow-y-auto" onClick={e => e.stopPropagation()}>
@@ -671,40 +762,72 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
             </div>
 
             {/* Menu Categories */}
-            {menuSections.map(section => (
-              <div key={section.label} className="mb-6">
-                <div className="text-[9px] font-mono uppercase tracking-[0.4em] text-white/30 px-2 mb-3">{section.label}</div>
-                <div className="space-y-1">
-                  {section.items.map(item => {
-                    const Icon = item.icon;
-                    return (
-                      <button
-                        key={item.id}
-                        className="w-full flex items-center gap-4 p-4 rounded-[24px] hover:bg-white/5 transition-all"
-                        onClick={() => item.action ? setActiveView(item.action) : undefined}
-                      >
-                        <div className="w-10 h-10 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
-                          <Icon className="w-5 h-5 text-white/40" />
-                        </div>
-                        <div className="flex-1 text-left">
-                          <div className="text-sm font-bold">{item.label}</div>
-                          {(item.id === 'language' ? currentLang : item.sublabel) && (
-                            <div className="text-xs text-white/40">
-                              {item.id === 'language' ? LANGUAGES.find(l => l.code === currentLang)?.native || currentLang : item.sublabel}
+            {menuSections.map(section => {
+              if (section.isSecurity) {
+                return (
+                  <div key={section.label} className="mb-6">
+                    <div className="text-[9px] font-mono uppercase tracking-[0.4em] text-white/30 px-2 mb-3">{section.label}</div>
+                    <div className="space-y-1">
+                      {section.items.map(item => {
+                        const Icon = item.icon;
+                        return (
+                          <button
+                            key={item.id}
+                            className="w-full flex items-center gap-4 p-4 rounded-[24px] hover:bg-white/5 transition-all"
+                            onClick={() => item.action ? setActiveView(item.action) : undefined}
+                          >
+                            <div className="w-10 h-10 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
+                              <Icon className="w-5 h-5 text-white/40" />
+                            </div>
+                            <div className="flex-1 text-left">
+                              <div className="text-sm font-bold">{item.label}</div>
+                            </div>
+                            <div className="w-6 h-6 rounded-full bg-white/5 flex items-center justify-center">
+                              <ArrowLeft className="w-3.5 h-3.5 text-white/20 rotate-180" />
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div key={section.label} className="mb-6">
+                  <div className="text-[9px] font-mono uppercase tracking-[0.4em] text-white/30 px-2 mb-3">{section.label}</div>
+                  <div className="space-y-1">
+                    {section.items.map(item => {
+                      const Icon = item.icon;
+                      const sublabel = item.id === 'language' ? LANGUAGES.find(l => l.code === currentLang)?.native || currentLang : item.sublabel;
+                      return (
+                        <button
+                          key={item.id}
+                          className="w-full flex items-center gap-4 p-4 rounded-[24px] hover:bg-white/5 transition-all"
+                          onClick={() => item.action ? setActiveView(item.action) : undefined}
+                        >
+                          <div className="w-10 h-10 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
+                            <Icon className="w-5 h-5 text-white/40" />
+                          </div>
+                          <div className="flex-1 text-left">
+                            <div className="flex items-center gap-2">
+                              <div className="text-sm font-bold">{item.label}</div>
+                              {item.badge && <Badge type={item.badge} />}
+                            </div>
+                            {sublabel && <div className="text-xs text-white/40">{sublabel}</div>}
+                          </div>
+                          {item.action && (
+                            <div className="w-6 h-6 rounded-full bg-white/5 flex items-center justify-center">
+                              <ArrowLeft className="w-3.5 h-3.5 text-white/20 rotate-180" />
                             </div>
                           )}
-                        </div>
-                        {item.action && (
-                          <div className="w-6 h-6 rounded-full bg-white/5 flex items-center justify-center">
-                            <ArrowLeft className="w-3.5 h-3.5 text-white/20 rotate-180" />
-                          </div>
-                        )}
-                      </button>
-                    );
-                  })}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>
@@ -718,39 +841,88 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
         <div className="flex h-full md:h-[640px]">
           {/* Sidebar */}
           <aside className="w-56 border-r border-white/5 bg-black/20 p-8 space-y-8 shrink-0 hidden sm:block">
-            {menuSections.map(section => (
-              <div key={section.label}>
-                <div className="text-[9px] font-mono text-white/20 uppercase tracking-[0.4em] mb-5">{section.label}</div>
-                <div className="space-y-1">
-                  {section.items.map(item => {
-                    const Icon = item.icon;
-                    const isActive = activeView === item.action;
-                    return (
+            {menuSections.map(section => {
+              if (section.isSecurity) {
+                const securityItems = section.items.filter(i => i.id !== 'security');
+                return (
+                  <div key={section.label}>
+                    <div className="text-[9px] font-mono text-white/20 uppercase tracking-[0.4em] mb-5">{section.label}</div>
+                    <div className="space-y-1">
                       <button
-                        key={item.id}
-                        className={cn(
-                          "w-full flex items-center gap-4 py-3 px-4 rounded-2xl transition-all relative",
-                          isActive
-                            ? "bg-primary text-primary-foreground shadow-2xl shadow-primary/20 font-bold"
-                            : "text-white/40 hover:text-white hover:bg-white/5"
-                        )}
-                        onClick={() => item.action ? setActiveView(item.action) : undefined}
+                        className="w-full flex items-center gap-3 py-3 px-4 rounded-2xl transition-all text-white/40 hover:text-white hover:bg-white/5"
+                        onClick={() => setSecurityExpanded(v => !v)}
                       >
-                        <Icon className="w-4 h-4 shrink-0" />
-                        <div className="text-left">
-                          <span className="text-xs uppercase tracking-widest block">{item.label}</span>
-                          {(item.id === 'language' ? currentLang : item.sublabel) && (
-                            <span className="text-[8px] text-white/30 uppercase tracking-wider mt-0.5 block">
-                              {item.id === 'language' ? LANGUAGES.find(l => l.code === currentLang)?.native || currentLang : item.sublabel}
-                            </span>
-                          )}
+                        <ShieldCheck className="w-4 h-4 shrink-0" />
+                        <div className="text-left flex-1">
+                          <span className="text-xs uppercase tracking-widest block">Security</span>
                         </div>
+                        <ChevronDownIcon className={`w-4 h-4 transition-transform duration-200 ${securityExpanded ? 'rotate-180' : ''}`} />
                       </button>
-                    );
-                  })}
+                      {securityExpanded && (
+                        <div className="ml-4 mt-1 space-y-1 border-l border-white/10 pl-3">
+                          {securityItems.map(item => {
+                            const Icon = item.icon;
+                            const isActive = activeView === item.action;
+                            return (
+                              <button
+                                key={item.id}
+                                className={cn(
+                                  "w-full flex items-center gap-3 py-2.5 px-3 rounded-2xl transition-all relative",
+                                  isActive
+                                    ? "bg-primary text-primary-foreground shadow-2xl shadow-primary/20 font-bold"
+                                    : "text-white/40 hover:text-white hover:bg-white/5"
+                                )}
+                                onClick={() => item.action ? setActiveView(item.action) : undefined}
+                              >
+                                <Icon className="w-4 h-4 shrink-0" />
+                                <div className="text-left">
+                                  <span className="text-xs uppercase tracking-widest block">{item.label}</span>
+                                </div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div key={section.label}>
+                  <div className="text-[9px] font-mono text-white/20 uppercase tracking-[0.4em] mb-5">{section.label}</div>
+                  <div className="space-y-1">
+                    {section.items.map(item => {
+                      const Icon = item.icon;
+                      const isActive = activeView === item.action;
+                      return (
+                        <button
+                          key={item.id}
+                          className={cn(
+                            "w-full flex items-center gap-3 py-3 px-4 rounded-2xl transition-all relative",
+                            isActive
+                              ? "bg-primary text-primary-foreground shadow-2xl shadow-primary/20 font-bold"
+                              : "text-white/40 hover:text-white hover:bg-white/5"
+                          )}
+                          onClick={() => item.action ? setActiveView(item.action) : undefined}
+                        >
+                          <Icon className="w-4 h-4 shrink-0" />
+                          <div className="text-left">
+                            <span className="text-xs uppercase tracking-widest block">{item.label}</span>
+                            {(item.id === 'language' ? currentLang : item.sublabel) && (
+                              <span className="text-[8px] text-white/30 uppercase tracking-wider mt-0.5 block">
+                                {item.id === 'language' ? LANGUAGES.find(l => l.code === currentLang)?.native || currentLang : item.sublabel}
+                              </span>
+                            )}
+                          </div>
+                          {item.badge && <Badge type={item.badge} />}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </aside>
 
           {/* Content */}
@@ -758,9 +930,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
             {activeView === 'profile' ? renderProfile() :
              activeView === 'devices' ? renderDevices() :
              activeView === 'privacy' ? renderPrivacy() :
-             activeView === 'language' ? renderLanguage() :
-             activeView === 'alerts' ? renderAlerts() :
-             activeView === 'interface' ? <InterfaceSettings user={user} onBack={() => setActiveView(null)} onClose={onClose} /> :
+             activeView === 'language' ? <div className="p-4 md:p-10 space-y-2"><div className="flex items-center justify-between mb-2"><h2 className="text-3xl font-display font-bold tracking-tight flex items-center gap-2">Language <Badge type="wip" /></h2><button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white transition-all" onClick={onClose}><X className="w-6 h-6" /></button></div>{renderLanguage()}</div> :
+             activeView === 'alerts' ? <div className="p-4 md:p-10 space-y-2"><div className="flex items-center justify-between mb-2"><h2 className="text-3xl font-display font-bold tracking-tight flex items-center gap-2">Alerts <Badge type="beta" /></h2><button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white transition-all" onClick={onClose}><X className="w-6 h-6" /></button></div>{renderAlerts()}</div> :
+             activeView === 'interface' ? <div className="p-4 md:p-10 space-y-2"><div className="flex items-center justify-between mb-2"><h2 className="text-3xl font-display font-bold tracking-tight flex items-center gap-2">Interface <Badge type="beta" /></h2><button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white transition-all" onClick={onClose}><X className="w-6 h-6" /></button></div><InterfaceSettings user={user} onBack={() => setActiveView(null)} onClose={onClose} /></div> :
+             activeView === 'network' ? <div className="p-4 md:p-10 space-y-2"><div className="flex items-center justify-between mb-2"><h2 className="text-3xl font-display font-bold tracking-tight flex items-center gap-2">Network <Badge type="wip" /></h2><button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white transition-all" onClick={onClose}><X className="w-6 h-6" /></button></div><div className="text-xs text-white/40 font-mono uppercase tracking-widest">Coming soon</div></div> :
+             activeView === 'storage' ? <div className="p-4 md:p-10 space-y-2"><div className="flex items-center justify-between mb-2"><h2 className="text-3xl font-display font-bold tracking-tight flex items-center gap-2">Storage <Badge type="wip" /></h2><button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white transition-all" onClick={onClose}><X className="w-6 h-6" /></button></div><div className="text-xs text-white/40 font-mono uppercase tracking-widest">Coming soon</div></div> :
             (
               <div className="p-10">
                 <div className="flex items-center justify-between mb-10">

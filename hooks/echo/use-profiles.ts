@@ -21,6 +21,7 @@ interface UseProfilesReturn {
   handleSearch: (query: string) => void;
   handleStartChat: (profile: UserProfile, chats: Chat[], onSelectChat: (chat: Chat) => void, onAddChat: (profile: UserProfile) => void) => void;
   clearSearch: () => void;
+  setCurrentUserId: (id: string) => void;
 }
 
 export function useProfiles(): UseProfilesReturn {
@@ -69,17 +70,23 @@ export function useProfiles(): UseProfilesReturn {
     searchTimeoutRef.current = setTimeout(async () => {
       setIsSearching(true);
       try {
+        const me = userRef.current;
+        if (!me) {
+          setSearchResults([]);
+          return;
+        }
         const { data, error } = await supabase
           .from("profiles")
           .select("*")
           .or(`username.ilike.%${query}%,display_name.ilike.%${query}%`)
-          .neq("id", userRef.current ?? "")
+          .neq("id", me)
           .limit(10);
 
         if (error) throw error;
         setSearchResults(data || []);
       } catch (err) {
-        console.error("Search error:", err);
+        const message = err instanceof Error ? err.message : JSON.stringify(err) || 'Unknown search error';
+        console.error("Search error:", message);
       } finally {
         setIsSearching(false);
       }
@@ -128,5 +135,6 @@ export function useProfiles(): UseProfilesReturn {
     handleSearch,
     handleStartChat,
     clearSearch,
+    setCurrentUserId,
   };
 }

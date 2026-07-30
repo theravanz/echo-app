@@ -69,11 +69,16 @@ export function ChatWallpaper({
           background:
             preset === "photo" && photoUrl
               ? `url(${photoUrl}) center/cover`
-              : "linear-gradient(165deg, #1a1420, #0a0a0d 55%)",
+              : 'var(--chat-wallpaper)',
         }}
       />
 
-      {preset === "photo" && <div className="absolute inset-0 bg-black/55 backdrop-blur-[2px]" />}
+      {preset === "photo" && photoUrl && (
+        <div
+          className="absolute inset-0 backdrop-blur-[2px]"
+          style={{ backgroundColor: 'var(--chat-wallpaper-overlay)' }}
+        />
+      )}
 
       {preset === "doodle" &&
         DOODLE_LAYOUT.map((d, i) => {
@@ -81,12 +86,13 @@ export function ChatWallpaper({
           return (
             <Icon
               key={i}
-              className="absolute text-white"
+              className="absolute"
               style={{
                 top: `${d.top}%`,
                 left: `${d.left}%`,
                 width: d.size,
                 height: d.size,
+                color: 'var(--icon-primary, currentColor)',
                 opacity: 0.07,
                 transform: `rotate(${d.rot}deg)`,
               }}

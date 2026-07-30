@@ -203,6 +203,7 @@ export interface LocalThemeState {
   glassOpacity: number;
   appIcon: string;
   colorOverrideEnabled: boolean;
+  textSharpness: number;
 }
 
 export function saveLocalThemeState(state: LocalThemeState): void {

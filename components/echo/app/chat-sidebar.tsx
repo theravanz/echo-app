@@ -123,18 +123,18 @@ export function ChatSidebar({
       {/* Search Overlay */}
       <AnimatePresence>
         {searchOpen && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-30 bg-background backdrop-blur-2xl rounded-3xl overflow-hidden safe-top">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-30 bg-background/95 backdrop-blur-2xl rounded-3xl overflow-hidden safe-top border border-white/5">
             <div className="flex flex-col h-full">
               <div className="px-4 pt-4 pb-2 space-y-4">
                 <div className="flex items-center gap-3">
-                  <button onClick={() => onSearchOpen(false)} className="w-9 h-9 rounded-xl flex items-center justify-center text-white/40 hover:bg-white/5 hover:text-white transition-all">
+                  <button onClick={() => onSearchOpen(false)} className="w-9 h-9 rounded-xl flex items-center justify-center text-muted-foreground hover:bg-white/5 hover:text-foreground transition-all">
                     <ArrowLeft className="w-5 h-5" />
                   </button>
                   <div className="flex-1 relative">
-                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-white/30" />
+                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <input autoFocus value={searchQuery} onChange={(e) => onSearch(e.target.value)} onFocus={() => onSearchFocus(true)}
                       placeholder="Search contacts, messages..."
-                      className="relative w-full h-10 bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 text-sm text-white placeholder:text-white/20 outline-none focus:border-primary/40 transition-all" />
+                      className="relative w-full h-10 bg-white/5 border border-white/10 rounded-xl pl-10 pr-4 text-sm text-foreground placeholder:text-muted-foreground/60 outline-none focus:border-primary/40 transition-all" />
                   </div>
                 </div>
                 <div className="max-h-[calc(100vh-200px)] overflow-y-auto scrollbar-hide space-y-1">
@@ -142,33 +142,33 @@ export function ChatSidebar({
                     <div className="flex items-center justify-center py-8"><RefreshCw className="w-5 h-5 text-primary animate-spin" /></div>
                   ) : searchResults.length > 0 ? (
                     searchResults.map(profile => (
-                      <button key={profile.id} onClick={() => onStartChat(profile)} className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-white/5 transition-all group">
+                      <button key={profile.id} onClick={() => onStartChat(profile)} className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-primary/5 transition-all group">
                         <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm overflow-hidden shrink-0">
                           {profile.avatar_url ? <img src={profile.avatar_url} className="w-full h-full object-cover" alt="" /> : safeChar(profile.display_name || profile.username)}
                         </div>
                         <div className="text-left min-w-0">
-                          <div className="text-sm font-bold truncate">{profile.display_name || profile.username}</div>
-                          <div className="text-[10px] text-white/30 font-mono">@{profile.username}</div>
+                          <div className="text-sm font-bold truncate text-foreground">{profile.display_name || profile.username}</div>
+                          <div className="text-[10px] text-muted-foreground/70 font-mono">@{profile.username}</div>
                         </div>
-                        <Plus className="w-4 h-4 text-white/20 ml-auto shrink-0" />
+                        <Plus className="w-4 h-4 text-primary/20 ml-auto shrink-0" />
                       </button>
                     ))
                   ) : searchQuery ? (
-                    <div className="text-center py-8 text-white/30 text-sm">No users found</div>
+                    <div className="text-center py-8 text-muted-foreground/80 text-sm">No users found</div>
                   ) : null}
                   {!searchQuery && recentSearches.length > 0 && (
                     <>
-                      <div className="flex items-center gap-2 px-3 py-3"><Clock className="w-3.5 h-3.5 text-white/30" /><span className="text-[10px] font-mono uppercase tracking-widest text-white/30">Recent</span></div>
+                      <div className="flex items-center gap-2 px-3 py-3"><Clock className="w-3.5 h-3.5 text-muted-foreground/60" /><span className="text-[10px] font-mono uppercase tracking-widest text-muted-foreground/60">Recent</span></div>
                       {recentSearches.map(profile => (
-                        <button key={profile.id} onClick={() => onStartChat(profile)} className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-all">
-                          <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-xs font-bold shrink-0">{safeChar(profile.display_name || profile.username)}</div>
-                          <span className="text-sm truncate">{profile.display_name || profile.username}</span>
+                        <button key={profile.id} onClick={() => onStartChat(profile)} className="w-full flex items-center gap-3 p-2.5 rounded-xl hover:bg-primary/5 transition-all">
+                          <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-xs font-bold shrink-0">{safeChar(profile.display_name || profile.username)}</div>
+                          <span className="text-sm truncate text-foreground">{profile.display_name || profile.username}</span>
                         </button>
                       ))}
                     </>
                   )}
                   {!searchQuery && recentSearches.length === 0 && (
-                    <div className="flex flex-col items-center justify-center py-12 text-white/20">
+                    <div className="flex flex-col items-center justify-center py-12 text-muted-foreground/40">
                       <Search className="w-8 h-8 mb-3" /><span className="text-xs font-mono uppercase tracking-widest">Search users</span>
                     </div>
                   )}

@@ -18,9 +18,9 @@ import {
   TbColorSwatch as ColorSwatchIcon,
   TbLoader2 as Loader,
   TbDeviceDesktop as DesktopIcon,
-  TbType as TypeIcon,
   TbTextColor as TextColorIcon,
   TbContrast as ContrastIcon,
+  TbLetterT as LetterTIcon,
 } from "react-icons/tb";
 
 import {
@@ -176,9 +176,9 @@ const InterfaceSettings: React.FC<InterfaceSettingsProps> = ({ user, onBack, onC
       id: themeId, name: presetName, cssVariables, metadata,
       wallpaperUrl, wallpaperMode, wallpaperBlur,
       glassEnabled, glassBlur, glassOpacity, appIcon: selectedIconId,
-      colorOverrideEnabled,
+      colorOverrideEnabled, textSharpness,
     });
-  }, [themeId, presetName, cssVariables, metadata, wallpaperUrl, wallpaperMode, wallpaperBlur, glassEnabled, glassBlur, glassOpacity, selectedIconId, colorOverrideEnabled]);
+  }, [themeId, presetName, cssVariables, metadata, wallpaperUrl, wallpaperMode, wallpaperBlur, glassEnabled, glassBlur, glassOpacity, selectedIconId, colorOverrideEnabled, textSharpness]);
 
   useEffect(() => {
     const saved = loadLocalThemeState();
@@ -195,15 +195,20 @@ const InterfaceSettings: React.FC<InterfaceSettingsProps> = ({ user, onBack, onC
       applyThemeToDOM(saved.cssVariables);
       applyChatWallpaper(saved.wallpaperUrl, saved.wallpaperMode || "cover", saved.wallpaperBlur || 0);
     }
-    setGlassEnabled(glass.enabled);
-    setGlassBlur(glass.blur);
-    setGlassOpacity(glass.opacity);
-    applyGlassSettings(glass.enabled, glass.blur, glass.opacity);
+    if (glass) {
+      setGlassEnabled(glass.enabled);
+      setGlassBlur(glass.blur);
+      setGlassOpacity(glass.opacity);
+      applyGlassSettings(glass.enabled, glass.blur, glass.opacity);
+    }
     if (saved) {
       setColorOverrideEnabled(saved.colorOverrideEnabled ?? false);
       applyColorOverride(saved.colorOverrideEnabled ?? false);
+      setTextSharpness(saved.textSharpness ?? 100);
+      document.documentElement.style.setProperty('--text-sharpness', `${saved.textSharpness ?? 100}%`);
     } else {
       applyColorOverride(false);
+      document.documentElement.style.setProperty('--text-sharpness', '100%');
     }
     const hexes: Record<string, string> = {};
     COLOR_ITEMS.forEach(item => { hexes[item.varName] = getCssVarAsHex(item.varName); });
@@ -263,6 +268,11 @@ const InterfaceSettings: React.FC<InterfaceSettingsProps> = ({ user, onBack, onC
   const toggleColorOverride = (enabled: boolean) => {
     setColorOverrideEnabled(enabled);
     applyColorOverride(enabled);
+  };
+
+  const updateTextSharpness = (value: number) => {
+    setTextSharpness(value);
+    document.documentElement.style.setProperty('--text-sharpness', `${value}%`);
   };
 
   /** Синхронизирует все -foreground переменные с --foreground */
@@ -598,6 +608,70 @@ const InterfaceSettings: React.FC<InterfaceSettingsProps> = ({ user, onBack, onC
                   <AppWindowIcon className="w-4 h-4 text-white/30" />
                 </div>
               </div>
+            </div>
+          </div>
+        </GlassPanel>
+      </section>
+
+      {/* ═══════════ BLOCK 6: TEXT & ICON COLORS ═══════════ */}
+      <section className="space-y-6">
+        <SectionLabel>Text &amp; Icon Colors</SectionLabel>
+
+        <GlassPanel className="p-6 rounded-[28px]">
+          <CornerBrackets />
+          <div className="space-y-6">
+            {/* Override toggle */}
+            <div className="flex items-center justify-between py-1">
+              <div className="flex items-center gap-4">
+                <div className="w-10 h-10 rounded-2xl bg-primary/15 flex items-center justify-center">
+                  <TextColorIcon className="w-5 h-5 text-primary" />
+                </div>
+                <div>
+                  <div className="font-bold text-sm">Override Hardcoded Colors</div>
+                  <div className="text-xs text-white/40 mt-0.5">Remap all text-white &amp; icon colors to theme variables</div>
+                </div>
+              </div>
+              <ToggleSwitch checked={colorOverrideEnabled} onChange={toggleColorOverride} />
+            </div>
+
+            {/* Text sharpness slider */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-mono uppercase tracking-widest text-white/40">Text Sharpness / Contrast</label>
+                <span className="text-xs font-mono text-primary">{textSharpness}%</span>
+              </div>
+              <RangeSlider value={textSharpness} min={50} max={150} step={5}
+                onChange={updateTextSharpness} />
+              <p className="text-[9px] text-white/20 font-mono">Adjusts CSS contrast filter for text rendering. 100% = normal.</p>
+            </div>
+
+            {/* Sync button */}
+            <button
+              onClick={syncAllTextColors}
+              className="h-10 px-6 rounded-2xl bg-primary/15 border border-primary/30 text-primary font-bold text-xs uppercase tracking-widest hover:bg-primary/25 transition-all flex items-center justify-center gap-2"
+            >
+              <LetterTIcon className="w-4 h-4" /> Sync All Text Colors
+            </button>
+
+            {/* Color pickers for text/icon colors */}
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4 pt-4 border-t border-white/5">
+              {TEXT_ICON_ITEMS.map(item => (
+                <div key={item.varName} className="space-y-3">
+                  <label className="text-[10px] font-mono uppercase tracking-widest text-white/40 block">{item.label}</label>
+                  <div className="flex items-center gap-3">
+                    <div className="relative w-12 h-12 rounded-2xl border-2 border-white/10 overflow-hidden shrink-0 cursor-pointer">
+                      <div className="absolute inset-0" style={{ backgroundColor: colorHexes[item.varName] || "#8b7aec" }} />
+                      <input type="color" value={colorHexes[item.varName] || "#8b7aec"}
+                        onChange={(e) => handleColorChange(item.varName, e.target.value)}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" aria-label={item.label} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-mono text-white/60 uppercase truncate">{colorHexes[item.varName] || "#8b7aec"}</div>
+                      <div className="text-[9px] font-mono text-white/20 truncate">{item.varName}</div>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </GlassPanel>

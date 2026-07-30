@@ -293,6 +293,8 @@
     --chat-wallpaper-size: cover;
     --chat-wallpaper-repeat: no-repeat;
     --chat-wallpaper-blur: 0px;
+    --chat-wallpaper-overlay: oklch(0 0 0 / 0.0);
+    --text-sharpness: 100%;
   }
 
   /* When glass mode is enabled, panels get backdrop-filter */
@@ -319,6 +321,9 @@
   }
 
   /* ═══ Echo Color Override Mode ═══ */
+  /* Text sharpness / contrast slider output */
+  body.echo-text-sharpness { --text-sharpness: 100%; }
+
   /* When echo-color-override is active on body, all hardcoded text-white/X
      and bg-white/X utility classes are remapped to use CSS variables.
      This allows the modular theme system to control icon & text colors

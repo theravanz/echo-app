@@ -228,7 +228,11 @@ function EchoAppContent() {
   const { messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage } = useMessages(chats);
   const { addToQueue, processPendingQueue } = useNetworkQueue();
   const { connectionStatus, setConnectionStatus } = useConnection(processPendingQueue);
-  const { searchOpen, setSearchOpen, searchQuery, searchResults, isSearching, isSearchFocused, setIsSearchFocused, recentSearches, searchRef, searchTimeoutRef, handleSearch, handleStartChat } = useProfiles();
+  const { searchOpen, setSearchOpen, searchQuery, searchResults, isSearching, isSearchFocused, setIsSearchFocused, recentSearches, searchRef, searchTimeoutRef, handleSearch, handleStartChat, clearSearch, setCurrentUserId } = useProfiles();
+
+  useEffect(() => {
+    if (user?.id) setCurrentUserId(user.id);
+  }, [user?.id, setCurrentUserId]);
   const { settings: notificationSettings } = useNotificationSettings(user);
 
   // === Reusable function to open chat by username ===
