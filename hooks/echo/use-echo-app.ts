@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { clearAuthProgress } from '@/lib/auth-storage';
+import { deletePrivateKey } from '@/lib/db';
 import { useE2EE } from './use-e2ee';
 
 export const useEchoApp = (user: any) => {
@@ -236,7 +238,15 @@ export const useEchoApp = (user: any) => {
       filter: `user_id=eq.${user.id}`
     }, (payload: any) => {
       if (payload.old && payload.old.hwid === hwid) {
-        supabase.auth.signOut();
+        supabase.auth.signOut().catch(() => {});
+        clearAuthProgress().catch(() => {});
+        deletePrivateKey().catch(() => {});
+        try {
+          localStorage.removeItem('echo_public_key');
+          localStorage.removeItem('echo_mnemonic_backup');
+        } catch {
+          // ignore
+        }
         router.push('/auth');
       }
     }).subscribe();

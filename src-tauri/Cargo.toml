@@ -35,6 +35,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 # === Криптография (BIP-39 + Curve25519) ===
 bip39 = { version = "2.1", features = ["rand"] }
 x25519-dalek = { version = "2.0", features = ["static_secrets", "precomputed-tables"] }
+crypto_box = "0.9"
 base64 = "0.22"
 sha2 = "0.10"
 aes-gcm = "0.10"

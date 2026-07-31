@@ -1,10 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { cn, safeChar } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { getDevices, deleteDevice, generateHWID, saveDevice, type Device } from "@/lib/db";
+import { getDevices, deleteDevice, generateHWID, saveDevice, deletePrivateKey, type Device } from "@/lib/db";
+import { clearAuthProgress } from "@/lib/auth-storage";
 import {
   TbX as X,
   TbArrowLeft as ArrowLeft,
@@ -35,12 +37,14 @@ import {
   TbAlertTriangle as AlertTriangle,
   TbUserPlus as UserPlus,
   TbCheck as Check,
+  TbQrcode as QrCode,
 } from "react-icons/tb";
 
 import type { UserProfile } from "@/hooks/echo/types";
 import { useNotificationSettings, type NotificationSettings } from "@/hooks/echo/use-notification-settings";
 import { ProfileEditPanel, type EditableProfile } from "@/components/echo/app/profile-edit-panel";
 import InterfaceSettings from "@/components/echo/app/interface-settings";
+import { QrLoginScanner } from "@/components/echo/app/qr-login-scanner";
 
 interface SettingsModalProps {
   user: any;
@@ -131,11 +135,13 @@ const menuSections: MenuSection[] = [
 ];
 
 const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onClose, isQuarantined, onUpdateUser }) => {
+  const router = useRouter();
   const isMobile = useIsMobile();
   const [activeView, setActiveView] = useState<ViewType>(null);
   const [devices, setDevices] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [currentHwid, setCurrentHwid] = useState('');
+  const [showQrScanner, setShowQrScanner] = useState(false);
   const [isLastSeenVisible, setIsLastSeenVisible] = useState(user?.user_metadata?.privacy_last_seen !== false);
   const [currentLang, setCurrentLang] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -143,6 +149,35 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
     }
     return 'ru';
   });
+
+  const handleLogout = async () => {
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.warn('[Settings] Logout failed', e);
+    }
+
+    // Очищаем всё локальное состояние, чтобы на /auth не висели старые прогрессы / ключи
+    try {
+      await clearAuthProgress();
+    } catch {
+      // ignore
+    }
+    try {
+      await deletePrivateKey();
+    } catch {
+      // ignore
+    }
+    try {
+      localStorage.removeItem('echo_public_key');
+      localStorage.removeItem('echo_mnemonic_backup');
+    } catch {
+      // ignore
+    }
+
+    onClose?.();
+    router.push('/auth');
+  };
 
   // VPN Detection — check IP/timezone mismatch
   const [isVpnDetected, setIsVpnDetected] = useState(false);
@@ -368,6 +403,20 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
           </p>
         </div>
       </GlassPanel>
+
+      {/* Scan QR to authorize a new device (PC) */}
+      <button
+        onClick={() => setShowQrScanner(true)}
+        className="w-full flex items-center gap-4 p-5 rounded-[28px] bg-primary/10 border border-primary/20 hover:bg-primary/15 transition-all group"
+      >
+        <div className="w-12 h-12 rounded-2xl bg-primary/20 flex items-center justify-center text-primary shrink-0 group-hover:scale-110 transition-transform">
+          <QrCode className="w-5 h-5" />
+        </div>
+        <div className="text-left flex-1">
+          <div className="font-bold text-sm">Scan QR to Sign In</div>
+          <div className="text-xs text-white/50 mt-0.5">Authorize a new device by scanning its QR code</div>
+        </div>
+      </button>
 
       {devices.filter(d => d.hwid === currentHwid).length === 0 && (
         <div className="flex items-center gap-4 p-5 rounded-[28px] bg-primary/10 border border-primary/20">
@@ -731,6 +780,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
         <div className="flex-1 overflow-y-auto" onClick={e => e.stopPropagation()}>
           {viewContent}
         </div>
+        {showQrScanner && <QrLoginScanner onClose={() => setShowQrScanner(false)} />}
       </div>
     );
   }
@@ -828,8 +878,22 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
                 </div>
               );
             })}
+            <div className="pt-4 border-t border-white/5">
+              <button
+                onClick={handleLogout}
+                className="w-full flex items-center gap-4 p-4 rounded-[24px] text-destructive/80 hover:text-destructive hover:bg-destructive/10 transition-all"
+              >
+                <div className="w-10 h-10 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
+                  <LogOut className="w-5 h-5" />
+                </div>
+                <div className="flex-1 text-left">
+                  <div className="text-sm font-bold">Выйти</div>
+                </div>
+              </button>
+            </div>
           </div>
         </div>
+        {showQrScanner && <QrLoginScanner onClose={() => setShowQrScanner(false)} />}
       </div>
     );
   }
@@ -923,6 +987,17 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
                 </div>
               );
             })}
+            <div className="pt-4 border-t border-white/5">
+              <button
+                onClick={handleLogout}
+                className="w-full flex items-center gap-3 py-3 px-4 rounded-2xl transition-all text-destructive/80 hover:text-destructive hover:bg-destructive/10"
+              >
+                <LogOut className="w-4 h-4 shrink-0" />
+                <div className="text-left">
+                  <span className="text-xs uppercase tracking-widest block font-bold">Выйти</span>
+                </div>
+              </button>
+            </div>
           </aside>
 
           {/* Content */}
@@ -1025,6 +1100,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
           </div>
         </div>
       </div>
+      {showQrScanner && <QrLoginScanner onClose={() => setShowQrScanner(false)} />}
     </div>
   );
 };

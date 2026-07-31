@@ -1,0 +1,128 @@
+//! QR-авторизация: полный конвейер шифрования и отправки E2EE-ключа.
+//!
+//! Мобилка сканирует QR (`app://auth?session_id=…&web_pub_key=…`), генерирует
+//! эфемерную X25519-пару, вычисляет общий секрет (DH), шифрует E2EE-ключ
+//! (XSalsa20-Poly1305 через crypto_box::SalsaBox — совместимо с tweetnacl
+//! nacl.box) и отправляет зашифрованный пакет в канал Supabase Realtime
+//! через REST RPC broadcast_message. Сервер видит только ciphertext.
+
+use crypto_box::{PublicKey, SecretKey, SalsaBox, aead::{Aead, AeadCore, OsRng}};
+use serde_json::json;
+
+/// Транспорт: POST зашифрованного пакета в Supabase Realtime через RPC.
+///
+/// Имитирует JS-клиент Supabase: anon-ключ в `apikey` и `Authorization: Bearer`.
+/// Сервер (RPC broadcast_message) пересылает payload подписчикам канала
+/// `auth_<session_id>` через postgres_changes. Видит только ciphertext.
+pub async fn send_e2ee_key_broadcast(
+    supabase_url: &str,
+    supabase_anon_key: &str,
+    session_id: &str,
+    mob_pub_key_hex: &str,
+    encrypted_key_hex: &str,
+    nonce_hex: &str,
+) -> Result<(), String> {
+    let body = json!({
+        "channel": format!("auth_{}", session_id),
+        "event": "key_exchange",
+        "payload": {
+            "mob_pub_key": mob_pub_key_hex,
+            "encrypted_key": encrypted_key_hex,
+            "nonce": nonce_hex,
+        }
+    });
+
+    let endpoint = format!("{}/rest/v1/rpc/broadcast_message", supabase_url);
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&endpoint)
+        .header("apikey", supabase_anon_key)
+        .header("Authorization", format!("Bearer {}", supabase_anon_key))
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("[QR-Broadcast] HTTP request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("[QR-Broadcast] RPC returned {}: {}", status, text));
+    }
+
+    log::info!("[QR-Broadcast] E2EE key sent to channel auth_{}", session_id);
+    Ok(())
+}
+
+/// Tauri-команда: полный конвейер QR-авторизации для мобилки.
+///
+/// E2EE-ключ передаёт фронтенд (loadPrivateKey → vault || localStorage),
+/// а НЕ загружается из vault в Rust. Это решает проблему "vault пуст":
+/// если ключ сохранился в localStorage-fallback (vault_save_private_key
+/// молча упал), фронтенд всё равно его найдёт и передаст сюда.
+///
+/// Шаги:
+/// 1. Парсит web_pub_key из hex (из QR).
+/// 2. Генерирует эфемерную X25519-пару (crypto_box::SecretKey).
+/// 3. Создаёт JSON-конверт { e2eeKey, session }.
+/// 4. Шифрует через SalsaBox (XSalsa20-Poly1305 = nacl.box).
+/// 5. Отправляет ciphertext в канал auth_<session_id> через REST RPC.
+#[tauri::command]
+pub async fn qr_send_e2ee_key(
+    session_id: String,
+    web_pub_key: String,
+    e2ee_key: String,
+    session_data: Option<serde_json::Value>,
+) -> Result<(), String> {
+    // 1. Распарсить web_pub_key из hex → [u8; 32].
+    let web_pub_bytes = hex::decode(&web_pub_key)
+        .map_err(|e| format!("[QR] Неверный hex web_pub_key: {}", e))?;
+    let web_pub_array: [u8; 32] = web_pub_bytes
+        .try_into()
+        .map_err(|_| "[QR] web_pub_key должен быть 32 байта".to_string())?;
+    let web_public = PublicKey::from(web_pub_array);
+
+    // 2. Сгенерировать эфемерную X25519-пару.
+    let mut rng = OsRng;
+    let mob_secret = SecretKey::generate(&mut rng);
+    let mob_public = mob_secret.public_key();
+    let mob_pub_key_hex = hex::encode(mob_public.as_bytes());
+
+    // 3. Создать JSON-конверт { e2eeKey, session }.
+    let envelope = json!({
+        "e2eeKey": e2ee_key,
+        "session": session_data,
+    });
+    let message = serde_json::to_vec(&envelope)
+        .map_err(|e| format!("[QR] Ошибка сериализации конверта: {}", e))?;
+
+    // 4. Зашифровать через SalsaBox (XSalsa20-Poly1305, nacl.box-совместимо).
+    let salsa_box = SalsaBox::new(&web_public, &mob_secret);
+    let nonce = SalsaBox::generate_nonce(&mut rng); // 24 байта
+    let ciphertext = salsa_box
+        .encrypt(&nonce, message.as_slice())
+        .map_err(|e| format!("[QR] Ошибка шифрования: {:?}", e))?;
+
+    let encrypted_key_hex = hex::encode(&ciphertext);
+    let nonce_hex = hex::encode(nonce.as_slice());
+
+    // 5. Отправить в канал auth_<session_id> через Supabase RPC.
+    let supabase_url = std::env::var("NEXT_PUBLIC_SUPABASE_URL")
+        .unwrap_or_else(|_| "https://aoxzpqwiwuzypydexfrn.supabase.co".to_string());
+    let supabase_anon_key = std::env::var("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+        .unwrap_or_else(|_| "sb_publishable_AZAFBfQ2W5HPP9a78ty4hA_cokr8Y19".to_string());
+
+    send_e2ee_key_broadcast(
+        &supabase_url,
+        &supabase_anon_key,
+        &session_id,
+        &mob_pub_key_hex,
+        &encrypted_key_hex,
+        &nonce_hex,
+    )
+    .await?;
+
+    log::info!("[QR] E2EE key exchange complete: channel auth_{}", session_id);
+    Ok(())
+}

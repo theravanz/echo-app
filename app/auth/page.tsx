@@ -15,6 +15,7 @@ import { encodeBase64 } from 'tweetnacl-util';
 import { QRCodeSVG } from 'qrcode.react';
 // @ts-ignore
 import { invoke } from '@tauri-apps/api/core';
+import { useIsMobile } from '@/hooks/use-mobile';
 import {
   signInWithPhoneNumber,
   RecaptchaVerifier,
@@ -36,6 +37,23 @@ import {
   TbShieldCheck as ShieldCheck
 } from 'react-icons/tb';
 import { cn } from '@/lib/utils';
+
+// ── E2EE key exchange helpers (tweetnacl, без новых зависимостей) ────
+/** Uint8Array → lowercase hex. */
+function toHex(bytes: Uint8Array): string {
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+/** Uint8Array → URL-safe base64 (без padding) — компактнее hex для QR. */
+function toB64Url(bytes: Uint8Array): string {
+  return encodeBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+/** hex string → Uint8Array. */
+function fromHex(hex: string): Uint8Array {
+  const clean = hex.length % 2 ? '0' + hex : hex;
+  const out = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(clean.substr(i * 2, 2), 16);
+  return out;
+}
 
 type Step = 1 | 2 | 3 | 4 | 5;
 
@@ -62,14 +80,18 @@ function AuthPageContent() {
   const [isExistingUser, setIsExistingUser] = useState(false);
   const [mnemonicInput, setMnemonicInput] = useState<string>('');
   const [restoreError, setRestoreError] = useState('');
+  const isMobile = useIsMobile();
   const [showQR, setShowQR] = useState(false);
   const [qrValue, setQrValue] = useState('');
 
-  // QR Login (desktop: generates challenge, polls status)
-  const [qrToken, setQrToken] = useState<string>('');
-  const [qrStatus, setQrStatus] = useState<'pending' | 'approved' | 'expired'>('pending');
-  const [qrExpiresAt, setQrExpiresAt] = useState<string>('');
+  // QR Login (web/desktop): эфемерный X25519 + Supabase Realtime Broadcast
+  const [qrStatus, setQrStatus] = useState<'pending' | 'approved' | 'expired' | 'connecting' | 'waiting'>('connecting');
   const [qrApproving, setQrApproving] = useState(false);
+
+  // Эфемерный материал Диффи–Хеллмана (только в памяти, на время обмена)
+  const webKeyPairRef = useRef<{ publicKey: Uint8Array; secretKey: Uint8Array } | null>(null);
+  const sessionIdRef = useRef<string>('');
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
   // Step 1: Phone
   const [phone, setPhone] = useState('');
@@ -154,103 +176,185 @@ function AuthPageContent() {
   }, []);
 
   // ═══════════════════════════════════════════════════════════════════
-  // QR Login: generate challenge on desktop, poll for approval
+  // Если пользователь не авторизован (и не добавляет аккаунт) — сбрасываем
+  // старый прогресс авторизации, чтобы на /auth не висел предыдущий шаг.
   // ═══════════════════════════════════════════════════════════════════
   useEffect(() => {
-    const isDesktop = isTauri;
-    if (!isDesktop) return;
-
+    if (addingAccount) return;
     let cancelled = false;
-    // На десктопе window.location.origin — localhost, а QR должен вести на публичный URL
-    const baseUrl =
-      (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_APP_URL) ||
-      'https://echo-mes.vercel.app';
-
     (async () => {
       try {
-        const { data, error } = await supabase
-          .from('login_challenges')
-          .insert({ status: 'pending' })
-          .select('token, expires_at')
-          .maybeSingle();
-
-        if (cancelled) return;
-        if (error || !data?.token) {
-          console.warn('[QR] Challenge create error:', error?.message);
-          return;
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session && !cancelled) {
+          const saved = await loadAuthProgress();
+          if (saved && saved.step > 1) {
+            await clearAuthProgress().catch(() => {});
+            setCurrentStep(1);
+            setPhone('');
+            setEmail('');
+            setOtp(['', '', '', '', '', '', '', '']);
+            setAuthMode('sms');
+            setPhoneVerificationFailed(false);
+            setResendSeconds(0);
+          }
         }
-
-        setQrToken(data.token);
-        setQrExpiresAt(data.expires_at);
-        setQrValue(`${baseUrl}/auth/qr?token=${data.token}`);
-      } catch (err) {
-        console.warn('[QR] Challenge create failed:', err);
+      } catch {
+        // ignore
       }
     })();
-
     return () => { cancelled = true; };
-  }, [isTauri]);
+  }, [addingAccount]);
 
-  // Poll QR challenge status every 2s
+  // ═══════════════════════════════════════════════════════════════════
+  // QR Login (web/desktop): эфемерный X25519 + Supabase Realtime Broadcast
+  // ─ Мобилка сканирует QR (app://auth?s=…&k=<base64url>),
+  //   вычисляет общий секрет (DH), шифрует E2EE-ключ и шлёт ciphertext
+  //   в канал 'auth_<session_id>' (через Supabase Edge Function).
+  //   Supabase видит только ciphertext — ключи только у пиров.
+  // ═══════════════════════════════════════════════════════════════════
   useEffect(() => {
-    if (!qrToken) return;
-    const interval = setInterval(async () => {
+    // QR-панель видна только на десктоп-ширине (hidden md:flex).
+    if (isMobile) return;
+
+    let cancelled = false;
+    let done = false; // true после approved/expired — игнорим поздние события
+    let expiryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    // 1) Эфемерная X25519-пара (tweetnacl) — только для этого обмена.
+    const webKeyPair = nacl.box.keyPair();
+    webKeyPairRef.current = webKeyPair;
+
+    // 2) Идентификатор комнаты = имя Realtime-канала.
+    const sessionId =
+      typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : toHex(nacl.randomBytes(16));
+    sessionIdRef.current = sessionId;
+
+    // 3) QR — внутренний deep link, БЕЗ внешних доменов-заглушек.
+    //    base64url для ключа (43 символа вместо 64 hex) → меньше модулей →
+    //    камера телефона разрешает QR на бóльшем расстоянии.
+    setQrValue(`app://auth?s=${sessionId}&k=${toB64Url(webKeyPair.publicKey)}`);
+    const expiresAt = Date.now() + 5 * 60 * 1000; // 5 минут
+    setQrStatus('connecting');
+
+    // 4) Завершение обмена: расшифровать E2EE-ключ, сохранить, авторизовать.
+    //    Конверт: { e2eeKey: <base64 32B>, session?: <supabase session> }.
+    //    Фолбэк: сырой 32-байтовый ключ, если мобилка не прислала JSON.
+    const completeExchange = async (
+      mobPubKeyHex: string,
+      encryptedHex: string,
+      nonceHex: string,
+    ) => {
       try {
-        const { data } = await supabase
-          .from('login_challenges')
-          .select('status, session_data, user_id')
-          .eq('token', qrToken)
-          .maybeSingle();
+        const webSecret = webKeyPairRef.current?.secretKey;
+        if (!webSecret) throw new Error('Нет эфемерного приватного ключа');
 
-        if (data?.status === 'approved' && data.session_data) {
-          setQrStatus('approved');
-          setQrApproving(true);
-          clearInterval(interval);
+        const mobPubKey = fromHex(mobPubKeyHex);
+        const nonce = fromHex(nonceHex);        // 24 байта (nacl.box.nonceLength)
+        const ciphertext = fromHex(encryptedHex);
 
-          // Восстанавливаем сессию из мобильного приложения
-          await supabase.auth.setSession(data.session_data);
-          const { data: { session } } = await supabase.auth.getSession();
-          if (session) {
-            await persistSession(session).catch(() => {});
-            const { user: qrUser } = session;
-            const isE2eeInitialized = !!qrUser?.user_metadata?.e2ee_initialized;
-            setIsExistingUser(isE2eeInitialized);
+        // nacl.box.open: общий секрет (X25519 DH) вычисляется внутри tweetnacl.
+        const plaintext = nacl.box.open(ciphertext, nonce, mobPubKey, webSecret);
+        if (!plaintext) throw new Error('Расшифровка не удалась (ключ/nonce неверны)');
 
-            setVerifyLoading(false);
-            // Если приватный ключ уже есть на десктопе — сразу в успех
-            if (isE2eeInitialized && await loadPrivateKey()) {
-              goToStep(5);
-              setTimeout(() => {
-                setShowSuccess(true);
-                clearAuthProgress().catch(() => {});
-                setTimeout(() => router.push(returnTo), 5000);
-              }, 800);
-              return;
-            }
-
-            // Иначе — просим ввести мнемонику для восстановления E2EE ключа
-            goToStep(4);
-          }
-        } else if (data?.status === 'expired') {
-          setQrStatus('expired');
-          clearInterval(interval);
+        let e2eeKeyB64 = '';
+        let session: { access_token?: string; refresh_token?: string } | null = null;
+        try {
+          const env = JSON.parse(new TextDecoder().decode(plaintext));
+          e2eeKeyB64 = env.e2eeKey;
+          session = env.session ?? null;
+        } catch {
+          // Сырой 32-байтовый E2EE-ключ.
+          e2eeKeyB64 = encodeBase64(plaintext);
         }
+        if (!e2eeKeyB64) throw new Error('Пустой E2EE-ключ');
+
+        await savePrivateKey(e2eeKeyB64);
+
+        // Восстанавливаем Supabase-сессию, если она пришла в конверте.
+        if (session?.access_token && session?.refresh_token) {
+          const { error } = await supabase.auth.setSession({
+            access_token: session.access_token,
+            refresh_token: session.refresh_token,
+          });
+          if (error) throw error;
+          const { data: { session: sbSession } } = await supabase.auth.getSession();
+          if (sbSession) await persistSession(sbSession).catch(() => {});
+          setIsExistingUser(!!sbSession?.user?.user_metadata?.e2ee_initialized);
+        } else {
+          setIsExistingUser(true);
+        }
+
+        done = true;
+        setVerifyLoading(false);
+        setQrApproving(true);
+        setQrStatus('approved');
+        goToStep(5);
+        setTimeout(() => {
+          setShowSuccess(true);
+          clearAuthProgress().catch(() => {});
+          setTimeout(() => router.push(returnTo), 5000);
+        }, 800);
+        const ch = channelRef.current;
+        if (ch) { try { supabase.removeChannel(ch); } catch { /* ignore */ } }
       } catch (err) {
-        // Silent — таблица может не существовать
+        console.error('[QR] E2EE exchange failed:', err);
+        done = true;
+        setQrStatus('expired');
       }
-    }, 2000);
+    };
 
-    return () => clearInterval(interval);
-  }, [qrToken, returnTo]);
+    // 5) Подписка на postgres_changes канала 'auth_<session_id>'.
+    //    Broadcast (in-memory) нельзя наполнить из SQL, поэтому мобилка
+    //    шлёт через RPC broadcast_message → INSERT в auth_broadcasts,
+    //    а веб ловит INSERT через Realtime replication. Имя канала —
+    //    случайный UUID из QR, payload всё равно зашифрован (DH).
+    const channel = supabase.channel(`auth_${sessionId}`);
+    channelRef.current = channel;
 
-  // Auto-expire client-side when time runs out
-  useEffect(() => {
-    if (!qrExpiresAt || qrStatus !== 'pending') return;
-    const expires = new Date(qrExpiresAt).getTime();
-    const now = Date.now();
-    const timeout = setTimeout(() => setQrStatus('expired'), Math.max(0, expires - now));
-    return () => clearTimeout(timeout);
-  }, [qrExpiresAt, qrStatus]);
+    channel
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'auth_broadcasts', filter: `channel=eq.auth_${sessionId}` },
+        (change: any) => {
+          if (cancelled || done) return;
+          // change.new = { channel, event, payload:{ mob_pub_key, encrypted_key, nonce } }
+          const row = change?.new;
+          if (row?.event === 'key_exchange' && row?.payload?.mob_pub_key) {
+            completeExchange(row.payload.mob_pub_key, row.payload.encrypted_key, row.payload.nonce);
+          }
+        },
+      )
+      .subscribe((status: string) => {
+        if (cancelled || done) return;
+        if (status === 'SUBSCRIBED') {
+          setQrStatus('waiting'); // ждём INSERT от мобилки
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+          // Realtime сам переподключается; показываем «соединение».
+          setQrStatus('connecting');
+        }
+      });
+
+    // 6) Авто-истечение QR (5 минут).
+    expiryTimer = setTimeout(() => {
+      done = true;
+      setQrStatus('expired');
+      const ch = channelRef.current;
+      if (ch) { try { supabase.removeChannel(ch); } catch { /* ignore */ } }
+    }, Math.max(0, expiresAt - Date.now()));
+
+    return () => {
+      cancelled = true;
+      done = true;
+      if (expiryTimer) clearTimeout(expiryTimer);
+      const ch = channelRef.current;
+      if (ch) { try { supabase.removeChannel(ch); } catch { /* ignore */ } }
+      channelRef.current = null;
+      webKeyPairRef.current = null;
+      sessionIdRef.current = '';
+    };
+  }, [isMobile, returnTo]);
 
   // ═══════════════════════════════════════════════════════════════════
   // Persistence: сохранять прогресс при каждом изменении ключевых полей
@@ -738,11 +842,17 @@ function AuthPageContent() {
 
                   <div className="flex flex-col md:flex-row md:gap-6 md:items-stretch">
                     {/* Desktop: QR Code panel */}
-                    <div className="hidden md:flex flex-col items-center justify-center w-[220px] shrink-0">
+                    <div className="hidden md:flex flex-col items-center justify-center w-[280px] shrink-0">
                       <div className="bg-white p-4 rounded-2xl mb-4 shadow-lg relative">
-                        <QRCodeSVG value={qrValue || 'https://echo.app/login'} size={140} bgColor="#ffffff" fgColor="#000000" level="M" />
-                        {/* Status overlay */}
-                        {qrStatus !== 'pending' && (
+                        {qrValue ? (
+                          <QRCodeSVG value={qrValue} size={220} bgColor="#ffffff" fgColor="#000000" level="M" />
+                        ) : (
+                          <div className="w-[220px] h-[220px] flex items-center justify-center">
+                            <RefreshCw className="w-7 h-7 text-black/40 animate-spin" />
+                          </div>
+                        )}
+                        {/* Status overlay — только финальные состояния */}
+                        {(qrStatus === 'approved' || qrStatus === 'expired') && (
                           <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-2xl flex flex-col items-center justify-center gap-2">
                             {qrStatus === 'approved' ? (
                               <>
@@ -767,6 +877,7 @@ function AuthPageContent() {
                       <p className="text-[10px] text-white/30 font-mono uppercase tracking-widest text-center">
                         {qrStatus === 'approved' ? (language === 'ru' ? 'Подтверждено!' : 'Approved!') :
                          qrStatus === 'expired' ? (language === 'ru' ? 'QR истёк, обновите' : 'QR expired, refresh') :
+                         qrStatus === 'connecting' ? (language === 'ru' ? 'Соединение…' : 'Connecting…') :
                          (language === 'ru' ? 'Сканируйте для входа' : 'Scan to sign in')}
                       </p>
                       {qrApproving && (

@@ -2,6 +2,7 @@
 
 mod crypto;
 mod notification;
+mod qr_auth;
 mod stickers;
 mod storage;
 mod vault;
@@ -105,6 +106,8 @@ pub fn run() {
             crypto::generate_mnemonic,
             crypto::validate_mnemonic,
             crypto::generate_keys_from_mnemonic,
+            // QR Auth commands (E2EE key exchange: crypto + broadcast via Supabase Realtime)
+            qr_auth::qr_send_e2ee_key,
             // Storage commands (rusqlite, AES-256-GCM через vault)
             storage::save_session,
             storage::get_session,
