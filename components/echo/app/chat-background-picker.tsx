@@ -111,12 +111,12 @@ export function ChatBackgroundPicker({
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
             transition={{ type: "spring", damping: 35, stiffness: 300, mass: 0.8 }}
-            className="relative w-full max-w-lg bg-[#1c1c1e] rounded-t-3xl overflow-hidden"
+            className="relative w-full max-w-lg bg-background rounded-t-3xl overflow-hidden"
           >
             <div className="flex justify-center pt-3 pb-2">
-              <div className="w-10 h-1 rounded-full bg-white/20" />
+              <div className="w-10 h-1 rounded-full bg-muted-foreground/30" />
             </div>
-            <div className="px-5 pb-4 border-b border-white/5">
+            <div className="px-5 pb-4 border-b border-border">
               <h2 className="text-lg font-bold">Фон чата</h2>
             </div>
 
@@ -132,7 +132,7 @@ export function ChatBackgroundPicker({
                     whileTap={{ scale: 0.96 }}
                     onClick={() => (p.key === "photo" ? fileInputRef.current?.click() : setPreset(p.key))}
                     className={`flex-1 py-3 rounded-2xl text-xs font-semibold border flex items-center justify-center gap-1.5 ${
-                      preset === p.key ? "border-primary bg-primary/10 text-primary" : "border-white/10 bg-white/5 text-white/60"
+                      preset === p.key ? "border-primary bg-primary/10 text-primary" : "border-border bg-background text-muted-foreground"
                     }`}
                   >
                     {p.key === "photo" && preset === "photo" ? <Check className="w-3.5 h-3.5" /> : p.key === "photo" ? <Upload className="w-3.5 h-3.5" /> : null}

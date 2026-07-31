@@ -507,19 +507,13 @@ useEffect(() => {
         }
 
         if (!supabaseDevice) {
-          // Register in Supabase with .select() to get back the inserted row
+          // Register in Supabase — use only columns that exist in the schema
           try {
             const { data: insertedDevice, error: insertError } = await supabase.from('devices').insert({
               id: deviceId,
               user_id: userData.id,
               hwid,
-              device_name: navigator.userAgent || 'Echo Desktop',
               platform: navigator.platform || 'unknown',
-              os_name: navigator.platform || 'unknown',
-              browser_name: navigator.userAgent?.includes('Chrome') ? 'Chrome' : navigator.userAgent?.includes('Firefox') ? 'Firefox' : 'Echo Web',
-              is_current: true,
-              created_at: new Date().toISOString(),
-              last_active: new Date().toISOString(),
             }).select().maybeSingle();
 
             if (insertError) {
@@ -529,11 +523,7 @@ useEffect(() => {
                 id: deviceId,
                 user_id: userData.id,
                 hwid,
-                device_name: navigator.userAgent || 'Echo Desktop',
                 platform: navigator.platform || 'unknown',
-                is_current: true,
-                created_at: new Date().toISOString(),
-                last_active: new Date().toISOString(),
               }, { onConflict: 'hwid', ignoreDuplicates: false }).select().maybeSingle();
               supabaseDevice = upserted;
             } else {

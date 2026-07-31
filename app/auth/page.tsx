@@ -65,6 +65,12 @@ function AuthPageContent() {
   const [showQR, setShowQR] = useState(false);
   const [qrValue, setQrValue] = useState('');
 
+  // QR Login (desktop: generates challenge, polls status)
+  const [qrToken, setQrToken] = useState<string>('');
+  const [qrStatus, setQrStatus] = useState<'pending' | 'approved' | 'expired'>('pending');
+  const [qrExpiresAt, setQrExpiresAt] = useState<string>('');
+  const [qrApproving, setQrApproving] = useState(false);
+
   // Step 1: Phone
   const [phone, setPhone] = useState('');
   const [countryCode, setCountryCode] = useState('+7');
@@ -146,6 +152,105 @@ function AuthPageContent() {
       if (saved.phoneVerificationFailed) setPhoneVerificationFailed(true);
     }).catch(() => {});
   }, []);
+
+  // ═══════════════════════════════════════════════════════════════════
+  // QR Login: generate challenge on desktop, poll for approval
+  // ═══════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    const isDesktop = isTauri;
+    if (!isDesktop) return;
+
+    let cancelled = false;
+    // На десктопе window.location.origin — localhost, а QR должен вести на публичный URL
+    const baseUrl =
+      (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_APP_URL) ||
+      'https://echo-mes.vercel.app';
+
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('login_challenges')
+          .insert({ status: 'pending' })
+          .select('token, expires_at')
+          .maybeSingle();
+
+        if (cancelled) return;
+        if (error || !data?.token) {
+          console.warn('[QR] Challenge create error:', error?.message);
+          return;
+        }
+
+        setQrToken(data.token);
+        setQrExpiresAt(data.expires_at);
+        setQrValue(`${baseUrl}/auth/qr?token=${data.token}`);
+      } catch (err) {
+        console.warn('[QR] Challenge create failed:', err);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [isTauri]);
+
+  // Poll QR challenge status every 2s
+  useEffect(() => {
+    if (!qrToken) return;
+    const interval = setInterval(async () => {
+      try {
+        const { data } = await supabase
+          .from('login_challenges')
+          .select('status, session_data, user_id')
+          .eq('token', qrToken)
+          .maybeSingle();
+
+        if (data?.status === 'approved' && data.session_data) {
+          setQrStatus('approved');
+          setQrApproving(true);
+          clearInterval(interval);
+
+          // Восстанавливаем сессию из мобильного приложения
+          await supabase.auth.setSession(data.session_data);
+          const { data: { session } } = await supabase.auth.getSession();
+          if (session) {
+            await persistSession(session).catch(() => {});
+            const { user: qrUser } = session;
+            const isE2eeInitialized = !!qrUser?.user_metadata?.e2ee_initialized;
+            setIsExistingUser(isE2eeInitialized);
+
+            setVerifyLoading(false);
+            // Если приватный ключ уже есть на десктопе — сразу в успех
+            if (isE2eeInitialized && await loadPrivateKey()) {
+              goToStep(5);
+              setTimeout(() => {
+                setShowSuccess(true);
+                clearAuthProgress().catch(() => {});
+                setTimeout(() => router.push(returnTo), 5000);
+              }, 800);
+              return;
+            }
+
+            // Иначе — просим ввести мнемонику для восстановления E2EE ключа
+            goToStep(4);
+          }
+        } else if (data?.status === 'expired') {
+          setQrStatus('expired');
+          clearInterval(interval);
+        }
+      } catch (err) {
+        // Silent — таблица может не существовать
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [qrToken, returnTo]);
+
+  // Auto-expire client-side when time runs out
+  useEffect(() => {
+    if (!qrExpiresAt || qrStatus !== 'pending') return;
+    const expires = new Date(qrExpiresAt).getTime();
+    const now = Date.now();
+    const timeout = setTimeout(() => setQrStatus('expired'), Math.max(0, expires - now));
+    return () => clearTimeout(timeout);
+  }, [qrExpiresAt, qrStatus]);
 
   // ═══════════════════════════════════════════════════════════════════
   // Persistence: сохранять прогресс при каждом изменении ключевых полей
@@ -633,11 +738,42 @@ function AuthPageContent() {
 
                   <div className="flex flex-col md:flex-row md:gap-6 md:items-stretch">
                     {/* Desktop: QR Code panel */}
-                    <div className="hidden md:flex flex-col items-center justify-center w-[200px] shrink-0">
-                      <div className="bg-white p-4 rounded-2xl mb-4 shadow-lg">
+                    <div className="hidden md:flex flex-col items-center justify-center w-[220px] shrink-0">
+                      <div className="bg-white p-4 rounded-2xl mb-4 shadow-lg relative">
                         <QRCodeSVG value={qrValue || 'https://echo.app/login'} size={140} bgColor="#ffffff" fgColor="#000000" level="M" />
+                        {/* Status overlay */}
+                        {qrStatus !== 'pending' && (
+                          <div className="absolute inset-0 bg-white/80 backdrop-blur-sm rounded-2xl flex flex-col items-center justify-center gap-2">
+                            {qrStatus === 'approved' ? (
+                              <>
+                                <Check className="w-8 h-8 text-green-600" />
+                                <span className="text-[10px] font-mono uppercase tracking-widest text-green-700">Approved</span>
+                              </>
+                            ) : (
+                              <>
+                                <AlertTriangle className="w-8 h-8 text-amber-500" />
+                                <span className="text-[10px] font-mono uppercase tracking-widest text-amber-700">Expired</span>
+                                <button
+                                  onClick={() => window.location.reload()}
+                                  className="text-[9px] font-mono uppercase tracking-widest text-blue-700 underline mt-1"
+                                >
+                                  Refresh
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        )}
                       </div>
-                      <p className="text-[10px] text-white/30 font-mono uppercase tracking-widest text-center">{language === 'ru' ? 'Сканируйте для входа' : 'Scan to sign in'}</p>
+                      <p className="text-[10px] text-white/30 font-mono uppercase tracking-widest text-center">
+                        {qrStatus === 'approved' ? (language === 'ru' ? 'Подтверждено!' : 'Approved!') :
+                         qrStatus === 'expired' ? (language === 'ru' ? 'QR истёк, обновите' : 'QR expired, refresh') :
+                         (language === 'ru' ? 'Сканируйте для входа' : 'Scan to sign in')}
+                      </p>
+                      {qrApproving && (
+                        <p className="text-[9px] text-primary font-mono uppercase tracking-widest text-center mt-2 animate-pulse">
+                          {language === 'ru' ? 'Вход...' : 'Signing in...'}
+                        </p>
+                      )}
                     </div>
 
                     {/* Divider — desktop */}

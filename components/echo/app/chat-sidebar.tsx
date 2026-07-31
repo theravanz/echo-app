@@ -79,7 +79,7 @@ export function ChatSidebar({
   };
 
   return (
-    <aside className="w-full md:w-[360px] border-r border-white/5 flex flex-col bg-black/10 backdrop-blur-2xl z-20 shrink-0 transition-all duration-700 ease-in-out h-full safe-top">
+    <aside className="w-full md:w-[360px] border-r border-border flex flex-col bg-background backdrop-blur-2xl z-20 shrink-0 transition-all duration-700 ease-in-out h-full safe-top">
       <div className="h-16 md:h-20 px-4 md:px-6 pt-2 md:pt-0 flex items-center justify-between shrink-0">
         {activeTab === 'chats' ? (
           <div className="flex items-center gap-2">
@@ -88,17 +88,17 @@ export function ChatSidebar({
                 <button className="flex items-center gap-2 group">
                   {connectionIcon()}
                   {connectionLabel()}
-                  <ChevronDown className="w-4 h-4 text-white/30 group-hover:text-white/60 transition-colors" />
+                  <ChevronDown className="w-4 h-4 text-muted-foreground group-hover:text-foreground transition-colors" />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" className="w-52 rounded-2xl border-white/10 bg-background/95 backdrop-blur-3xl p-2">
-                <DropdownMenuLabel className="text-[9px] font-mono uppercase tracking-widest text-white/40 px-3 py-2">Network Mode</DropdownMenuLabel>
+              <DropdownMenuContent align="start" className="w-52 rounded-2xl border-border bg-background/95 backdrop-blur-3xl p-2">
+                <DropdownMenuLabel className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground px-3 py-2">Network Mode</DropdownMenuLabel>
                 {(['direct', 'relay', 'normal'] as NetworkMode[]).map(m => (
                   <DropdownMenuItem key={m} className="rounded-xl gap-3 py-3 px-3 cursor-pointer">
                     <div className={cn("w-2 h-2 rounded-full shrink-0", modeStyles(m).dot)} />
                     <div>
                       <div className="text-sm font-bold">{modeStyles(m).label}</div>
-                      <div className="text-[10px] text-white/40 font-medium">
+                      <div className="text-[10px] text-muted-foreground font-medium">
                         {m === 'direct' ? 'Default' : m === 'relay' ? 'P2P Relay' : 'Mesh Net'}
                       </div>
                     </div>
@@ -114,7 +114,7 @@ export function ChatSidebar({
           </h2>
         )}
         <div className="flex items-center gap-1.5">
-          <Button variant="ghost" size="icon" className="rounded-2xl w-10 h-10 text-white/20 hover:text-primary hover:bg-primary/5 transition-all" onClick={() => onSearchOpen(true)}>
+          <Button variant="ghost" size="icon" className="rounded-2xl w-10 h-10 text-muted-foreground hover:text-primary hover:bg-primary/5 transition-all" onClick={() => onSearchOpen(true)}>
             <Search className="w-5 h-5" />
           </Button>
         </div>
@@ -123,7 +123,7 @@ export function ChatSidebar({
       {/* Search Overlay */}
       <AnimatePresence>
         {searchOpen && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-30 bg-background/95 backdrop-blur-2xl rounded-3xl overflow-hidden safe-top border border-white/5">
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-30 bg-background/95 backdrop-blur-2xl rounded-3xl overflow-hidden safe-top border border-border">
             <div className="flex flex-col h-full">
               <div className="px-4 pt-4 pb-2 space-y-4">
                 <div className="flex items-center gap-3">
@@ -183,14 +183,14 @@ export function ChatSidebar({
       <div className="flex-1 overflow-y-auto overscroll-contain scrollbar-hide p-2 md:p-3 space-y-1">
         {chats.length === 0 && (
           <div className="flex flex-col items-center justify-center h-full text-center p-6">
-            <Ghost className="w-12 h-12 text-white/10 mb-4" />
-            <div className="text-sm text-white/30 font-medium">No conversations yet</div>
-            <div className="text-xs text-white/20 mt-1">Search for users to start chatting</div>
+            <Ghost className="w-12 h-12 text-muted-foreground/20 mb-4" />
+            <div className="text-sm text-muted-foreground/60 font-medium">No conversations yet</div>
+            <div className="text-xs text-muted-foreground/40 mt-1">Search for users to start chatting</div>
           </div>
         )}
         {chats.map(chat => (
           <button key={chat.id} onClick={() => onSelectChat(chat)}
-            className={cn("w-full flex items-center gap-4 p-3 md:p-4 rounded-2xl transition-all duration-500 relative group", selectedChat?.id === chat.id ? "bg-primary/10" : "hover:bg-white/5")}>
+            className={cn("w-full flex items-center gap-4 p-3 md:p-4 rounded-2xl transition-all duration-500 relative group", selectedChat?.id === chat.id ? "bg-primary/10" : "hover:bg-accent/40")}>
             <div className="relative shrink-0">
               <div className="w-14 h-14 rounded-full border-2 border-transparent group-hover:border-primary/20 transition-all flex items-center justify-center text-primary font-bold text-lg overflow-hidden shadow-2xl"
                 style={{ backgroundColor: chat.avatar_color || 'oklch(0.2 0.02 280)' }}>
@@ -201,7 +201,7 @@ export function ChatSidebar({
             <div className="flex-1 text-left min-w-0">
               <div className="flex items-center justify-between mb-1">
                 <span className="font-bold text-sm truncate group-hover:text-primary transition-colors">{chat.display_name || chat.username}</span>
-                <span className="text-[9px] font-mono text-white/20 uppercase tracking-tighter">{formatRelativeTime(chat.lastMessageTime || new Date().toISOString())}</span>
+                <span className="text-[9px] font-mono text-muted-foreground/60 uppercase tracking-tighter">{formatRelativeTime(chat.lastMessageTime || new Date().toISOString())}</span>
               </div>
               <p className="text-xs text-muted-foreground line-clamp-1 font-medium">{chat.lastMessage || `@${chat.username}`}</p>
             </div>

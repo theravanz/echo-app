@@ -163,7 +163,7 @@ export function ProfileViewPanel({
   const age = profile.birth_date && !profile.birth_date_hide_year ? calculateAge(profile.birth_date) : null;
 
   return (
-    <div className="flex flex-col h-full bg-[#0a0a0d] text-white overflow-hidden">
+    <div className="flex flex-col h-full bg-background text-foreground overflow-hidden">
       <div className="flex-1 overflow-y-auto overscroll-contain scrollbar-hide">
         {/* Banner + avatar */}
         <div
@@ -228,14 +228,14 @@ export function ProfileViewPanel({
                       if (isMobile) setAvatarLevel(1);
                       else setAvatarLevel(2);
                     }}
-                    className="group relative w-[92px] h-[92px] rounded-full overflow-hidden bg-[#252038] border-4 border-[#0a0a0d] flex items-center justify-center font-bold text-4xl text-primary"
+                    className="group relative w-[92px] h-[92px] rounded-full overflow-hidden bg-muted border-4 border-[#0a0a0d] flex items-center justify-center font-bold text-4xl text-primary"
                   >
                     {profile.avatar_url ? (
                       <img src={profile.avatar_url} className="w-full h-full object-cover" alt="" />
                     ) : (
                       safeChar(profile.display_name || profile.username)
                     )}
-                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <div className="absolute inset-0 bg-background/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                       <TbShare2 className="w-5 h-5" />
                     </div>
                   </motion.button>
@@ -247,7 +247,7 @@ export function ProfileViewPanel({
                     <span className="truncate">{profile.display_name}</span>
                     {profile.status_emoji && <span className="text-base leading-none shrink-0">{profile.status_emoji}</span>}
                   </div>
-                  <div className="text-[13px] text-white/40 mt-1">
+                  <div className="text-[13px] text-muted-foreground mt-1">
                     {profile.is_online ? "в сети" : profile.last_seen_label || "не в сети"}
                   </div>
                 </div>
@@ -270,13 +270,13 @@ export function ProfileViewPanel({
                   if (info.offset.y < -150 || info.velocity.y < -500) setAvatarLevel(2);
                   else if (info.offset.y > 80) setAvatarLevel(0);
                 }}
-                className="absolute inset-0 z-40 bg-[#0a0a0d]"
+                className="absolute inset-0 z-40 bg-background"
               >
                 <div className="absolute inset-0">
                   {profile.avatar_url ? (
                     <img src={profile.avatar_url} className="w-full h-full object-cover" alt="" />
                   ) : (
-                    <div className="w-full h-full bg-[#252038] flex items-center justify-center text-6xl font-bold text-primary">
+                    <div className="w-full h-full bg-muted flex items-center justify-center text-6xl font-bold text-primary">
                       {safeChar(profile.display_name || profile.username)}
                     </div>
                   )}
@@ -295,19 +295,19 @@ export function ProfileViewPanel({
                       <span className="truncate">{profile.display_name}</span>
                       {profile.status_emoji && <span className="text-lg shrink-0">{profile.status_emoji}</span>}
                     </div>
-                    <div className="text-[13px] text-white/60 mt-1">
+                    <div className="text-[13px] text-foreground/80 mt-1">
                       {profile.is_online ? "в сети" : profile.last_seen_label || "не в сети"}
                     </div>
                   </div>
                   <motion.button
                     whileTap={{ scale: 0.9 }}
                     onClick={() => setAvatarLevel(0)}
-                    className="w-10 h-10 rounded-full bg-black/50 backdrop-blur flex items-center justify-center"
+                    className="w-10 h-10 rounded-full bg-background/50 backdrop-blur flex items-center justify-center"
                   >
                     <X className="w-4 h-4" />
                   </motion.button>
                 </motion.div>
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 text-[11px] text-white/40">
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 text-[11px] text-muted-foreground">
                   свайп вверх — на весь экран
                 </div>
               </motion.div>
@@ -334,7 +334,7 @@ export function ProfileViewPanel({
                   {profile.avatar_url ? (
                     <img src={profile.avatar_url} className="w-full h-full object-contain" alt="" />
                   ) : (
-                    <div className="w-full h-full bg-[#252038] flex items-center justify-center text-8xl font-bold text-primary">
+                    <div className="w-full h-full bg-muted flex items-center justify-center text-8xl font-bold text-primary">
                       {safeChar(profile.display_name || profile.username)}
                     </div>
                   )}
@@ -342,18 +342,18 @@ export function ProfileViewPanel({
                     <motion.button
                       whileTap={{ scale: 0.9 }}
                       onClick={() => setAvatarLevel(0)}
-                      className="w-10 h-10 rounded-full bg-white/10 backdrop-blur flex items-center justify-center"
+                      className="w-10 h-10 rounded-full bg-muted-foreground/20 backdrop-blur flex items-center justify-center"
                     >
                       <ChevronLeft className="w-5 h-5" />
                     </motion.button>
                     <div className="text-center">
                       <div className="text-sm font-semibold">{profile.display_name}</div>
-                      <div className="text-[11px] text-white/50">@{profile.username}</div>
+                      <div className="text-[11px] text-muted-foreground/50">@{profile.username}</div>
                     </div>
                     <div className="w-10" />
                   </div>
                   <div className="absolute bottom-0 inset-x-0 p-4 flex items-center justify-center gap-4 bg-gradient-to-t from-black/70 to-transparent">
-                    <button className="w-12 h-12 rounded-full bg-white/10 backdrop-blur flex items-center justify-center">
+                    <button className="w-12 h-12 rounded-full bg-muted-foreground/20 backdrop-blur flex items-center justify-center">
                       <TbShare2 className="w-5 h-5" />
                     </button>
                   </div>
@@ -373,7 +373,7 @@ export function ProfileViewPanel({
           ].map((a, i) => (
             <button key={i} onClick={a.onClick} className="flex-1 flex flex-col items-center gap-1.5">
               <a.icon className="w-[22px] h-[22px]" />
-              <span className="text-[11px] text-white/60 font-semibold">{a.label}</span>
+              <span className="text-[11px] text-foreground/80 font-semibold">{a.label}</span>
             </button>
           ))}
         </div>
@@ -428,19 +428,19 @@ export function ProfileViewPanel({
         )}
 
         {/* Unified info card */}
-        <div className="mx-5 mt-5 rounded-[20px] bg-[#131318] overflow-hidden divide-y divide-white/5">
+        <div className="mx-5 mt-5 rounded-[20px] bg-muted overflow-hidden divide-y divide-border">
           {/* Username row */}
           <div className="flex items-center justify-between p-4">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-[34px] h-[34px] rounded-[11px] bg-[#252038] flex items-center justify-center shrink-0">
+              <div className="w-[34px] h-[34px] rounded-[11px] bg-muted flex items-center justify-center shrink-0">
                 <At className="w-4 h-4 text-primary" />
               </div>
               <div className="min-w-0">
                 <div className="text-[15px] font-bold truncate">@{profile.username}</div>
-                <div className="text-xs text-white/40 mt-0.5">Имя пользователя</div>
+                <div className="text-xs text-muted-foreground mt-0.5">Имя пользователя</div>
               </div>
             </div>
-            <div className="w-[34px] h-[34px] rounded-[11px] bg-[#252038] flex items-center justify-center shrink-0">
+            <div className="w-[34px] h-[34px] rounded-[11px] bg-muted flex items-center justify-center shrink-0">
               <QrCode className="w-4 h-4 text-primary" />
             </div>
           </div>
@@ -448,23 +448,23 @@ export function ProfileViewPanel({
           {/* Bio row */}
           {profile.bio && (
             <div className="p-4">
-              <div className="text-[11px] font-semibold text-white/40 uppercase tracking-wider mb-2">О себе</div>
-              <p className="text-[13px] text-white/60 leading-relaxed break-words whitespace-pre-wrap">{profile.bio}</p>
+              <div className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider mb-2">О себе</div>
+              <p className="text-[13px] text-foreground/80 leading-relaxed break-words whitespace-pre-wrap">{profile.bio}</p>
             </div>
           )}
 
           {/* Birth date row */}
           {profile.birth_date && (
             <div className="flex items-center gap-3 p-4">
-              <div className="w-[34px] h-[34px] rounded-[11px] bg-[#252038] flex items-center justify-center shrink-0">
-                <Calendar className="w-4 h-4 text-blue-300" />
+              <div className="w-[34px] h-[34px] rounded-[11px] bg-muted flex items-center justify-center shrink-0">
+                <Calendar className="w-4 h-4 text-primary" />
               </div>
               <div className="flex-1">
                 <div className="text-[15px] font-bold">
                   {formatBirthDateDisplay(profile.birth_date, profile.birth_date_hide_year)}
-                  {age && <span className="text-white/40 font-normal"> ({age} {ageWord(age)})</span>}
+                  {age && <span className="text-muted-foreground font-normal"> ({age} {ageWord(age)})</span>}
                 </div>
-                <div className="text-xs text-white/40 mt-0.5">Дата рождения</div>
+                <div className="text-xs text-muted-foreground mt-0.5">Дата рождения</div>
               </div>
             </div>
           )}
@@ -473,7 +473,7 @@ export function ProfileViewPanel({
         {/* Gifts */}
         {profile.gifts.length > 0 && (
           <>
-            <div className="flex items-center gap-2 px-5 pt-6 pb-2 text-[13px] font-bold text-white/50">
+            <div className="flex items-center gap-2 px-5 pt-6 pb-2 text-[13px] font-bold text-muted-foreground">
               <GiftIcon className="w-3.5 h-3.5" /> Подарки
             </div>
             <div className="flex gap-2.5 px-5 pb-1 overflow-x-auto scrollbar-hide">
@@ -481,7 +481,7 @@ export function ProfileViewPanel({
                 <div
                   key={g.id}
                   title={g.name}
-                  className="shrink-0 w-14 h-14 rounded-2xl bg-[#131318] flex items-center justify-center text-2xl"
+                  className="shrink-0 w-14 h-14 rounded-2xl bg-background flex items-center justify-center text-2xl"
                 >
                   {g.emoji}
                 </div>
@@ -492,18 +492,18 @@ export function ProfileViewPanel({
 
         {/* Publications */}
         <div className="flex items-center justify-between px-5 pt-6 pb-2">
-          <span className="text-[13px] font-bold text-white/50">Публикации</span>
-          {profile.publications.length > 0 && <span className="text-xs text-white/30">Все</span>}
+          <span className="text-[13px] font-bold text-muted-foreground">Публикации</span>
+          {profile.publications.length > 0 && <span className="text-xs text-muted-foreground/70">Все</span>}
         </div>
 
         {profile.publications.length === 0 ? (
           <div className="px-5 pb-6">
-            <div className="rounded-[20px] bg-[#131318] border border-dashed border-white/10 p-6 flex flex-col items-center justify-center text-center">
-              <div className="w-14 h-14 rounded-2xl bg-white/5 flex items-center justify-center mb-3">
-                <ImageIcon className="w-6 h-6 text-white/30" />
+            <div className="rounded-[20px] bg-background border border-dashed border-border p-6 flex flex-col items-center justify-center text-center">
+              <div className="w-14 h-14 rounded-2xl bg-background flex items-center justify-center mb-3">
+                <ImageIcon className="w-6 h-6 text-muted-foreground/60" />
               </div>
-              <div className="text-sm font-semibold text-white/70 mb-1">Пользователь ещё ничего не публиковал</div>
-              <div className="text-xs text-white/40 max-w-[220px]">Здесь будут фотографии и видео</div>
+              <div className="text-sm font-semibold text-foreground/80 mb-1">Пользователь ещё ничего не публиковал</div>
+              <div className="text-xs text-muted-foreground max-w-[220px]">Здесь будут фотографии и видео</div>
             </div>
           </div>
         ) : (
@@ -511,17 +511,17 @@ export function ProfileViewPanel({
             {profile.publications.map((p) => (
               <div
                 key={p.id}
-                className="aspect-square rounded-2xl bg-[#1c1c24] overflow-hidden relative"
+                className="aspect-square rounded-2xl bg-muted overflow-hidden relative"
               >
                 {p.thumbnail_url ? (
                   <img src={p.thumbnail_url} className="w-full h-full object-cover" alt="" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center">
-                    <ImageIcon className="w-5 h-5 text-white/20" />
+                    <ImageIcon className="w-5 h-5 text-muted-foreground/60" />
                   </div>
                 )}
                 {p.media_type === "video" && (
-                  <Play className="w-4 h-4 text-white absolute bottom-2 right-2 drop-shadow" />
+                  <Play className="w-4 h-4 text-foreground absolute bottom-2 right-2 drop-shadow" />
                 )}
               </div>
             ))}

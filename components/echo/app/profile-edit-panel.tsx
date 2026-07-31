@@ -330,10 +330,10 @@ function DatePickerSheet({
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
             transition={{ type: "spring", damping: 35, stiffness: 300, mass: 0.8 }}
-            className="relative w-full max-w-lg bg-[#1c1c1e] rounded-t-3xl overflow-hidden"
+            className="relative w-full max-w-lg bg-background rounded-t-3xl overflow-hidden"
           >
             <div className="flex justify-center pt-3 pb-2">
-              <div className="w-10 h-1 rounded-full bg-white/20" />
+              <div className="w-10 h-1 rounded-full bg-muted-foreground/30" />
             </div>
             <div className="flex items-center justify-between px-5 pb-4 border-b border-white/5">
               <motion.button whileTap={{ scale: 0.9 }} onClick={onClose} className="text-primary font-semibold text-sm">
@@ -473,7 +473,7 @@ function TrackListItem({ track, onSelect, onDelete }: { track: UserTrack; onSele
   return (
     <div className="relative overflow-hidden rounded-2xl">
       <motion.div style={{ opacity: deleteOpacity }} className="absolute inset-y-0 right-0 w-20 flex items-center justify-center bg-red-500/90">
-        <button onClick={() => onDelete()} className="flex flex-col items-center gap-1 text-white">
+        <button onClick={() => onDelete()} className="flex flex-col items-center gap-1 text-foreground">
           <Trash2 className="w-4 h-4" />
           <span className="text-[10px] font-semibold">Удалить</span>
         </button>
@@ -495,14 +495,14 @@ function TrackListItem({ track, onSelect, onDelete }: { track: UserTrack; onSele
           onSelect();
         }}
         whileTap={{ scale: confirming ? 1 : 0.97 }}
-        className="relative w-full flex items-center gap-3 p-2 bg-[#1c1c1e] text-left"
+        className="relative w-full flex items-center gap-3 p-2 bg-background text-left"
       >
         <div className="w-14 h-14 rounded-xl shrink-0 overflow-hidden flex items-center justify-center" style={{ background: track.gradient || BACKGROUND_PRESETS[0].css }}>
-          {track.cover_url ? <img src={track.cover_url} className="w-full h-full object-cover" alt="" /> : <Music className="w-6 h-6 text-white/80" />}
+          {track.cover_url ? <img src={track.cover_url} className="w-full h-full object-cover" alt="" /> : <Music className="w-6 h-6 text-muted-foreground/80" />}
         </div>
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-sm truncate">{track.title}</div>
-          <div className="text-xs text-white/50 truncate">{track.artist}</div>
+          <div className="text-xs text-muted-foreground/50 truncate">{track.artist}</div>
         </div>
       </motion.button>
     </div>
@@ -666,10 +666,10 @@ function TrackPickerSheet({
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
             transition={{ type: "spring", damping: 35, stiffness: 300, mass: 0.8 }}
-            className="relative w-full max-w-lg bg-[#1c1c1e] rounded-t-3xl overflow-hidden flex flex-col max-h-[85vh]"
+            className="relative w-full max-w-lg bg-background rounded-t-3xl overflow-hidden flex flex-col max-h-[85vh]"
           >
             <div className="flex justify-center pt-3 pb-2">
-              <div className="w-10 h-1 rounded-full bg-white/20" />
+              <div className="w-10 h-1 rounded-full bg-muted-foreground/30" />
             </div>
             <div className="flex items-center justify-between px-5 pb-4 border-b border-white/5">
               <h2 className="text-lg font-bold">Выбор трека</h2>
@@ -689,12 +689,12 @@ function TrackPickerSheet({
                 >
                   <div className="p-5 space-y-3">
                     <label className="flex items-center gap-3 bg-white/5 rounded-xl px-4 py-3 cursor-pointer">
-                      <Music className="w-4 h-4 text-white/50" />
-                      <span className="text-sm text-white/70 truncate flex-1">{audioFile?.name || "Выбрать файл трека"}</span>
+                      <Music className="w-4 h-4 text-muted-foreground/50" />
+                      <span className="text-sm text-foreground/80 truncate flex-1">{audioFile?.name || "Выбрать файл трека"}</span>
                       <input type="file" accept="audio/*" hidden onChange={handleAudioSelect} />
                     </label>
 
-                    {extracting && <div className="text-xs text-white/40 text-center">Считываю метаданные...</div>}
+                    {extracting && <div className="text-xs text-muted-foreground/40 text-center">Считываю метаданные...</div>}
 
                     {audioFile && !extracting && (
                       <>
@@ -702,21 +702,21 @@ function TrackPickerSheet({
                           value={title}
                           onChange={(e) => setTitle(e.target.value)}
                           placeholder="Название трека"
-                          className="w-full bg-white/5 rounded-xl px-4 py-3 text-sm outline-none placeholder:text-white/30"
+                          className="w-full bg-white/5 rounded-xl px-4 py-3 text-sm outline-none placeholder:text-muted-foreground/30"
                         />
                         <input
                           value={artist}
                           onChange={(e) => setArtist(e.target.value)}
                           placeholder="Исполнитель"
-                          className="w-full bg-white/5 rounded-xl px-4 py-3 text-sm outline-none placeholder:text-white/30"
+                          className="w-full bg-white/5 rounded-xl px-4 py-3 text-sm outline-none placeholder:text-muted-foreground/30"
                         />
 
                         <div className="flex items-center gap-3">
                           <div className="w-16 h-16 rounded-lg overflow-hidden bg-white/5 flex items-center justify-center shrink-0">
-                            {coverPreview ? <img src={coverPreview} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-5 h-5 text-white/20" />}
+                            {coverPreview ? <img src={coverPreview} className="w-full h-full object-cover" alt="" /> : <ImageIcon className="w-5 h-5 text-muted-foreground/20" />}
                           </div>
                           <div className="flex-1">
-                            <div className="text-xs text-white/50 mb-1.5">
+                            <div className="text-xs text-muted-foreground/50 mb-1.5">
                               {coverPreview ? (coverFile ? "Своя обложка" : "Обложка найдена в файле") : "Обложка не найдена"}
                             </div>
                             <button onClick={() => coverInputRef.current?.click()} className="text-xs font-semibold text-primary">
@@ -748,16 +748,16 @@ function TrackPickerSheet({
 
             <div className="flex-1 overflow-y-auto overscroll-contain">
               {loading ? (
-                <div className="flex items-center justify-center h-32 text-white/40 text-sm">Загрузка...</div>
+                <div className="flex items-center justify-center h-32 text-muted-foreground/40 text-sm">Загрузка...</div>
               ) : tracks.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-40 text-white/40 text-sm gap-2">
+                <div className="flex flex-col items-center justify-center h-40 text-muted-foreground/40 text-sm gap-2">
                   <Music className="w-8 h-8" />
                   <p>У тебя пока нет треков</p>
                   <p className="text-xs">Нажми + чтобы добавить</p>
                 </div>
               ) : (
                 <div className="p-3 space-y-2">
-                  <p className="text-[11px] text-white/30 px-2 pb-1">Свайпни трек влево, чтобы удалить</p>
+                  <p className="text-[11px] text-muted-foreground/30 px-2 pb-1">Свайпни трек влево, чтобы удалить</p>
                   {tracks.map((track) => (
                     <TrackListItem key={track.id} track={track} onSelect={() => { onSelect(track); onClose(); }} onDelete={() => handleDeleteTrack(track)} />
                   ))}
@@ -830,10 +830,10 @@ function ChannelPickerSheet({
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
             transition={{ type: "spring", damping: 35, stiffness: 300, mass: 0.8 }}
-            className="relative w-full max-w-lg bg-[#1c1c1e] rounded-t-3xl overflow-hidden flex flex-col max-h-[75vh]"
+            className="relative w-full max-w-lg bg-background rounded-t-3xl overflow-hidden flex flex-col max-h-[75vh]"
           >
             <div className="flex justify-center pt-3 pb-2">
-              <div className="w-10 h-1 rounded-full bg-white/20" />
+              <div className="w-10 h-1 rounded-full bg-muted-foreground/30" />
             </div>
             <div className="px-5 pb-4 border-b border-white/5">
               <h2 className="text-lg font-bold">Выбор канала</h2>
@@ -841,9 +841,9 @@ function ChannelPickerSheet({
 
             <div className="flex-1 overflow-y-auto overscroll-contain">
               {loading ? (
-                <div className="flex items-center justify-center h-32 text-white/40 text-sm">Загрузка...</div>
+                <div className="flex items-center justify-center h-32 text-muted-foreground/40 text-sm">Загрузка...</div>
               ) : channels.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-40 text-white/40 text-sm gap-2 px-6 text-center">
+                <div className="flex flex-col items-center justify-center h-40 text-muted-foreground/40 text-sm gap-2 px-6 text-center">
                   <Megaphone className="w-8 h-8" />
                   <p>У тебя нет своих каналов</p>
                   <p className="text-xs">Создай канал, чтобы привязать его к профилю</p>
@@ -852,14 +852,14 @@ function ChannelPickerSheet({
                 <div className="p-3 space-y-1">
                   {channels.map((ch) => (
                     <motion.button key={ch.id} whileTap={{ scale: 0.97 }} onClick={() => { onSelect(ch); onClose(); }} className="w-full flex items-center gap-3 p-2.5 rounded-2xl hover:bg-white/5 text-left">
-                      <div className="w-11 h-11 rounded-xl overflow-hidden bg-[#252038] flex items-center justify-center shrink-0">
+                      <div className="w-11 h-11 rounded-xl overflow-hidden bg-muted flex items-center justify-center shrink-0">
                         {ch.avatar_url ? <img src={ch.avatar_url} className="w-full h-full object-cover" alt="" /> : <Megaphone className="w-4 h-4 text-primary" />}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="font-semibold text-sm truncate">{ch.name}</div>
-                        <div className="text-xs text-white/40 truncate">@{ch.username} · {ch.subscribers_count.toLocaleString("ru-RU")} подписчиков</div>
+                        <div className="text-xs text-muted-foreground/40 truncate">@{ch.username} · {ch.subscribers_count.toLocaleString("ru-RU")} подписчиков</div>
                       </div>
-                      <ChevronRight className="w-4 h-4 text-white/20 shrink-0" />
+                      <ChevronRight className="w-4 h-4 text-muted-foreground/20 shrink-0" />
                     </motion.button>
                   ))}
                 </div>
@@ -1043,7 +1043,7 @@ function ProfileViewer({
   const age = profile.birth_date && !profile.birth_date_hide_year ? calculateAge(profile.birth_date) : null;
 
   return (
-    <div className="flex flex-col h-full bg-[#0a0a0d] text-white overflow-hidden">
+    <div className="flex flex-col h-full bg-background text-foreground overflow-hidden">
       <div className="flex-1 overflow-y-auto overscroll-contain scrollbar-hide">
         {/* Banner + avatar */}
         <div
@@ -1119,14 +1119,14 @@ function ProfileViewer({
                       if (isMobile) setAvatarLevel(1);
                       else setAvatarLevel(2); // PC — сразу fullscreen
                     }}
-                    className="group relative w-[92px] h-[92px] rounded-full overflow-hidden bg-[#252038] border-4 border-[#0a0a0d] flex items-center justify-center font-bold text-4xl text-primary"
+                    className="group relative w-[92px] h-[92px] rounded-full overflow-hidden bg-muted border-4 border-[#0a0a0d] flex items-center justify-center font-bold text-4xl text-primary"
                   >
                     {profile.avatar_url ? (
                       <img src={profile.avatar_url} className="w-full h-full object-cover" alt="" />
                     ) : (
                       safeChar(profile.display_name || profile.username)
                     )}
-                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                    <div className="absolute inset-0 bg-background/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                       <Camera className="w-5 h-5" />
                     </div>
                   </motion.button>
@@ -1141,7 +1141,7 @@ function ProfileViewer({
                     {profile.display_name}
                     {profile.status_emoji && <span className="text-base leading-none">{profile.status_emoji}</span>}
                   </div>
-                  <div className="text-[13px] text-white/40 mt-1">
+                  <div className="text-[13px] text-muted-foreground/40 mt-1">
                     {profile.is_online ? "в сети" : profile.last_seen_label || "не в сети"}
                   </div>
                 </motion.div>
@@ -1164,13 +1164,13 @@ function ProfileViewer({
                   if (info.offset.y < -150 || info.velocity.y < -500) setAvatarLevel(2);
                   else if (info.offset.y > 80) setAvatarLevel(0);
                 }}
-                className="absolute inset-0 z-40 bg-[#0a0a0d]"
+                className="absolute inset-0 z-40 bg-background"
               >
                 <div className="absolute inset-0">
                   {profile.avatar_url ? (
                     <img src={profile.avatar_url} className="w-full h-full object-cover" alt="" />
                   ) : (
-                    <div className="w-full h-full bg-[#252038] flex items-center justify-center text-6xl font-bold text-primary">
+                    <div className="w-full h-full bg-muted flex items-center justify-center text-6xl font-bold text-primary">
                       {safeChar(profile.display_name || profile.username)}
                     </div>
                   )}
@@ -1189,20 +1189,20 @@ function ProfileViewer({
                       {profile.display_name}
                       {profile.status_emoji && <span className="text-lg">{profile.status_emoji}</span>}
                     </div>
-                    <div className="text-[13px] text-white/60 mt-1">
+                    <div className="text-[13px] text-muted-foreground/60 mt-1">
                       {profile.is_online ? "в сети" : profile.last_seen_label || "не в сети"}
                     </div>
                   </div>
                   <motion.button
                     whileTap={{ scale: 0.9 }}
                     onClick={() => setAvatarLevel(0)}
-                    className="w-10 h-10 rounded-full bg-black/50 backdrop-blur flex items-center justify-center"
+                    className="w-10 h-10 rounded-full bg-background/50 backdrop-blur flex items-center justify-center"
                   >
                     <X className="w-4 h-4" />
                   </motion.button>
                 </motion.div>
                 {/* Подсказка свайпа */}
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 text-[11px] text-white/40">
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 text-[11px] text-muted-foreground/40">
                   свайп вверх — на весь экран
                 </div>
               </motion.div>
@@ -1229,7 +1229,7 @@ function ProfileViewer({
                   {profile.avatar_url ? (
                     <img src={profile.avatar_url} className="w-full h-full object-contain" alt="" />
                   ) : (
-                    <div className="w-full h-full bg-[#252038] flex items-center justify-center text-8xl font-bold text-primary">
+                    <div className="w-full h-full bg-muted flex items-center justify-center text-8xl font-bold text-primary">
                       {safeChar(profile.display_name || profile.username)}
                     </div>
                   )}
@@ -1244,7 +1244,7 @@ function ProfileViewer({
                     </motion.button>
                     <div className="text-center">
                       <div className="text-sm font-semibold">{profile.display_name}</div>
-                      <div className="text-[11px] text-white/50">@{profile.username}</div>
+                      <div className="text-[11px] text-muted-foreground/50">@{profile.username}</div>
                     </div>
                     <div className="w-10" />
                   </div>
@@ -1274,7 +1274,7 @@ function ProfileViewer({
             ].map((a, i) => (
               <button key={i} onClick={a.onClick} className="flex-1 flex flex-col items-center gap-1.5">
                 <a.icon className="w-[22px] h-[22px]" />
-                <span className="text-[11px] text-white/60 font-semibold">{a.label}</span>
+                <span className="text-[11px] text-muted-foreground/60 font-semibold">{a.label}</span>
               </button>
             ))}
           </div>
@@ -1330,19 +1330,19 @@ function ProfileViewer({
         )}
 
         {/* Unified info card */}
-        <div className="mx-5 mt-5 rounded-[20px] bg-[#131318] overflow-hidden divide-y divide-white/5">
+        <div className="mx-5 mt-5 rounded-[20px] bg-muted overflow-hidden divide-y divide-border">
           {/* Username row */}
           <div className="flex items-center justify-between p-4">
             <div className="flex items-center gap-3 min-w-0">
-              <div className="w-[34px] h-[34px] rounded-[11px] bg-[#252038] flex items-center justify-center shrink-0">
+              <div className="w-[34px] h-[34px] rounded-[11px] bg-muted flex items-center justify-center shrink-0">
                 <At className="w-4 h-4 text-primary" />
               </div>
               <div className="min-w-0">
                 <div className="text-[15px] font-bold truncate">@{profile.username}</div>
-                <div className="text-xs text-white/40 mt-0.5">Имя пользователя</div>
+                <div className="text-xs text-muted-foreground/40 mt-0.5">Имя пользователя</div>
               </div>
             </div>
-            <div className="w-[34px] h-[34px] rounded-[11px] bg-[#252038] flex items-center justify-center shrink-0">
+            <div className="w-[34px] h-[34px] rounded-[11px] bg-muted flex items-center justify-center shrink-0">
               <QrCode className="w-4 h-4 text-primary" />
             </div>
           </div>
@@ -1350,23 +1350,23 @@ function ProfileViewer({
           {/* Bio row */}
           {profile.bio && (
             <div className="p-4">
-              <div className="text-[11px] font-semibold text-white/40 uppercase tracking-wider mb-2">О себе</div>
-              <p className="text-[13px] text-white/60 leading-relaxed">{profile.bio}</p>
+              <div className="text-[11px] font-semibold text-muted-foreground/40 uppercase tracking-wider mb-2">О себе</div>
+              <p className="text-[13px] text-muted-foreground/60 leading-relaxed">{profile.bio}</p>
             </div>
           )}
 
           {/* Birth date row */}
           {profile.birth_date && (
             <div className="flex items-center gap-3 p-4">
-              <div className="w-[34px] h-[34px] rounded-[11px] bg-[#252038] flex items-center justify-center shrink-0">
+              <div className="w-[34px] h-[34px] rounded-[11px] bg-muted flex items-center justify-center shrink-0">
                 <Calendar className="w-4 h-4 text-blue-300" />
               </div>
               <div className="flex-1">
                 <div className="text-[15px] font-bold">
                   {formatBirthDateDisplay(profile.birth_date, profile.birth_date_hide_year)}
-                  {age && <span className="text-white/40 font-normal"> ({age} {age % 10 === 1 && age % 100 !== 11 ? 'год' : age % 10 >= 2 && age % 10 <= 4 && (age % 100 < 10 || age % 100 >= 20) ? 'года' : 'лет'})</span>}
+                  {age && <span className="text-muted-foreground/40 font-normal"> ({age} {age % 10 === 1 && age % 100 !== 11 ? 'год' : age % 10 >= 2 && age % 10 <= 4 && (age % 100 < 10 || age % 100 >= 20) ? 'года' : 'лет'})</span>}
                 </div>
-                <div className="text-xs text-white/40 mt-0.5">Дата рождения</div>
+                <div className="text-xs text-muted-foreground/40 mt-0.5">Дата рождения</div>
               </div>
             </div>
           )}
@@ -1374,20 +1374,20 @@ function ProfileViewer({
 
         {/* Publications */}
         <div className="flex items-center justify-between px-5 pt-6 pb-2">
-          <span className="text-[13px] font-bold text-white/50">Публикации</span>
-          {!isOwn && publications.length > 0 && <span className="text-xs text-white/30">Все</span>}
+          <span className="text-[13px] font-bold text-muted-foreground/50">Публикации</span>
+          {!isOwn && publications.length > 0 && <span className="text-xs text-muted-foreground/30">Все</span>}
         </div>
 
         {publications.length === 0 ? (
           <div className="px-5 pb-6">
-            <div className="rounded-[20px] bg-[#131318] border border-dashed border-white/10 p-6 flex flex-col items-center justify-center text-center">
+            <div className="rounded-[20px] bg-muted border border-dashed border-border p-6 flex flex-col items-center justify-center text-center">
               <div className="w-14 h-14 rounded-2xl bg-white/5 flex items-center justify-center mb-3">
-                <ImageIcon className="w-6 h-6 text-white/30" />
+                <ImageIcon className="w-6 h-6 text-muted-foreground/30" />
               </div>
-              <div className="text-sm font-semibold text-white/70 mb-1">
+              <div className="text-sm font-semibold text-foreground/80 mb-1">
                 {isOwn ? "Публикаций пока нет" : "Пользователь ещё ничего не публиковал"}
               </div>
-              <div className="text-xs text-white/40 mb-4 max-w-[220px]">
+              <div className="text-xs text-muted-foreground/40 mb-4 max-w-[220px]">
                 {isOwn ? "Публикуйте фотографии и видео в своём профиле" : "Здесь будут фотографии и видео"}
               </div>
               {isOwn && (
@@ -1404,20 +1404,20 @@ function ProfileViewer({
         ) : (
           <div className="grid grid-cols-3 gap-2 px-5 pb-6">
             {isOwn && (
-              <button onClick={() => publicationInputRef.current?.click()} className="aspect-square rounded-2xl bg-[#131318] border border-dashed border-white/10 flex items-center justify-center">
-                <Plus className="w-5 h-5 text-white/30" />
+              <button onClick={() => publicationInputRef.current?.click()} className="aspect-square rounded-2xl bg-muted border border-dashed border-border flex items-center justify-center">
+                <Plus className="w-5 h-5 text-muted-foreground/30" />
               </button>
             )}
             {publications.map((p) => (
-              <div key={p.id} className="aspect-square rounded-2xl bg-[#1c1c24] overflow-hidden relative group">
+              <div key={p.id} className="aspect-square rounded-2xl bg-muted overflow-hidden relative group">
                 {p.thumbnail_url ? (
                   <img src={p.thumbnail_url} className="w-full h-full object-cover" alt="" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center">
-                    <ImageIcon className="w-5 h-5 text-white/20" />
+                    <ImageIcon className="w-5 h-5 text-muted-foreground/20" />
                   </div>
                 )}
-                {p.media_type === "video" && <PlayIcon className="w-4 h-4 text-white absolute bottom-2 right-2 drop-shadow" />}
+                {p.media_type === "video" && <PlayIcon className="w-4 h-4 text-foreground absolute bottom-2 right-2 drop-shadow" />}
                 {isOwn && (
                   <button
                     onClick={() => handleDeletePublication(p)}
@@ -1436,17 +1436,17 @@ function ProfileViewer({
         {/* Gifts */}
         {gifts.length > 0 && (
           <>
-            <div className="flex items-center gap-2 px-5 pt-6 pb-2 text-[13px] font-bold text-white/50">
+            <div className="flex items-center gap-2 px-5 pt-6 pb-2 text-[13px] font-bold text-muted-foreground/50">
               <GiftIcon className="w-3.5 h-3.5" /> Подарки
             </div>
             <div className="flex gap-2.5 px-5 pb-1 overflow-x-auto scrollbar-hide">
               {gifts.map((g) => (
-                <div key={g.id} title={g.name} className="shrink-0 w-14 h-14 rounded-2xl bg-[#131318] flex items-center justify-center text-2xl">
+                <div key={g.id} title={g.name} className="shrink-0 w-14 h-14 rounded-2xl bg-muted flex items-center justify-center text-2xl">
                   {g.emoji}
                 </div>
               ))}
             </div>
-            {isOwn && <p className="px-5 text-[11px] text-white/25 mt-1">Дарят другие пользователи — сам себе подарить нельзя</p>}
+            {isOwn && <p className="px-5 text-[11px] text-muted-foreground/25 mt-1">Дарят другие пользователи — сам себе подарить нельзя</p>}
           </>
         )}
 
@@ -1585,7 +1585,7 @@ function ProfileEditor({
   const hasActivity = draft.share_listening_activity && draft.activity_title;
 
   return (
-    <div className="relative flex flex-col h-full bg-[#0a0a0d] text-white overflow-hidden">
+    <div className="relative flex flex-col h-full bg-background text-foreground overflow-hidden">
       <motion.div
         animate={{
           scale: anySheetOpen ? 0.95 : 1,
@@ -1622,10 +1622,10 @@ function ProfileEditor({
               <motion.button
                 whileTap={{ scale: 0.95 }}
                 onClick={() => fileInputRef.current?.click()}
-                className="group relative w-[92px] h-[92px] rounded-full overflow-hidden bg-[#252038] border-4 border-[#0a0a0d] flex items-center justify-center font-bold text-4xl text-primary"
+                className="group relative w-[92px] h-[92px] rounded-full overflow-hidden bg-muted border-4 border-[#0a0a0d] flex items-center justify-center font-bold text-4xl text-primary"
               >
                 {avatarPreview ? <img src={avatarPreview} className="w-full h-full object-cover" alt="" /> : safeChar(draft.display_name)}
-                <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                <div className="absolute inset-0 bg-background/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                   <Camera className="w-5 h-5" />
                 </div>
               </motion.button>
@@ -1659,10 +1659,10 @@ function ProfileEditor({
                 value={draft.display_name}
                 onChange={(e) => set("display_name", e.target.value)}
                 placeholder="Имя"
-                className="bg-transparent text-[23px] font-bold outline-none flex-1 min-w-0 placeholder:text-white/20"
+                className="bg-transparent text-[23px] font-bold outline-none flex-1 min-w-0 placeholder:text-muted-foreground/20"
               />
               <button onClick={() => setEmojiPickerOpen((v) => !v)} className="shrink-0 text-xl leading-none w-8 h-8 flex items-center justify-center rounded-full bg-white/5">
-                {draft.status_emoji || <span className="text-white/25 text-sm">＋</span>}
+                {draft.status_emoji || <span className="text-muted-foreground/25 text-sm">＋</span>}
               </button>
             </div>
 
@@ -1674,7 +1674,7 @@ function ProfileEditor({
                       {e}
                     </motion.button>
                   ))}
-                  <motion.button whileTap={{ scale: 0.95 }} onClick={() => { set("status_emoji", null); setEmojiPickerOpen(false); }} className="text-xs text-white/40 ml-1">
+                  <motion.button whileTap={{ scale: 0.95 }} onClick={() => { set("status_emoji", null); setEmojiPickerOpen(false); }} className="text-xs text-muted-foreground/40 ml-1">
                     Убрать
                   </motion.button>
                 </motion.div>
@@ -1684,9 +1684,9 @@ function ProfileEditor({
             {/* Username and Bio cards in editor */}
             <div className="mt-3 space-y-2">
               {/* Username card - beautiful @ style */}
-              <div className="rounded-[20px] bg-[#131318] overflow-hidden">
+              <div className="rounded-[20px] bg-muted overflow-hidden">
                 <div className="flex items-center gap-3 p-4">
-                  <div className="w-[34px] h-[34px] rounded-[11px] bg-[#252038] flex items-center justify-center shrink-0">
+                  <div className="w-[34px] h-[34px] rounded-[11px] bg-muted flex items-center justify-center shrink-0">
                     <At className="w-4 h-4 text-primary" />
                   </div>
                   <div className="flex-1 min-w-0">
@@ -1696,52 +1696,52 @@ function ProfileEditor({
                       placeholder="username"
                       className={cn("bg-transparent text-[15px] font-bold outline-none w-full", !usernameValidation.valid && "text-red-400")}
                     />
-                    <div className="text-xs text-white/40 mt-0.5">Имя пользователя</div>
+                    <div className="text-xs text-muted-foreground/40 mt-0.5">Имя пользователя</div>
                   </div>
                 </div>
               </div>
               {!usernameValidation.valid && <div className="text-xs text-red-400 ml-1">{usernameValidation.error}</div>}
 
               {/* Bio card */}
-              <div className="rounded-[20px] bg-[#131318] overflow-hidden">
+              <div className="rounded-[20px] bg-muted overflow-hidden">
                 <div className="p-4">
                   <textarea
                     value={draft.bio ?? ""}
                     onChange={(e) => set("bio", e.target.value)}
                     placeholder="Расскажи о себе..."
                     rows={2}
-                    className="w-full bg-transparent text-[13px] text-white/60 outline-none resize-none placeholder:text-white/20"
+                    className="w-full bg-transparent text-[13px] text-muted-foreground/60 outline-none resize-none placeholder:text-muted-foreground/20"
                   />
                 </div>
               </div>
             </div>
           </div>
 
-          <div className="mx-5 mt-5 rounded-[20px] bg-[#131318] p-4">
+          <div className="mx-5 mt-5 rounded-[20px] bg-muted p-4">
             <div className="flex items-center gap-2.5 mb-3">
               <Calendar className="w-4 h-4 text-blue-300" />
               <span className="text-sm font-semibold">Дата рождения</span>
             </div>
             <div onClick={() => setDatePickerOpen(true)} className="w-full flex items-center justify-between bg-black/30 rounded-xl px-4 py-3 cursor-pointer">
-              <span className={cn("text-sm", draft.birth_date ? "text-white/80" : "text-white/30")}>
+              <span className={cn("text-sm", draft.birth_date ? "text-muted-foreground/80" : "text-muted-foreground/30")}>
                 {draft.birth_date ? formatBirthDateDisplay(draft.birth_date, draft.birth_date_hide_year) : "Выбрать дату"}
               </span>
               {draft.birth_date && (
                 <motion.button whileTap={{ scale: 0.9 }} onClick={(e) => { e.stopPropagation(); set("birth_date", null); }}>
-                  <X className="w-4 h-4 text-white/30" />
+                  <X className="w-4 h-4 text-muted-foreground/30" />
                 </motion.button>
               )}
             </div>
           </div>
 
-          <div className="mx-5 mt-3 rounded-[20px] bg-[#131318] p-4">
+          <div className="mx-5 mt-3 rounded-[20px] bg-muted p-4">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2.5">
                 <Music className="w-4 h-4 text-amber-300" />
                 <span className="text-sm font-semibold">Текущий трек</span>
               </div>
               {hasActivity && (
-                <motion.button whileTap={{ scale: 0.95 }} onClick={clearActivity} className="text-xs text-white/40">
+                <motion.button whileTap={{ scale: 0.95 }} onClick={clearActivity} className="text-xs text-muted-foreground/40">
                   Убрать
                 </motion.button>
               )}
@@ -1760,13 +1760,13 @@ function ProfileEditor({
                 >
                   <div className="relative flex items-center gap-3 p-3">
                     <div className="w-14 h-14 rounded-xl overflow-hidden shrink-0 bg-black/20 flex items-center justify-center">
-                      {draft.activity_cover_url ? <img src={draft.activity_cover_url} className="w-full h-full object-cover" alt="" /> : <Music className="w-6 h-6 text-white/80" />}
+                      {draft.activity_cover_url ? <img src={draft.activity_cover_url} className="w-full h-full object-cover" alt="" /> : <Music className="w-6 h-6 text-muted-foreground/80" />}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="font-semibold text-sm truncate drop-shadow">{draft.activity_title}</div>
-                      <div className="text-xs text-white/80 truncate drop-shadow">{draft.activity_subtitle}</div>
+                      <div className="text-xs text-muted-foreground/80 truncate drop-shadow">{draft.activity_subtitle}</div>
                     </div>
-                    <motion.button whileTap={{ scale: 0.9 }} onClick={() => setTrackPickerOpen(true)} className="w-9 h-9 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
+                    <motion.button whileTap={{ scale: 0.9 }} onClick={() => setTrackPickerOpen(true)} className="w-9 h-9 rounded-full bg-muted-foreground/30 backdrop-blur-sm flex items-center justify-center">
                       <Pen className="w-3.5 h-3.5" />
                     </motion.button>
                   </div>
@@ -1779,17 +1779,17 @@ function ProfileEditor({
                   exit={{ opacity: 0 }}
                   whileTap={{ scale: 0.97 }}
                   onClick={() => setTrackPickerOpen(true)}
-                  className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl bg-white/5 border border-dashed border-white/10 text-sm text-white/50"
+                  className="w-full flex items-center justify-center gap-2 py-4 rounded-2xl bg-white/5 border border-dashed border-border text-sm text-muted-foreground/50"
                 >
                   <Plus className="w-4 h-4" /> Выбрать трек
                 </motion.button>
               )}
             </AnimatePresence>
 
-            <p className="text-xs text-white/30 mt-3 leading-relaxed">Собеседники увидят, что ты слушаешь, в твоём профиле.</p>
+            <p className="text-xs text-muted-foreground/30 mt-3 leading-relaxed">Собеседники увидят, что ты слушаешь, в твоём профиле.</p>
           </div>
 
-          <div className="mx-5 mt-3 rounded-[20px] bg-[#131318] p-4">
+          <div className="mx-5 mt-3 rounded-[20px] bg-muted p-4">
             <div className="flex items-center gap-2.5 mb-3">
               <Megaphone className="w-4 h-4 text-emerald-300" />
               <span className="text-sm font-semibold">Канал</span>
@@ -1798,13 +1798,13 @@ function ProfileEditor({
               <div className="flex items-center gap-3 bg-black/30 rounded-xl px-3 py-2.5">
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-semibold truncate">{draft.channel_name}</div>
-                  <div className="text-xs text-white/40 truncate">@{draft.channel_username}</div>
+                  <div className="text-xs text-muted-foreground/40 truncate">@{draft.channel_username}</div>
                 </div>
                 <button onClick={() => setChannelPickerOpen(true)} className="text-xs font-semibold text-primary shrink-0">Сменить</button>
-                <button onClick={clearChannel} className="shrink-0"><X className="w-3.5 h-3.5 text-white/30" /></button>
+                <button onClick={clearChannel} className="shrink-0"><X className="w-3.5 h-3.5 text-muted-foreground/30" /></button>
               </div>
             ) : (
-              <motion.button whileTap={{ scale: 0.98 }} onClick={() => setChannelPickerOpen(true)} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-white/5 border border-dashed border-white/10 text-sm text-white/50">
+              <motion.button whileTap={{ scale: 0.98 }} onClick={() => setChannelPickerOpen(true)} className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl bg-white/5 border border-dashed border-border text-sm text-muted-foreground/50">
                 <Plus className="w-4 h-4" /> Привязать канал
               </motion.button>
             )}
@@ -1813,7 +1813,7 @@ function ProfileEditor({
           <div className="h-24" />
         </div>
 
-        <motion.div initial={false} animate={{ y: isDirty ? 0 : "100%" }} transition={{ type: "spring", damping: 35, stiffness: 300 }} className="shrink-0 px-5 pb-5 pt-3 border-t border-white/5 bg-[#0a0a0d]">
+        <motion.div initial={false} animate={{ y: isDirty ? 0 : "100%" }} transition={{ type: "spring", damping: 35, stiffness: 300 }} className="shrink-0 px-5 pb-5 pt-3 border-t border-white/5 bg-background">
           <motion.button whileTap={{ scale: 0.98 }} onClick={handleSave} disabled={!isDirty || saving} className="w-full h-12 rounded-2xl bg-primary text-primary-foreground font-bold text-sm flex items-center justify-center gap-2 disabled:opacity-40">
             {saving ? "Сохраняю..." : (<><Check className="w-4 h-4" /> Сохранить изменения</>)}
           </motion.button>

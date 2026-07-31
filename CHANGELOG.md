@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.2.3] - 2026-07-30
 
 ### Added
 - Public profile page `/p?u=[username]`: sticky header with full Echo logo and a "Скачать" button, avatar, display name, bio and channel subscribers count.
@@ -41,6 +41,9 @@
 - Mobile search field unreadable placeholders/borders on light theme due to hardcoded white opacities.
 
 ---
+
+## [Unreleased]
+
 
 ## [0.2.2] - 2026-07-28
 

@@ -154,19 +154,19 @@ export async function saveSession(params: SaveSessionParams): Promise<void> {
   await waitForBackend();
   return invoke("save_session", {
     id: params.id,
-    user_id: params.user_id,
-    access_token: params.access_token,
-    refresh_token: params.refresh_token ?? null,
-    device_hwid: params.device_hwid ?? null,
-    device_name: params.device_name ?? null,
-    ip_address: params.ip_address ?? null,
-    expires_at: params.expires_at,
+    userId: params.user_id,
+    accessToken: params.access_token,
+    refreshToken: params.refresh_token ?? null,
+    deviceHwid: params.device_hwid ?? null,
+    deviceName: params.device_name ?? null,
+    ipAddress: params.ip_address ?? null,
+    expiresAt: params.expires_at,
   });
 }
 
 export async function getSession(userId: string): Promise<Session | null> {
   await waitForBackend();
-  return invoke<Session | null>("get_session", { user_id: userId });
+  return invoke<Session | null>("get_session", { userId });
 }
 
 export async function deleteSession(id: string): Promise<void> {
@@ -176,7 +176,7 @@ export async function deleteSession(id: string): Promise<void> {
 
 export async function getAllSessions(userId: string): Promise<Session[]> {
   await waitForBackend();
-  return invoke<Session[]>("get_all_sessions", { user_id: userId });
+  return invoke<Session[]>("get_all_sessions", { userId });
 }
 
 export async function getPersistedSession(): Promise<Session | null> {
@@ -192,17 +192,17 @@ export async function saveDevice(params: SaveDeviceParams): Promise<void> {
   await waitForBackend();
   return invoke("save_device", {
     id: params.id,
-    user_id: params.user_id,
+    userId: params.user_id,
     hwid: params.hwid,
-    device_name: params.device_name ?? null,
+    deviceName: params.device_name ?? null,
     platform: params.platform ?? null,
-    is_current: params.is_current ?? null,
+    isCurrent: params.is_current ?? null,
   });
 }
 
 export async function getDevices(userId: string): Promise<Device[]> {
   await waitForBackend();
-  return invoke<Device[]>("get_devices", { user_id: userId });
+  return invoke<Device[]>("get_devices", { userId });
 }
 
 export async function deleteDevice(id: string): Promise<void> {
@@ -218,10 +218,10 @@ export async function saveAccount(params: SaveAccountParams): Promise<void> {
   await waitForBackend();
   return invoke("save_account", {
     id: params.id,
-    public_key: params.public_key,
-    encrypted_seed: params.encrypted_seed,
-    display_name: params.display_name ?? null,
-    avatar_url: params.avatar_url ?? null,
+    publicKey: params.public_key,
+    encryptedSeed: params.encrypted_seed,
+    displayName: params.display_name ?? null,
+    avatarUrl: params.avatar_url ?? null,
   });
 }
 

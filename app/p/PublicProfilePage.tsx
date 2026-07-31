@@ -49,7 +49,7 @@ function resolveBackground(bg: string | null): string {
 export default function PublicProfilePage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen bg-[#0a0a0c] flex items-center justify-center">
+      <div className="min-h-screen bg-background flex items-center justify-center">
         <TbLoader className="w-8 h-8 animate-spin text-primary" />
       </div>
     }>
@@ -160,12 +160,12 @@ function PublicProfilePageInner() {
 
   if (notFound || !profile) {
     return (
-      <div className="min-h-screen bg-[#0a0a0c] flex flex-col items-center justify-center gap-4 text-white px-6">
-        <div className="w-16 h-16 rounded-full bg-white/5 flex items-center justify-center">
-          <TbFlag className="w-8 h-8 text-white/20" />
+      <div className="min-h-screen bg-background text-foreground flex flex-col items-center justify-center gap-4 px-6">
+        <div className="w-16 h-16 rounded-full bg-background flex items-center justify-center">
+          <TbFlag className="w-8 h-8 text-muted-foreground/60" />
         </div>
         <h1 className="text-xl font-semibold">Профиль не найден</h1>
-        <p className="text-white/40 text-sm text-center">
+        <p className="text-muted-foreground text-sm text-center">
           Пользователь или канал @{username} не существует.
         </p>
         <Button onClick={() => router.push('/')} variant="outline" className="mt-4 rounded-xl">
@@ -180,9 +180,9 @@ function PublicProfilePageInner() {
     : BG_PRESETS.violet;
 
   return (
-    <main className="min-h-screen bg-[#0a0a0c] text-white antialiased">
+    <main className="min-h-screen bg-background text-foreground antialiased">
       {/* Шапка */}
-      <header className="sticky top-0 z-20 flex items-center justify-between px-4 sm:px-6 h-14 bg-[#0a0a0c]/80 backdrop-blur-md border-b border-white/5">
+      <header className="sticky top-0 z-20 flex items-center justify-between px-4 sm:px-6 h-14 bg-background/80 backdrop-blur-md border-b border-border">
         <button
           onClick={() => router.push('/')}
           className="flex items-center"
@@ -208,13 +208,13 @@ function PublicProfilePageInner() {
           className="absolute inset-0"
           style={{ background: bg }}
         />
-        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-[#0a0a0c]" />
+        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-background" />
 
         <div className="absolute top-4 left-4 z-10">
           <Button
             variant="ghost"
             size="icon"
-            className="w-9 h-9 rounded-full bg-black/40 backdrop-blur-sm hover:bg-black/60 text-white"
+            className="w-9 h-9 rounded-full bg-background/40 backdrop-blur-sm hover:bg-background/60 text-foreground"
             onClick={() => router.back()}
           >
             <ArrowBack className="w-4 h-4" />
@@ -223,7 +223,7 @@ function PublicProfilePageInner() {
       </div>
 
       <div className="relative -mt-16 flex flex-col items-center px-6 pb-12">
-        <Avatar className="w-28 h-28 border-4 border-[#0a0a0c] shadow-2xl">
+        <Avatar className="w-28 h-28 border-4 border-background shadow-2xl">
           {profile.avatar_url ? (
             <AvatarImage src={profile.avatar_url} alt={profile.display_name} />
           ) : (
@@ -235,8 +235,8 @@ function PublicProfilePageInner() {
             </AvatarFallback>
           )}
           {profile.is_channel && (
-            <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-primary rounded-full flex items-center justify-center border-2 border-[#0a0a0c]">
-              <TbBell className="w-3 h-3 text-black" />
+            <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-primary rounded-full flex items-center justify-center border-2 border-background">
+              <TbBell className="w-3 h-3 text-primary-foreground" />
             </div>
           )}
         </Avatar>
@@ -245,17 +245,17 @@ function PublicProfilePageInner() {
           <h1 className="text-2xl font-bold flex items-center justify-center gap-2">
             {profile.display_name}
           </h1>
-          <p className="text-white/40 mt-1 text-sm">@{profile.username}</p>
+          <p className="text-muted-foreground mt-1 text-sm">@{profile.username}</p>
 
           {profile.is_channel && profile.subscribers !== undefined && (
-            <p className="text-white/60 text-sm mt-2">
+            <p className="text-foreground/80 text-sm mt-2">
               {profile.subscribers.toLocaleString()} подписчиков
             </p>
           )}
         </div>
 
         {profile.bio && (
-          <p className="mt-4 text-white/60 text-sm text-center max-w-md leading-relaxed">
+          <p className="mt-4 text-muted-foreground text-sm text-center max-w-md leading-relaxed">
             {profile.bio}
           </p>
         )}
@@ -282,7 +282,7 @@ function PublicProfilePageInner() {
         </div>
 
         <div className="mt-12 text-center">
-          <p className="text-white/15 text-xs">Echo — Secure Mesh Messenger</p>
+          <p className="text-muted-foreground/50 text-xs">Echo — Secure Mesh Messenger</p>
         </div>
       </div>
     </main>

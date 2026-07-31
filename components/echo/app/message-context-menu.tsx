@@ -61,7 +61,7 @@ export function MessageContextMenu({
             exit={{ opacity: 0, scale: 0.85, y: 6 }}
             transition={{ type: "spring", damping: 22, stiffness: 320 }}
             style={{ position: "absolute", top: reactTop, left: menuLeft }}
-            className="z-50 flex gap-1.5 bg-[#18181c] border border-white/10 rounded-full px-2.5 py-1.5 shadow-2xl"
+            className="z-50 flex gap-1.5 bg-background border border-border rounded-full px-2.5 py-1.5 shadow-2xl"
           >
             {QUICK_REACTIONS.map((e) => (
               <button
@@ -80,7 +80,7 @@ export function MessageContextMenu({
             exit={{ opacity: 0, scale: 0.85, y: -6 }}
             transition={{ type: "spring", damping: 22, stiffness: 320 }}
             style={{ position: "absolute", top: menuTop, left: menuLeft }}
-            className="z-50 min-w-[170px] bg-[#18181c] border border-white/10 rounded-2xl overflow-hidden shadow-2xl"
+            className="z-50 min-w-[170px] bg-background border border-border rounded-2xl overflow-hidden shadow-2xl"
           >
             <MenuItem icon={Reply} label="Ответить" onClick={() => { onReply(target.message); onClose(); }} />
             <MenuItem icon={Copy} label="Копировать" onClick={() => { onCopy(target.message); onClose(); }} />
@@ -110,8 +110,8 @@ function MenuItem({
     <button
       onClick={onClick}
       className={cn(
-        "w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[12.5px] transition-colors hover:bg-white/5",
-        danger ? "text-red-400" : "text-white/90"
+        "w-full flex items-center gap-2.5 px-3.5 py-2.5 text-[12.5px] transition-colors hover:bg-accent/40",
+        danger ? "text-destructive" : "text-foreground"
       )}
     >
       <Icon className="w-4 h-4" /> {label}
