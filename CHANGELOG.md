@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.5] - 2026-08-02
+
+### Added
+- **Edge Function `send-call-push`** (`supabase/functions/send-call-push/index.ts`): отправляет высокоприоритетный FCM **data-only** пуш для пробуждения Tauri/Rust-бэкенда Android из глубокого сна. Принимает `target_fcm_token`, `room_id`, `caller_id`, `caller_name`, `caller_avatar`; отправляет на `https://fcm.googleapis.com/v1/projects/<PROJECT_ID>/messages:send` с `priority: "high"`, `ttl: "0s"` и объектом `data: { type: "incoming_call", ... }`. Объект `notification` **категорически отсутствует** — только data-payload, чтобы ОС не показывала стандартную шторку и Rust мог сам управлять экраном входящего звонка.
+- **Call-log helper** (`hooks/echo/call-log.ts`): общий модуль с `CallLogMeta` (`status: "outgoing" | "incoming" | "missed"`, `duration`, `withVideo`), `parseCallLogJson(content)` (безопасный парсинг с фолбэком в `missed` при повреждённом JSON) и `serializeCallLog(meta)` для подготовки payload перед INSERT.
+- **Реальный INSERT логов звонков** в `app/app/page.tsx`: `handleCallLog` теперь сериализует метаданные лога в JSON через `serializeCallLog` и выполняет `supabase.from("messages").insert({ ..., type: "call_log", status: "sent" })` вместо оптимистичного append-only в локальный стейт.
+
+### Changed
+- **E2EE-пайплайн защищён от `call_log`**:
+  - `hooks/echo/use-messages.ts` (fetch истории): добавлен байпас `if (m.type === "call_log")` — для таких сообщений `decryptMessage` не вызывается, вместо этого парсится незашифрованный JSON из `content` и добавляются `call_status`/`call_duration`. Для остальных типов дешифратор обёрнут в `try/catch` (возвращает `"[E2EE Error]"` вместо падения при гонке ключей или bad-padding).
+  - `hooks/echo/use-realtime.ts` (INSERT и UPDATE события): добавлен байпас `call_log` в оба обработчика (`postgres_changes` INSERT и UPDATE). Для `call_log`: парсится JSON, сообщение доставляется в чат через `onNewMessage`/`onUpdateMessage` с полями `call_status`/`call_duration`, а в шторку уведомлений передаётся пустая строка (логи не должны отображаться в системных уведомлениях). Для остальных сообщений E2EE-дешифратор работает без изменений.
+
+### Security
+- Логи звонков (`type: "call_log"`) **не шифруются E2EE** — поле `content` хранит plain JSON с системными метаданными (`status`, `duration`, `withVideo`). Это сознательное решение: дешифратор `nacl.box.open` вызывается только для приватных сообщений; для системных данных вызов исключён, что исключает падение дешифратора на неожиданных типах и предотвращает утечку padding-ошибок в консоль.
+- Edge-функция валидирует входные поля (400 на `missing required fields`), проверяет наличие `FIREBASE_PROJECT_ID`/`FIREBASE_ACCESS_TOKEN` в окружении (500 при misconfiguration) и не раскрывает внутренние детали ошибок FCM клиенту.
+- CORS настроен на `Access-Control-Allow-Origin: "*"` + allowlisted методы `POST, OPTIONS` и заголовки `authorization, x-client-info, apikey, content-type`.
+
+---
+
+
 ## [0.2.4] - 2026-08-02
 
 ### Added

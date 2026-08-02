@@ -117,12 +117,14 @@ export type CallStatus =
   | "failed";
 
 /**
- * Расширение RTCRtpEncodingParameters для Chrome-only minBitrate
- * (не входит в стандарт W3C, но поддерживается Chromium-вебвью Tauri).
+ * Расширение RTCRtpEncodingParameters для Chrome-only свойств
+ * (не входят в стандарт W3C lib.dom.d.ts, но поддерживаются
+ * Chromium-вебвью Tauri): minBitrate/maxBitrate и SVC scalabilityMode.
  */
 interface VideoEncodingParameters extends RTCRtpEncodingParameters {
   minBitrate?: number;
   maxBitrate?: number;
+  scalabilityMode?: string;
 }
 
 /** Сообщения сигналинга через Supabase Broadcast. */
@@ -503,7 +505,7 @@ export function useWebRtcCall({
 
         const answer = await pc.createAnswer();
         const mungedAnswer = mungeSdpCodecPriority(
-          answer.sdp,
+          answer.sdp ?? "",
           codecPriorityRef.current,
         );
         await pc.setLocalDescription({ type: "answer", sdp: mungedAnswer });
@@ -570,7 +572,7 @@ export function useWebRtcCall({
     if (statusRef.current === "ended" || statusRef.current === "idle") return;
     try {
       const offer = await pc.createOffer({ iceRestart: true });
-      const munged = mungeSdpCodecPriority(offer.sdp, codecPriorityRef.current);
+      const munged = mungeSdpCodecPriority(offer.sdp ?? "", codecPriorityRef.current);
       await pc.setLocalDescription({ type: "offer", sdp: munged });
       await sendSignal(SIGNAL_EVENT.OFFER, {
         type: "offer",
@@ -593,7 +595,7 @@ export function useWebRtcCall({
     try {
       setStatusSafe("connecting");
       const offer = await pc.createOffer();
-      const munged = mungeSdpCodecPriority(offer.sdp, codecPriorityRef.current);
+      const munged = mungeSdpCodecPriority(offer.sdp ?? "", codecPriorityRef.current);
       await pc.setLocalDescription({ type: "offer", sdp: munged });
       await sendSignal(SIGNAL_EVENT.OFFER, {
         type: "offer",

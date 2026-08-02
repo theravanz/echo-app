@@ -39,6 +39,7 @@
   ],
   "exclude": [
     "node_modules",
+    "supabase/functions",
     "нужно переделать под текущий стек"
   ]
 }

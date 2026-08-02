@@ -45,3 +45,9 @@ hex = "0.4"
 # Добавить для стикеров:
 image = "0.25"                    # webp, png, jpeg
 zstd = "0.13"                    # декомпрессия .tgs
+
+# === WebKitGTK (Linux only) ===
+# Нужен для прямого доступа к WebKitSettings — включить media_stream
+# (getUserMedia для звонков). wry 0.55 по умолчанию НЕ включает его.
+[target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
+webkit2gtk = "2.0"

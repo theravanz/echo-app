@@ -21,6 +21,44 @@ fn handle_notification_click(app: tauri::AppHandle, chat_id: String) {
     let _ = app.emit("notification-clicked", chat_id);
 }
 
+/// Включает WebKitGTK media_stream для getUserMedia() (камера/микрофон).
+/// wry 0.55 НЕ устанавливает enable-media-stream по умолчанию →
+/// WebKitGTK блокирует getUserMedia с NotAllowedError.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+fn enable_media_stream(app: &AppHandle<tauri::Wry>) {
+    use webkit2gtk::{SettingsExt, WebViewExt};
+
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.with_webview(|webview| {
+            if let Some(settings) = webview.inner().settings() {
+                settings.set_enable_media_stream(true);
+                log::info!("[Media] WebKitGTK media_stream enabled");
+            } else {
+                log::warn!("[Media] WebKitGTK settings() returned None");
+            }
+        });
+    } else {
+        log::warn!("[Media] main webview window not found");
+    }
+}
+
+/// No-op для не-Linux платформ (Windows/macOS используют WebView2/WKWebView,
+/// где getUserMedia работает по умолчанию или через другие механизмы).
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+)))]
+fn enable_media_stream(_app: &AppHandle<tauri::Wry>) {}
+
 /// Инициализация менеджера уведомлений
 fn init_notification_manager(app: &AppHandle<tauri::Wry>) {
     let supabase_url = std::env::var("NEXT_PUBLIC_SUPABASE_URL")
@@ -166,6 +204,7 @@ pub fn run() {
             init_storage_manager(app.handle());
             init_vault(app.handle());
             init_notification_manager(app.handle());
+            enable_media_stream(app.handle());
 
             app.listen("notification-clicked", |event| {
                 println!("[Notifications] Clicked: {:?}", event.payload());

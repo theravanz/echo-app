@@ -513,10 +513,30 @@ useEffect(() => {
 
       // 4. Асинхронная инициализация (сессия, профиль, чаты)
       if (isOffline) {
+        if (isMounted) setAppLoading(false);
         return;
       }
 
-      const { data: { session } } = await supabase.auth.getSession();
+      // Таймаут 5с: если getSession() зависнет на autoRefreshToken,
+      // не оставляем пользователя на чёрном экране.
+      let session: any = null;
+      try {
+        const result = await Promise.race([
+          supabase.auth.getSession(),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('auth timeout')), 5000),
+          ),
+        ]);
+        session = result.data.session;
+      } catch (e) {
+        console.error('App init: auth check failed/timeout:', e);
+        if (isMounted) {
+          setAppLoading(false);
+          router.push('/auth');
+        }
+        return;
+      }
+
       if (!session) {
         router.push('/auth');
         return;
@@ -618,6 +638,10 @@ useEffect(() => {
       } catch (err) { console.error('Device init error:', err); }
 
       fetchChats(userData.id).catch(err => console.error('Fetch chats error:', err));
+
+      // Init complete — снимаем loading-состояние (раньше это делалось
+      // только в catch, что оставляло appLoading=true навсегда при успехе).
+      if (isMounted) setAppLoading(false);
 
     } catch (error) {
       console.error('App init error:', error);
