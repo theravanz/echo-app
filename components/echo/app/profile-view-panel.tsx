@@ -145,6 +145,8 @@ export function ProfileViewPanel({
   onBlock,
   onReport,
   onClearHistory,
+  onCall,
+  onVideoCall,
   isMuted,
 }: {
   profile: ViewedProfile;
@@ -153,6 +155,8 @@ export function ProfileViewPanel({
   onBlock?: () => void;
   onReport?: () => void;
   onClearHistory?: () => void;
+  onCall?: () => void;
+  onVideoCall?: () => void;
   isMuted?: boolean;
 }) {
   const [avatarLevel, setAvatarLevel] = useState<0 | 1 | 2>(0);
@@ -367,8 +371,8 @@ export function ProfileViewPanel({
         <div className="flex px-2 pt-5 pb-2">
           {[
             { icon: MessageCircle, label: "Чат" },
-            { icon: Phone, label: "Звонок" },
-            { icon: Video, label: "Видео" },
+            { icon: Phone, label: "Звонок", onClick: onCall },
+            { icon: Video, label: "Видео", onClick: onVideoCall },
             { icon: isMuted ? BellOff : Bell, label: isMuted ? "Включить" : "Звук", onClick: onMuteToggle },
           ].map((a, i) => (
             <button key={i} onClick={a.onClick} className="flex-1 flex flex-col items-center gap-1.5">

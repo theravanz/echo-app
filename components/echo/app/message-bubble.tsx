@@ -3,6 +3,7 @@
 import React, { memo, useRef, useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { LinkPreview } from "./link-preview";
+import { CallLogMessage } from "./CallLogMessage";
 import {
   TbCheck as Check,
   TbChecks as CheckCheck,
@@ -335,6 +336,18 @@ export const MessageBubble = memo(({ msg, isMe, showAvatar, activeChat, user, on
   const mentionCards = mentions.map((username) => (
     <MentionMiniCard key={username} username={username} onClick={onMentionClick} />
   ));
+
+  // Системная плашка лога звонка (не обычный пузырь).
+  if (msg.type === "call_log") {
+    return (
+      <CallLogMessage
+        status={msg.call_status ?? "missed"}
+        duration={Number(msg.call_duration ?? 0)}
+        timestamp={msg.created_at}
+        isMe={isMe}
+      />
+    );
+  }
 
   return (
     <div className={cn("flex items-end gap-3 group animate-in fade-in slide-in-from-bottom-4 duration-500", isMe ? "flex-row-reverse" : "flex-row")}>

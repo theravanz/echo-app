@@ -123,6 +123,8 @@ import { MobileTabBar } from "@/components/echo/app/mobile-tab-bar";
 import { ChatWallpaper, type WallpaperPreset } from "@/components/echo/app/chat-wallpaper";
 import { ChatBackgroundPicker } from "@/components/echo/app/chat-background-picker";
 import { useContactAccentColor } from "@/hooks/echo/use-contact-accent";
+import { CallOverlay, type OutgoingCallRequest, type CallLogData } from "@/components/echo/app/CallOverlay";
+import { serializeCallLog } from "@/hooks/echo/call-log";
 
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
@@ -172,6 +174,7 @@ function EchoAppContent() {
   const [accounts, setAccounts] = useState<any[]>([]);
   const [isRightPanelOpen, setIsRightPanelOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [outgoingCall, setOutgoingCall] = useState<OutgoingCallRequest | null>(null);
   const [isQuarantined, setIsQuarantined] = useState(false);
   const [quarantineTime, setQuarantineTime] = useState("");
   const [currentHwid, setCurrentHwid] = useState("");
@@ -301,6 +304,63 @@ function EchoAppContent() {
   const { notifyNewMessage } = useNotifications({ user, chats, settings: notificationSettings, onNotificationClick: (chatId) => setSelectedChat(chats.find(c => c.id === chatId) || null) });
 
  
+
+  // === Call initiation ===
+  const startOutgoingCall = useCallback(
+    (withVideo: boolean) => {
+      if (!user?.id || !selectedChat) return;
+      setOutgoingCall({
+        peerId: selectedChat.id,
+        peerName: selectedChat.display_name || selectedChat.username || "Пользователь",
+        peerAvatar: selectedChat.avatar_url || null,
+        peerAccent: selectedChat.avatar_color || null,
+        withVideo,
+      });
+    },
+    [user?.id, selectedChat],
+  );
+
+  const handleCallLog = useCallback(
+    (log: CallLogData) => {
+      if (!user?.id) return;
+      // Сериализуем метаданные лога в JSON (НЕ шифруется E2EE).
+      const content = serializeCallLog({
+        status: log.status,
+        duration: log.duration,
+        withVideo: log.withVideo,
+      });
+      const tempId = `call_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+      const logMsg: any = {
+        id: tempId,
+        sender_id: user.id,
+        receiver_id: log.peerId,
+        content,
+        type: "call_log",
+        call_status: log.status,
+        call_duration: log.duration,
+        created_at: new Date(log.timestamp).toISOString(),
+        status: "sent",
+      };
+      // Оптимистично вставляем в локальный стейт.
+      setMessages((prev) =>
+        prev.some((m) => m.id === tempId) ? prev : [...prev, logMsg],
+      );
+      // Реальный INSERT в таблицу messages (call_log НЕ шифруется E2EE).
+      supabase
+        .from("messages")
+        .insert({
+          sender_id: user.id,
+          receiver_id: log.peerId,
+          content,
+          type: "call_log",
+          status: "sent",
+        })
+        .then(({ error }) => {
+          if (error) console.error("[CallLog] insert failed:", error);
+        });
+    },
+    [user?.id, setMessages],
+  );
 
   // Drafts: load when switching chats
 useEffect(() => {
@@ -975,6 +1035,8 @@ useEffect(() => {
                 }
               }}
               onMuteToggle={() => {}}
+              onCall={() => startOutgoingCall(false)}
+              onVideoCall={() => startOutgoingCall(true)}
               onBlock={async () => {
                 await supabase.from("blocks").insert({ blocker_id: user?.id, blocked_id: selectedChat.id });
               }}
@@ -1088,6 +1150,14 @@ useEffect(() => {
           overscroll-behavior: contain;
         }
       `}</style>
+
+      {/* --- Call Overlay (fullscreen call UI + FCM wake) --- */}
+      <CallOverlay
+        currentUserId={user?.id ?? ""}
+        outgoingCall={outgoingCall}
+        onOutgoingConsumed={() => setOutgoingCall(null)}
+        onCallLog={handleCallLog}
+      />
     </div>
   );
 }

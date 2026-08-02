@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
 import { useE2EE } from "./use-e2ee";
 import { generateTempId } from "./use-network-queue";
+import { parseCallLogJson } from "./call-log";
 import type { Message, PendingMessage, Chat, UserProfile } from "./types";
 
 interface UseMessagesReturn {
@@ -69,12 +70,33 @@ export function useMessages(chats: Chat[] = []): UseMessagesReturn {
 
       const processed = await Promise.all(
         (data || []).map(async (m: any) => {
-          const otherId = m.sender_id === currentUserId ? m.receiver_id : m.sender_id;
-          return {
-            ...m,
-            content: await decryptMessage(m.content || "", m.nonce || "", otherId),
-            // ✅ Теперь decryptMessage использует кэш из useE2EE!
-          } as Message;
+          // Логи звонков НЕ шифруются E2EE — пропускаем дешифратор,
+          // парсим незашифрованный JSON-метаданные из content.
+          if (m.type === "call_log") {
+            const meta = parseCallLogJson(m.content || "");
+            return {
+              ...m,
+              call_status: meta.status,
+              call_duration: meta.duration,
+            } as Message;
+          }
+          const otherId =
+            m.sender_id === currentUserId ? m.receiver_id : m.sender_id;
+          // Остальные сообщения — стандартный E2EE-пайплайн,
+          // защищённый try/catch от bad-padding при гонке ключей.
+          try {
+            return {
+              ...m,
+              content: await decryptMessage(
+                m.content || "",
+                m.nonce || "",
+                otherId,
+              ),
+            } as Message;
+          } catch (err) {
+            console.error("Decrypt message failed:", err);
+            return { ...m, content: "[E2EE Error]" } as Message;
+          }
         }),
       );
       const decryptedMessages = processed.filter(Boolean);

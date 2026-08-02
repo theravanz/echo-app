@@ -3,6 +3,7 @@
 import { useEffect, useRef, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { useE2EE } from "./use-e2ee";
+import { parseCallLogJson } from "./call-log";
 import type { UserProfile, Chat, Message } from "./types";
 
 interface UseRealtimeProps {
@@ -74,6 +75,25 @@ export function useRealtime({
           if (nm.receiver_id === user.id) {
             debouncedFetchChats();
 
+            // Логи звонков не шифруются — байпас E2EE, парсим JSON.
+            if (nm.type === "call_log") {
+              const meta = parseCallLogJson(nm.content || "");
+              const logMsg = {
+                ...nm,
+                call_status: meta.status,
+                call_duration: meta.duration,
+              };
+              if (
+                selectedChatRef.current &&
+                nm.sender_id === selectedChatRef.current.id
+              ) {
+                onNewMessage(logMsg as Message);
+              }
+              // Для уведомления отдаём пустую строку — лог не показываем в шторке
+              onNotifyMessage(nm.sender_id, "", selectedChatRef.current?.id);
+              return;
+            }
+
             let decryptedContent = nm.content;
             try {
               decryptedContent = await decryptRef.current(nm.content, nm.nonce, nm.sender_id);
@@ -101,11 +121,21 @@ export function useRealtime({
               (nm.sender_id === selectedChatRef.current.id ||
                 nm.receiver_id === selectedChatRef.current.id)
             ) {
-              try {
-                const otherId = nm.sender_id === user.id ? nm.receiver_id : nm.sender_id;
-                const dec = await decryptRef.current(nm.content, nm.nonce, otherId);
-                onUpdateMessage({ ...nm, content: dec } as Message);
-              } catch { /* ignore */ }
+              // Логи звонков не шифруются — байпас E2EE, парсим JSON.
+              if (nm.type === "call_log") {
+                const meta = parseCallLogJson(nm.content || "");
+                onUpdateMessage({
+                  ...nm,
+                  call_status: meta.status,
+                  call_duration: meta.duration,
+                } as Message);
+              } else {
+                try {
+                  const otherId = nm.sender_id === user.id ? nm.receiver_id : nm.sender_id;
+                  const dec = await decryptRef.current(nm.content, nm.nonce, otherId);
+                  onUpdateMessage({ ...nm, content: dec } as Message);
+                } catch { /* ignore */ }
+              }
             }
           }
         },

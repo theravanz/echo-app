@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.2.4] - 2026-08-02
+
+### Added
+- **QR-based E2EE key exchange** between desktop (Tauri/React) and mobile (Rust): dynamic QR code replaces the old `echo.app` stub. Desktop generates an ephemeral X25519 keypair via tweetnacl, renders a QR with `app://auth?session_id=<id>&web_pub_key=<base64url>` and subscribes to a Supabase Realtime channel `auth_<id>` via `postgres_changes`.
+- **Mobile QR scanner** (`components/echo/app/qr-login-scanner.tsx`): in-app camera scanner using `jsQR`, integrated into Settings → Devices. Parses the deep-link QR, invokes the Rust backend to encrypt the local E2EE key and broadcasts it to the desktop.
+- **Rust QR auth module** (`src-tauri/src/qr_auth.rs`): new Tauri command `qr_send_e2ee_key` — loads the E2EE key from the local vault, generates an ephemeral `crypto_box` (XSalsa20-Poly1305 / X25519, tweetnacl-compatible) keypair, encrypts the key, and sends the payload to Supabase via `reqwest` POST to `broadcast_message` RPC.
+- **Supabase Realtime transport**: new migration `0003_auth_broadcasts.sql` — `auth_broadcasts` table + `broadcast_message` SECURITY DEFINER RPC + `ALTER PUBLICATION supabase_realtime ADD TABLE auth_broadcasts`. Removes the need for a dedicated WebSocket signaling server.
+- **Android CAMERA permission** (`AndroidManifest.xml`): required for the in-app QR scanner.
+
+### Changed
+- **QR payload format**: switched from hex to base64url for `web_pub_key`, and shortened query params to `s` (session_id) and `k` (web_pub_key), reducing QR density from version 25+ to version 11 (61×61 modules).
+- **QR code size**: increased from 140px to 220px for better mobile camera readability.
+- **Camera constraints**: scanner now requests `facingMode: "environment"` with `ideal` width/height 1280×720 and `audio: false`, preferring the main rear camera over ultra-wide (0.6×) lenses.
+- **Settings modal**: added "Scan QR to Sign In" button under Devices; scanner overlays the modal without clipping.
+- **Vault migration**: private key is now migrated from `localStorage` to Tauri vault before QR login if needed (`migratePrivateKeyToVault`), fixing "Vault is empty" errors for users who previously stored keys in localStorage.
+
+### Fixed
+- QR code unscannable on mobile due to excessive density (139 hex chars in 140px QR).
+- Ultra-wide camera (0.6×) failing to focus at close range during QR scan.
+- `savePrivateKey` silently swallowing vault errors and falling back to localStorage; now throws so the caller can handle the failure.
+- Scanner overlay clipped by `overflow-hidden` on the Settings modal (moved overlay to sibling level + added `stopPropagation`).
+
+### Security
+- End-to-end encryption: the shared secret is derived via X25519 Diffie-Hellman (ephemeral keypairs) and the E2EE key is sealed with XSalsa20-Poly1305. Supabase only sees ciphertext; keys never leave the devices.
+- Ephemeral key material (`webKeyPairRef`) is zeroized from memory after successful exchange or component unmount.
+- `broadcast_message` RPC validates that channel names start with `auth_` and uses `SECURITY DEFINER` to prevent privilege escalation.
+
+---
+
 ## [0.2.3] - 2026-07-30
 
 ### Added
@@ -41,8 +70,6 @@
 - Mobile search field unreadable placeholders/borders on light theme due to hardcoded white opacities.
 
 ---
-
-## [Unreleased]
 
 
 ## [0.2.2] - 2026-07-28
