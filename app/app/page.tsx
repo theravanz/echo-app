@@ -105,6 +105,8 @@ import { toast } from "sonner";
 import { useTranslation } from "@/hooks/use-translation";
 import { useNotifications } from "@/hooks/echo/use-notifications";
 import { useNotificationSettings } from "@/hooks/echo/use-notification-settings";
+import { useFcm } from "@/hooks/echo/use-fcm";
+import { getFcmToken } from "@/lib/fcm";
 import { useChatList } from "@/hooks/echo/use-chat-list";
 import { useMessages } from "@/hooks/echo/use-messages";
 import { useNetworkQueue } from "@/hooks/echo/use-network-queue";
@@ -123,7 +125,7 @@ import { MobileTabBar } from "@/components/echo/app/mobile-tab-bar";
 import { ChatWallpaper, type WallpaperPreset } from "@/components/echo/app/chat-wallpaper";
 import { ChatBackgroundPicker } from "@/components/echo/app/chat-background-picker";
 import { useContactAccentColor } from "@/hooks/echo/use-contact-accent";
-import { CallOverlay, type OutgoingCallRequest, type CallLogData } from "@/components/echo/app/CallOverlay";
+import { CallOverlay, type OutgoingCallRequest, type CallLogData, deriveRoomId } from "@/components/echo/app/CallOverlay";
 import { serializeCallLog } from "@/hooks/echo/call-log";
 
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -303,6 +305,34 @@ function EchoAppContent() {
 
   const { notifyNewMessage } = useNotifications({ user, chats, settings: notificationSettings, onNotificationClick: (chatId) => setSelectedChat(chats.find(c => c.id === chatId) || null) });
 
+  // === FCM: регистрация push-токена устройства ===
+  // Получаем токен (нативный Android-мост или JS SDK фолбэк) и
+  // сохраняем в Rust-бэкенд + Supabase (device_tokens), чтобы пуши
+  // сообщений/звонков могли доставляться, когда приложение в фоне.
+  const { registerFcmToken } = useFcm(user?.id ?? null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const syncToken = async () => {
+      if (!user?.id) return;
+      const token = await getFcmToken();
+      if (cancelled) return;
+      if (!token) {
+        console.warn("[FCM] No push token available on this platform");
+        return;
+      }
+      try {
+        await registerFcmToken(token);
+      } catch (err) {
+        console.error("[FCM] Token registration failed:", err);
+      }
+    };
+    syncToken();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, registerFcmToken]);
+
  
 
   // === Call initiation ===
@@ -316,6 +346,26 @@ function EchoAppContent() {
         peerAccent: selectedChat.avatar_color || null,
         withVideo,
       });
+
+      // FCM-пуш "входящий звонок" получателю — фоном, не блокирует звонок.
+      // Будит приложение получателя в фоне и показывает экран звонка.
+      // Edge-функция сама находит токен получателя в device_tokens (RLS-обход).
+      try {
+        const roomId = deriveRoomId(user.id, selectedChat.id);
+        supabase.functions
+          .invoke("send-call-push", {
+            body: {
+              receiver_id: selectedChat.id,
+              room_id: roomId,
+              caller_id: user.id,
+              caller_name: user.display_name || user.username || "",
+              caller_avatar: user.avatar_url || "",
+            },
+          })
+          .catch((e) => console.warn("[Push] send-call-push failed:", e));
+      } catch (e) {
+        console.warn("[Push] failed to invoke send-call-push:", e);
+      }
     },
     [user?.id, selectedChat],
   );
@@ -1181,6 +1231,11 @@ useEffect(() => {
         outgoingCall={outgoingCall}
         onOutgoingConsumed={() => setOutgoingCall(null)}
         onCallLog={handleCallLog}
+        selectedChatId={selectedChat?.id ?? null}
+        selectedChatPeerName={selectedChat?.display_name || selectedChat?.username || null}
+        selectedChatPeerAvatar={selectedChat?.avatar_url || null}
+        currentUserName={user?.display_name || user?.username || null}
+        currentUserAvatar={user?.avatar_url || null}
       />
     </div>
   );

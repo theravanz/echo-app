@@ -35,3 +35,13 @@ class FcmTokenReceiver : BroadcastReceiver() {
 object FcmTokenHolder {
     var token: String? = null
 }
+
+/**
+ * Трекинг фореграунда приложения. Устанавливается MainActivity
+ * (onStart/onStop), чтобы EchoFirebaseService не дублировал системные
+ * уведомления о сообщениях, когда приложение открыто на экране.
+ */
+object AppForeground {
+    @Volatile
+    var isForeground = false
+}

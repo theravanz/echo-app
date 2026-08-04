@@ -214,6 +214,26 @@ export function useMessages(chats: Chat[] = []): UseMessagesReturn {
 
         if (error) throw error;
 
+        // FCM-пуш получателю — фоном, не блокирует отправку.
+        // Убирает задержку доставки в фоне (Android Doze): если вебсокет
+        // у получателя подвешен, push будит приложение и показывает
+        // уведомление мгновенно. Edge-функция прочитает его токен из
+        // device_tokens, чтобы контент (E2EE) в push не попадал.
+        try {
+          supabase.functions
+            .invoke("send-message-push", {
+              body: {
+                receiver_id: selectedChat.id,
+                sender_id: user.id,
+                sender_name: user.display_name || user.username || "",
+                sender_avatar: user.avatar_url || "",
+              },
+            })
+            .catch((e) => console.warn("[Push] send-message-push failed:", e));
+        } catch (e) {
+          console.warn("[Push] failed to invoke send-message-push:", e);
+        }
+
         setMessages((prev) =>
           prev.map((m) =>
             m.id === tempId

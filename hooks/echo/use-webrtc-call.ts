@@ -15,7 +15,7 @@
  *     на VPN / мобильных сетях.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 
@@ -90,7 +90,7 @@ const MEDIA_CONSTRAINTS: MediaStreamConstraints = {
 };
 
 /** События Supabase Broadcast (сигналинг). */
-const SIGNAL_EVENT = {
+export const SIGNAL_EVENT = {
   OFFER: "sdp-offer",
   ANSWER: "sdp-answer",
   ICE: "ice-candidate",
@@ -128,9 +128,13 @@ interface VideoEncodingParameters extends RTCRtpEncodingParameters {
 }
 
 /** Сообщения сигналинга через Supabase Broadcast. */
-interface SdpPayload {
+export interface SdpPayload {
   type: RTCSdpType;
   sdp: string;
+  caller_id?: string;
+  caller_name?: string;
+  caller_avatar?: string | null;
+  with_video?: boolean;
 }
 
 interface IcePayload {
@@ -148,6 +152,17 @@ export interface UseWebRtcCallOptions {
   enableVideo?: boolean;
   /** Включить аудиотрек (по умолчанию true). */
   enableAudio?: boolean;
+  /** Caller metadata: отправляется в OFFER для отображения у callee. */
+  callerId?: string;
+  callerName?: string;
+  callerAvatar?: string | null;
+  /** Callee ID — для отправки offer на персональный канал callee (только caller). */
+  calleeId?: string;
+  /**
+   * Внешний ref с уже полученным OFFER (обход гонки: CallOverlay
+   * подслушивает broadcast раньше, чем поднимется WebRTC-стек).
+   */
+  pendingOfferRef?: RefObject<SdpPayload | null>;
 }
 
 export interface UseWebRtcCallReturn {
@@ -425,6 +440,10 @@ export function useWebRtcCall({
   role,
   enableVideo = true,
   enableAudio = true,
+  callerId,
+  callerName,
+  callerAvatar,
+  calleeId,
 }: UseWebRtcCallOptions): UseWebRtcCallReturn {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -447,10 +466,22 @@ export function useWebRtcCall({
   const isMountedRef = useRef(true);
   const enableVideoRef = useRef(enableVideo);
   const enableAudioRef = useRef(enableAudio);
+  const callerIdRef = useRef(callerId);
+  const callerNameRef = useRef(callerName);
+  const callerAvatarRef = useRef(callerAvatar);
+  const calleeIdRef = useRef(calleeId);
+  const calleeChannelRef = useRef<RealtimeChannel | null>(null);
 
   roleRef.current = role;
   enableVideoRef.current = enableVideo;
   enableAudioRef.current = enableAudio;
+
+  useEffect(() => {
+    callerIdRef.current = callerId;
+    callerNameRef.current = callerName;
+    callerAvatarRef.current = callerAvatar;
+    calleeIdRef.current = calleeId;
+  }, [callerId, callerName, callerAvatar, calleeId]);
 
   // ── setStatusSafe: обновляет state + ref синхронно ─────────────────
   const setStatusSafe = useCallback((s: CallStatus) => {
@@ -577,6 +608,10 @@ export function useWebRtcCall({
       await sendSignal(SIGNAL_EVENT.OFFER, {
         type: "offer",
         sdp: pc.localDescription!.sdp,
+        caller_id: callerIdRef.current,
+        caller_name: callerNameRef.current,
+        caller_avatar: callerAvatarRef.current,
+        with_video: enableVideoRef.current,
       });
       console.info("[WebRTC] ICE restart initiated");
     } catch (err) {
@@ -597,10 +632,46 @@ export function useWebRtcCall({
       const offer = await pc.createOffer();
       const munged = mungeSdpCodecPriority(offer.sdp ?? "", codecPriorityRef.current);
       await pc.setLocalDescription({ type: "offer", sdp: munged });
-      await sendSignal(SIGNAL_EVENT.OFFER, {
+
+      const payload = {
         type: "offer",
         sdp: pc.localDescription!.sdp,
-      });
+        caller_id: callerIdRef.current,
+        caller_name: callerNameRef.current,
+        caller_avatar: callerAvatarRef.current,
+        with_video: enableVideoRef.current,
+      };
+
+      // Retry: отправляем OFFER несколько раз на call_<roomId>, чтобы callee
+      // успел подписаться на broadcast-канал (особенно при ICE-restart).
+      for (let i = 0; i < 3; i++) {
+        await sendSignal(SIGNAL_EVENT.OFFER, payload);
+        if (i < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
+
+      // Также отправляем OFFER на персональный канал callee
+      // (echo_calls_<calleeId>) — гарантирует доставку, даже если у
+      // callee не открыт чат с нами. CallOverlay подписан на свой
+      // персональный канал всегда при логине, поэтому offer дойдёт
+      // независимо от того, какой чат сейчас выбран.
+      const pCh = calleeChannelRef.current;
+      if (pCh) {
+        for (let i = 0; i < 3; i++) {
+          const r = await pCh.send({
+            type: "broadcast",
+            event: SIGNAL_EVENT.OFFER,
+            payload,
+          });
+          if (r !== "ok") {
+            console.warn(`[WebRTC] personal-channel offer → ${r}`);
+          }
+          if (i < 2) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+          }
+        }
+      }
     } catch (err) {
       console.error("[WebRTC] startCall failed:", err);
       setStatusSafe("failed");
@@ -653,6 +724,12 @@ export function useWebRtcCall({
       if (ch) {
         supabase.removeChannel(ch);
         channelRef.current = null;
+      }
+
+      const cCh = calleeChannelRef.current;
+      if (cCh) {
+        supabase.removeChannel(cCh);
+        calleeChannelRef.current = null;
       }
 
       pendingOfferRef.current = null;
@@ -851,6 +928,17 @@ export function useWebRtcCall({
 
         channelRef.current = channel;
 
+        // ── Персональный канал callee: caller отправляет сюда OFFER,
+        //     чтобы callee получил звонок даже без открытого чата.
+        //     CallOverlay слушает echo_calls_<userId> всегда при логине. ──
+        if (roleRef.current === "caller" && calleeIdRef.current) {
+          const calleeCh = supabase.channel(`echo_calls_${calleeIdRef.current}`, {
+            config: { broadcast: { self: false } },
+          });
+          calleeCh.subscribe();
+          calleeChannelRef.current = calleeCh;
+        }
+
         channel.subscribe((status: string, err?: Error) => {
           if (!isMountedRef.current) return;
           if (status === "SUBSCRIBED") {
@@ -868,6 +956,16 @@ export function useWebRtcCall({
 
         if (!cancelled) {
           setStatusSafe("init");
+        }
+
+        // ── Обход гонки: если CallOverlay уже получил OFFER через свой
+        // broadcast-слушатель (раньше, чем поднялся WebRTC-стек), обрабатываем
+        // его сразу и переводим статус в ringing.
+        const pendingOffer = pendingOfferRef?.current ?? null;
+        if (pendingOffer) {
+          pendingOfferRef.current = null;
+          pendingOfferRef.current = pendingOffer;
+          setStatusSafe("ringing");
         }
       } catch (err) {
         console.error("[WebRTC] init failed:", err);

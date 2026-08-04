@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { supabase } from "@/lib/supabase";
-import { migratePrivateKeyToVault } from "@/lib/db";
+import { migratePrivateKeyToVault, loadPrivateKey } from "@/lib/db";
 // @ts-ignore
 import jsQR from "jsqr";
 import {
@@ -70,8 +70,16 @@ const handleQrFound = useCallback(async (raw: string) => {
 
       const sessionData = { token_hash: issued.token_hash, type: "magiclink" as const };
 
-      // e2eeKey больше не передаётся — Rust сам достаёт его из vault.
-      await invoke("qr_send_e2ee_key", { sessionId, webPubKey: webPubKeyHex, sessionData });
+      // Загружаем E2EE-ключ из vault (или localStorage-фолбэк) и передаём
+      // в Rust-команду — Rust НЕ загружает ключ сам, фронтенд обязан его передать.
+      const e2eeKey = await loadPrivateKey();
+      if (!e2eeKey) {
+        setError("E2EE-ключ не найден. Войдите в аккаунт на этом устройстве.");
+        setStatus("error");
+        return;
+      }
+
+      await invoke("qr_send_e2ee_key", { sessionId, webPubKey: webPubKeyHex, e2eeKey, sessionData });
 
       setStatus("success");
       setTimeout(() => onClose(), 2000);

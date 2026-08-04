@@ -32,7 +32,8 @@ import {
   TbRotateClockwise,
 } from "react-icons/tb";
 import { cn } from "@/lib/utils";
-import { useWebRtcCall, type CallStatus } from "@/hooks/echo/use-webrtc-call";
+import { supabase } from "@/lib/supabase";
+import { useWebRtcCall, type CallStatus, type SdpPayload, SIGNAL_EVENT } from "@/hooks/echo/use-webrtc-call";
 
 /* ═══════════════════════════════════════════════════════════════════ */
 /*  Типы                                                               */
@@ -88,6 +89,13 @@ interface CallOverlayProps {
   onOutgoingConsumed?: () => void;
   /** Эмитит лог завершённого звонка (вставка в чат). */
   onCallLog?: (data: CallLogData) => void;
+  /** Текущий чат — используется для прослушивания входящих звонков без FCM. */
+  selectedChatId?: string | null;
+  selectedChatPeerName?: string | null;
+  selectedChatPeerAvatar?: string | null;
+  /** Данные текущего пользователя — для передачи caller metadata. */
+  currentUserName?: string | null;
+  currentUserAvatar?: string | null;
 }
 
 /* ═══════════════════════════════════════════════════════════════════ */
@@ -113,7 +121,7 @@ async function setCallWindow(fullscreen: boolean): Promise<void> {
  * Детерминированный room_id для пары пиров — стабильный канал
  * `call_<roomId>` для сигналинга (без утечки ID в имени канала).
  */
-function deriveRoomId(...ids: string[]): string {
+export function deriveRoomId(...ids: string[]): string {
   const joined = [...ids].sort().join("|");
   let h = 0;
   for (let i = 0; i < joined.length; i++) {
@@ -316,6 +324,11 @@ export function CallOverlay({
   outgoingCall,
   onOutgoingConsumed,
   onCallLog,
+  selectedChatId,
+  selectedChatPeerName,
+  selectedChatPeerAvatar,
+  currentUserName,
+  currentUserAvatar,
 }: CallOverlayProps) {
   /* ── Активный звонок (исходящий + входящий в одном состоянии) ── */
   const [call, setCall] = useState<ActiveCall | null>(null);
@@ -326,6 +339,7 @@ export function CallOverlay({
   const logEmittedRef = useRef(false);
   const toastIdRef = useRef(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const pendingIncomingOfferRef = useRef<SdpPayload | null>(null);
 
   /* ── WebRTC-цикл (сигналинг / кодеки / SVC / ICE Restart) ── */
   const webrtc = useWebRtcCall({
@@ -333,6 +347,15 @@ export function CallOverlay({
     role: call?.direction === "outgoing" ? "caller" : "callee",
     enableVideo: call?.withVideo ?? true,
     enableAudio: true,
+    ...(call?.direction === "outgoing"
+      ? {
+          callerId: currentUserId,
+          callerName: currentUserName ?? undefined,
+          callerAvatar: currentUserAvatar ?? null,
+          calleeId: call.peer.peerId,
+        }
+      : {}),
+    pendingOfferRef: pendingIncomingOfferRef,
   });
 
   /* ── 1. Исходящий звонок из пропа (кнопки профиля) ── */
@@ -353,6 +376,84 @@ export function CallOverlay({
     logEmittedRef.current = false;
     onOutgoingConsumed?.();
   }, [outgoingCall, currentUserId, onOutgoingConsumed]);
+
+  /* ── 1.5 Входящий звонок через Supabase Broadcast (без FCM) ── */
+  // Подписка на персональный канал пользователя echo_calls_<userId> —
+  // работает всегда при логине, независимо от того, какой чат выбран.
+  // Caller отправляет OFFER на этот канал дополнительно к call_<roomId>,
+  // поэтому callee получит звонок даже если не открыл чат с caller.
+  useEffect(() => {
+    if (!currentUserId) return;
+
+    const channel = supabase.channel(`echo_calls_${currentUserId}`, {
+      config: { broadcast: { self: false } },
+    });
+
+    const handleOffer = (msg: { payload: any }) => {
+      if (callRef.current) return;
+      const payload = msg.payload;
+      const callerId = String(payload.caller_id || "");
+      if (!callerId) return;
+      const roomId = deriveRoomId(currentUserId, callerId);
+      // Сохраняем offer в ref ДО setCall, чтобы useWebRtcCall при монтировании
+      // сразу его обработал (обход гонки: broadcast-слушатель срабатывает раньше,
+      // чем поднимется WebRTC-стек).
+      pendingIncomingOfferRef.current = payload;
+      console.log("[CallOverlay] Incoming offer via personal channel:", callerId, payload.caller_name);
+      setCall({
+        roomId,
+        peer: {
+          peerId: callerId,
+          peerName: String(payload.caller_name || "Входящий звонок"),
+          peerAvatar: typeof payload.caller_avatar === "string" ? payload.caller_avatar : null,
+        },
+        direction: "incoming",
+        withVideo: payload.with_video !== false,
+      });
+    };
+
+    channel.on("broadcast", { event: SIGNAL_EVENT.OFFER }, handleOffer);
+    channel.subscribe((status: string) => {
+      if (status === "SUBSCRIBED") {
+        console.log("[CallOverlay] Listening for incoming calls on personal channel");
+      }
+    });
+
+    return () => {
+      supabase.removeChannel(channel);
+      pendingIncomingOfferRef.current = null;
+    };
+  }, [currentUserId]);
+
+  /* ── 1.6 Входящий звонок из нативного wake (Android: fullScreenIntent) ── */
+  // MainActivity инжектит JS: window.dispatchEvent(new CustomEvent(
+  // 'echo-native-incoming-call', { detail: { room_id, caller_id, ... } }))
+  // когда FCM-пуш incoming_call будит приложение из фона.
+  useEffect(() => {
+    const handleNativeCall = (e: Event) => {
+      const detail = (e as CustomEvent).detail || {};
+      const roomId = String(detail.room_id || "");
+      const callerId = String(detail.caller_id || "");
+      if (!roomId || !callerId) return;
+      if (callRef.current) return; // уже в звонке — игнорим
+      console.log("[CallOverlay] Native wake incoming call:", callerId, detail.caller_name);
+      setCall({
+        roomId,
+        peer: {
+          peerId: callerId,
+          peerName: String(detail.caller_name || "Входящий звонок"),
+          peerAvatar: typeof detail.caller_avatar === "string" && detail.caller_avatar ? detail.caller_avatar : null,
+        },
+        direction: "incoming",
+        withVideo: false,
+      });
+      connectTimeRef.current = null;
+      logEmittedRef.current = false;
+      void setCallWindow(true);
+    };
+    window.addEventListener("echo-native-incoming-call", handleNativeCall);
+    return () => window.removeEventListener("echo-native-incoming-call", handleNativeCall);
+  }, []);
 
   /* ── 2. Входящий звонок из FCM (background-call-received) ── */
   useEffect(() => {

@@ -228,21 +228,23 @@ export const useNotifications = ({
     ensureNotifier();
 
     // Start background polling in Rust backend (WebSocket-independent)
-    if (isTauri && settings.backgroundPolling) {
+    if (isTauri && settings.backgroundPolling && user?.id) {
       const startBgPolling = async () => {
         try {
           const { invoke } = await import("@tauri-apps/api/core");
-          await invoke("start_background_polling");
-          console.log("[Notifications] Background polling started");
+          await invoke("start_background_polling", { userId: user.id });
+          console.log("[Notifications] Background polling started for user:", user.id);
         } catch (err) {
           console.warn("[Notifications] Failed to start background polling:", err);
         }
       };
       startBgPolling();
     }
-  }, [settings.backgroundPolling]);
+  }, [settings.backgroundPolling, user?.id]);
 
   // Listen for background messages from Rust polling
+  // Note: actual message processing (refetch) is handled in use-realtime.ts.
+  // This listener is kept for logging and future notification logic.
   useEffect(() => {
     if (!isTauri) return;
 

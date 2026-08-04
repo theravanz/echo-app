@@ -138,7 +138,7 @@ impl NotificationManager {
         Ok(())
     }
 
-    pub async fn start_background_polling(&self) -> Result<(), String> {
+    pub async fn start_background_polling(&self, user_id: String) -> Result<(), String> {
         let mut state = self.state.lock().map_err(|e| e.to_string())?;
         if state.is_polling_active {
             return Ok(());
@@ -153,6 +153,13 @@ impl NotificationManager {
         tokio::spawn(async move {
             let mut poll_interval = interval(Duration::from_secs(15));
             let client = reqwest::Client::new();
+            let mut last_seen_id: Option<String> = None;
+
+            // Filter: only messages where the user is sender or receiver
+            let or_filter = format!(
+                "(receiver_id.eq.{},sender_id.eq.{})",
+                user_id, user_id
+            );
 
             loop {
                 poll_interval.tick().await;
@@ -161,6 +168,7 @@ impl NotificationManager {
                     ("select", "id,sender_id,receiver_id,content,nonce,type,created_at,status"),
                     ("order", "created_at.desc"),
                     ("limit", "10"),
+                    ("or", &or_filter),
                 ];
 
                 match client
@@ -176,13 +184,23 @@ impl NotificationManager {
                         if let Ok(data) = response.json::<serde_json::Value>().await {
                             if let Some(messages) = data.as_array() {
                                 if !messages.is_empty() {
-                                    let _ = app_handle.emit(
-                                        "background-messages",
-                                        serde_json::json!({
-                                            "messages": messages,
-                                            "checked_at": chrono::Utc::now().to_rfc3339()
-                                        }),
-                                    );
+                                    // Get the latest message ID (first element, since ordered desc)
+                                    let latest_id = messages[0]
+                                        .get("id")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
+
+                                    // Only emit if there's a new message since last poll
+                                    if latest_id != last_seen_id {
+                                        last_seen_id = latest_id;
+                                        let _ = app_handle.emit(
+                                            "background-messages",
+                                            serde_json::json!({
+                                                "messages": messages,
+                                                "checked_at": chrono::Utc::now().to_rfc3339()
+                                            }),
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -243,6 +261,7 @@ pub async fn show_local_notification(
 #[tauri::command]
 pub async fn start_background_polling(
     manager: tauri::State<'_, NotificationManager>,
+    user_id: String,
 ) -> Result<(), String> {
-    manager.start_background_polling().await
+    manager.start_background_polling(user_id).await
 }

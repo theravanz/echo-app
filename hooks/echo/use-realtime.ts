@@ -36,6 +36,8 @@ export function useRealtime({
 
   const lastKnownMessageIdRef = useRef<string | null>(null);
   const fetchChatsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  const forceReconnectRef = useRef<(() => void) | null>(null);
 
   const debouncedFetchChats = useCallback(() => {
     if (fetchChatsTimeoutRef.current) {
@@ -163,9 +165,9 @@ export function useRealtime({
       pollInterval = setInterval(async () => {
         if (!isMountedRef.current || !user?.id) return;
 
-        const socketState = (supabase as any).realtime?.connectionState?.();
-        if (socketState === "connected") return;
-
+        // Always poll — even when "connected", as a zombie-connection
+        // safety net. If the WebSocket appears connected but isn't
+        // actually delivering events, this polling catches new messages.
         try {
           const { data } = await supabase
             .from("messages")
@@ -177,21 +179,106 @@ export function useRealtime({
             const latestMessageId = data[0].id;
 
             if (latestMessageId !== lastKnownMessageIdRef.current) {
+              // First poll: initialize baseline without triggering refetch
+              if (lastKnownMessageIdRef.current === null) {
+                lastKnownMessageIdRef.current = latestMessageId;
+                return;
+              }
               lastKnownMessageIdRef.current = latestMessageId;
+              console.log("[Realtime] New message detected via polling, refetching chats");
               debouncedFetchChats();
             }
           }
         } catch { /* silent */ }
-      }, 10000);
+      }, 5000);
     };
 
     startPolling();
 
+    // Allow visibility/online handlers to force reconnect
+    forceReconnectRef.current = () => {
+      if (!isMountedRef.current || !user?.id) return;
+      console.log("[Realtime] Force reconnect triggered");
+      if (msgChannel) {
+        supabase.removeChannel(msgChannel);
+        msgChannel = null;
+      }
+      reconnectAttempts = 0;
+      subscribeMsgChannel();
+      // Immediately poll for missed messages
+      (async () => {
+        try {
+          const { data } = await supabase
+            .from("messages")
+            .select("id, created_at")
+            .or(`receiver_id.eq.${user.id},sender_id.eq.${user.id}`)
+            .order("created_at", { ascending: false })
+            .limit(1);
+          if (data && data.length > 0) {
+            const latestMessageId = data[0].id;
+            if (latestMessageId !== lastKnownMessageIdRef.current) {
+              lastKnownMessageIdRef.current = latestMessageId;
+              debouncedFetchChats();
+            }
+          }
+        } catch { /* ignore */ }
+      })();
+    };
+
+    // Tauri: listen for background messages from Rust polling
+    let bgUnlisten: (() => void) | undefined;
+    if (isTauri) {
+      import("@tauri-apps/api/event")
+        .then(({ listen }) => {
+          return listen<{ messages: any[] }>("background-messages", (event) => {
+            if (!isMountedRef.current) return;
+            const { messages } = event.payload;
+            if (messages && messages.length > 0) {
+              console.log(`[Realtime] ${messages.length} messages from background polling`);
+              debouncedFetchChats();
+            }
+          });
+        })
+        .then((fn) => {
+          bgUnlisten = fn;
+        })
+        .catch(() => {});
+    }
+
     return () => {
       isMountedRef.current = false;
+      forceReconnectRef.current = null;
       if (msgChannel) supabase.removeChannel(msgChannel);
       if (pollInterval) clearInterval(pollInterval);
       if (fetchChatsTimeoutRef.current) clearTimeout(fetchChatsTimeoutRef.current);
+      bgUnlisten?.();
+    };
+  }, [user?.id]);
+
+  // Force reconnect when app becomes visible or network comes back online
+  useEffect(() => {
+    let lastForceReconnect = 0;
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        const now = Date.now();
+        if (now - lastForceReconnect > 3000) {
+          lastForceReconnect = now;
+          forceReconnectRef.current?.();
+        }
+      }
+    };
+    const handleOnline = () => {
+      const now = Date.now();
+      if (now - lastForceReconnect > 3000) {
+        lastForceReconnect = now;
+        forceReconnectRef.current?.();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    window.addEventListener("online", handleOnline);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      window.removeEventListener("online", handleOnline);
     };
   }, [user?.id]);
 

@@ -10,6 +10,8 @@
 // android.priority: "high" + ttl: "0s" дают мгновенную доставку.
 // =================================================================
 
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -31,16 +33,28 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    // Отправитель обязан быть авторизован (JWT в Authorization).
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return new Response(
+        JSON.stringify({ error: "Missing Authorization header" }),
+        {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
+
     const body = await req.json().catch(() => null);
     const {
-      target_fcm_token,
+      receiver_id,
       room_id,
       caller_id,
       caller_name,
       caller_avatar,
     } = body ?? {};
 
-    if (!target_fcm_token || !room_id || !caller_id) {
+    if (!receiver_id || !room_id || !caller_id) {
       return new Response(
         JSON.stringify({ error: "Missing required fields" }),
         {
@@ -49,6 +63,44 @@ Deno.serve(async (req: Request) => {
         },
       );
     }
+
+    // Аутентификация вызывающего (живой запрос к GoTrue).
+    const userClient = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_ANON_KEY")!,
+      { global: { headers: { Authorization: authHeader } } },
+    );
+    const { data: { user }, error: userErr } = await userClient.auth.getUser();
+    if (userErr || !user) {
+      return new Response(
+        JSON.stringify({ error: "Invalid or expired session" }),
+        {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
+
+    // Service-role клиент — читаем FCM-токен получателя (обход RLS).
+    const adminClient = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    const { data: tokenRow, error: tokenErr } = await adminClient
+      .from("device_tokens")
+      .select("token")
+      .eq("user_id", receiver_id)
+      .maybeSingle();
+
+    // Получатель не зарегистрировал устройство — звонить нечем, не ошибка.
+    if (tokenErr || !tokenRow?.token) {
+      if (tokenErr) console.error("[send-call-push] device_tokens query error:", tokenErr);
+      return new Response(
+        JSON.stringify({ ok: true, skipped: "no_device_token" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+    const calleeToken = tokenRow.token;
 
     const projectId =
       Deno.env.get("FIREBASE_PROJECT_ID") ??
@@ -76,7 +128,7 @@ Deno.serve(async (req: Request) => {
     // Чистое DATA-сообщение. Без "notification"! (см. шапку файла.)
     const message = {
       message: {
-        token: target_fcm_token,
+        token: calleeToken,
         data: {
           type: "incoming_call",
           room_id,
