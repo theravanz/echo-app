@@ -38,6 +38,7 @@ import {
   TbUserPlus as UserPlus,
   TbCheck as Check,
   TbQrcode as QrCode,
+  TbMapPin as TbMapPin,
 } from "react-icons/tb";
 
 import type { UserProfile } from "@/hooks/echo/types";
@@ -45,12 +46,14 @@ import { useNotificationSettings, type NotificationSettings } from "@/hooks/echo
 import { ProfileEditPanel, type EditableProfile } from "@/components/echo/app/profile-edit-panel";
 import InterfaceSettings from "@/components/echo/app/interface-settings";
 import { QrLoginScanner } from "@/components/echo/app/qr-login-scanner";
+import { resolveDeviceGeo } from "@/lib/device-info";
 
 interface SettingsModalProps {
   user: any;
   accounts?: any[];
   onClose: () => void;
   isQuarantined?: boolean;
+  quarantineTime?: string;
   onUpdateUser?: (patch: Record<string, any>) => void;
 }
 
@@ -134,7 +137,7 @@ const menuSections: MenuSection[] = [
   }
 ];
 
-const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onClose, isQuarantined, onUpdateUser }) => {
+const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onClose, isQuarantined, quarantineTime, onUpdateUser }) => {
   const router = useRouter();
   const isMobile = useIsMobile();
   const [activeView, setActiveView] = useState<ViewType>(null);
@@ -179,23 +182,21 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
     router.push('/auth');
   };
 
-  // VPN Detection — check IP/timezone mismatch
+  // VPN Detection — check IP/timezone mismatch (через lib/device-info)
   const [isVpnDetected, setIsVpnDetected] = useState(false);
+  const [currentGeo, setCurrentGeo] = useState<any>(null);
   const [securityExpanded, setSecurityExpanded] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch('https://ip-api.com/json/?fields=query,country,timezone', { signal: AbortSignal.timeout?.(5000) });
-        if (cancelled) return;
-        const data = await res.json();
-        if (data?.timezone) {
-          const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-          if (browserTz !== data.timezone) {
-            setIsVpnDetected(true);
-            console.warn('[VPN] Timezone mismatch:', data.timezone, 'vs', browserTz);
-          }
+        const geo = await resolveDeviceGeo();
+        if (cancelled || !geo) return;
+        setCurrentGeo(geo);
+        if (geo.isVpn) {
+          setIsVpnDetected(true);
+          console.warn('[VPN] Timezone mismatch:', geo.ipTz, 'vs', geo.tz);
         }
       } catch { /* silent fail */ }
     })();
@@ -221,6 +222,16 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
   useEffect(() => {
     if (activeView === 'devices') {
       fetchDevices();
+      // Каждый раз при открытии Devices пере-определяем гео текущего устройства,
+      // чтобы локация/VPN отображались даже если при регистрации гео-сервис не ответил.
+      (async () => {
+        try {
+          const geo = await resolveDeviceGeo();
+          if (!geo) return;
+          setCurrentGeo(geo);
+          if (geo.isVpn) setIsVpnDetected(true);
+        } catch { /* silent */ }
+      })();
     }
   }, [activeView]);
 
@@ -260,6 +271,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
   };
 
   const toggleLastSeen = async () => {
+    if (isQuarantined) {
+      alert('Action limited. New devices must pass 32-hour quarantine before changing privacy settings.');
+      return;
+    }
     const newValue = !isLastSeenVisible;
     setIsLastSeenVisible(newValue);
     await supabase.from('profiles').update({
@@ -319,18 +334,18 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
   const getDeviceDisplayName = (device: any): string => {
     if (device.os_name) {
       let name = device.os_name;
-      if (device.browser_name && device.browser_name !== 'Echo Web') {
+      if (device.browser_name && device.browser_name !== 'Echo Web' && !device.browser_name.includes('Tauri')) {
         name += ' • ' + device.browser_name;
       }
       return name;
     }
     if (device.device_name && device.device_name !== 'Unknown Device') {
       const ua = device.device_name;
+      if (ua.includes('Android')) return 'Android Device';
+      if (ua.includes('iPhone') || ua.includes('iPad')) return 'iOS Device';
       if (ua.includes('Windows')) return 'Windows Desktop';
       if (ua.includes('Mac OS') || ua.includes('Macintosh')) return 'macOS Desktop';
       if (ua.includes('Linux') && !ua.includes('Android')) return 'Linux Desktop';
-      if (ua.includes('Android')) return 'Android Device';
-      if (ua.includes('iPhone') || ua.includes('iPad')) return 'iOS Device';
       if (ua.includes('Chrome')) return 'Chrome Browser';
       if (ua.includes('Firefox')) return 'Firefox Browser';
       if (ua.includes('Safari')) return 'Safari Browser';
@@ -341,12 +356,47 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
 
   const getOSIcon = (device: any) => {
     const os = device.os_name || device.platform || device.device_name || '';
-    if (os.includes('Windows')) return <BrandWindows className="w-5 h-5" />;
-    if (os.includes('Mac') || os.includes('iOS') || os.includes('iPhone') || os.includes('Darwin')) return <BrandApple className="w-5 h-5" />;
-    if (os.includes('Linux') || os.includes('Ubuntu')) return <BrandUbuntu className="w-5 h-5" />;
     if (os.includes('Android')) return <BrandAndroid className="w-5 h-5" />;
-    if (device.browser_name === 'Chrome') return <BrandWindows className="w-5 h-5" />;
+    if (os.includes('iOS') || os.includes('iPhone') || os.includes('iPad')) return <BrandApple className="w-5 h-5" />;
+    if (os.includes('Windows')) return <BrandWindows className="w-5 h-5" />;
+    if (os.includes('Mac') || os.includes('Darwin')) return <BrandApple className="w-5 h-5" />;
+    if (os.includes('Linux') || os.includes('Ubuntu') || os.includes('ChromeOS')) return <BrandUbuntu className="w-5 h-5" />;
     return <Globe className="w-5 h-5" />;
+  };
+
+  // VPN-плашка: true если у устройства стоит is_vpn, таймзона/IP расходятся,
+  // или гео текущего устройства (live) помечено как VPN.
+  const deviceIsVpn = (device: any, liveGeo?: any): boolean => {
+    if (device.is_vpn === true || device.is_vpn === 1 || device.is_vpn === 'true') return true;
+    // Иногда is_vpn нет с прошлых версий — делаем лёгкую проверку по локации (два варианта через "/")
+    if (typeof device.location === 'string' && device.location.includes(' / ')) return true;
+    if (liveGeo?.isVpn) return true;
+    return false;
+  };
+
+  // Локация: сначала из БД устройства, иначе — живое гео текущего устройства.
+  const renderLocation = (device: any, liveGeo?: any): string | null => {
+    const loc = device?.location;
+    if (loc) return loc;
+    if (device?.timezone && device?.location == null && !liveGeo) return device.timezone;
+    if (liveGeo?.locationLabel) return liveGeo.locationLabel;
+    if (device?.timezone) return device.timezone;
+    return null;
+  };
+
+  // Подпись платформы под именем устройства. Имя уже содержит ОС/браузер,
+  // поэтому здесь показываем тип устройства (mobile/tablet/desktop/app),
+  // чтобы не дублировать "iOS Chrome iOS Chrome".
+  const getPlatformLabel = (device: any, liveMeta?: any): string => {
+    const os = device?.os_name || liveMeta?.os_name || '';
+    const type: string = device?.device_type || liveMeta?.device_type || '';
+    const typeLabels: Record<string, string> = { mobile: 'Mobile', tablet: 'Tablet', desktop: 'Desktop', app: 'App' };
+    if (os) {
+      return (type && typeLabels[type]) || device?.platform || 'Device';
+    }
+    const browser = device?.browser_name || '';
+    if (browser && browser !== 'Echo Web' && !browser.includes('Tauri')) return `Browser · ${browser}`;
+    return device?.platform || 'Device';
   };
 
   // --- Profile View ---
@@ -404,6 +454,16 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
         </div>
       </GlassPanel>
 
+      {isQuarantined && (
+        <div className="flex gap-4 p-5 rounded-[28px] bg-amber-500/10 border border-amber-500/30">
+          <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+          <p className="text-xs text-white/70 leading-relaxed">
+            This device is in a 32-hour quarantine. Ending sessions on other devices is locked until the period ends
+            {quarantineTime ? ` (${quarantineTime} left)` : ''}.
+          </p>
+        </div>
+      )}
+
       {/* Scan QR to authorize a new device (PC) */}
       <button
         onClick={() => setShowQrScanner(true)}
@@ -434,6 +494,11 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
               )}
             </div>
             <div className="text-xs text-white/30 font-mono">Current session</div>
+            {currentGeo?.locationLabel && (
+              <div className="text-[10px] text-white/40 font-mono mt-1 flex items-center gap-1">
+                <TbMapPin className="w-3 h-3" /> {currentGeo.locationLabel}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -448,11 +513,21 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
                   {getOSIcon(device)}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-3 mb-1">
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
                     <span className="font-bold text-sm">{getDeviceDisplayName(device)}</span>
                     <span className="text-[9px] font-mono uppercase text-green-500 bg-green-500/10 px-2 py-0.5 rounded-full">online</span>
+                    {deviceIsVpn(device, currentGeo) && (
+                      <span className="text-[9px] font-mono uppercase text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full flex items-center gap-1">
+                        <AlertTriangle className="w-3 h-3" /> VPN
+                      </span>
+                    )}
                   </div>
-                  <div className="text-xs text-white/30 font-mono">{device.platform || 'Unknown OS'}</div>
+                  <div className="text-xs text-white/30 font-mono">{getPlatformLabel(device)}</div>
+                  {renderLocation(device, currentGeo) && (
+                    <div className="text-[10px] text-white/40 font-mono mt-0.5 flex items-center gap-1">
+                      <TbMapPin className="w-3 h-3" /> {renderLocation(device, currentGeo)}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -477,10 +552,20 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
               {getOSIcon(device)}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-1">
+              <div className="flex items-center gap-2 mb-1 flex-wrap">
                 <span className="font-bold text-sm">{getDeviceDisplayName(device)}</span>
+                {deviceIsVpn(device) && (
+                  <span className="text-[9px] font-mono uppercase text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3" /> VPN
+                  </span>
+                )}
               </div>
-              <div className="text-xs text-white/30 font-mono mb-0.5">{device.platform || 'Unknown OS'}</div>
+              <div className="text-xs text-white/30 font-mono mb-0.5">{getPlatformLabel(device)}</div>
+              {renderLocation(device) && (
+                <div className="text-[10px] text-white/40 font-mono mb-0.5 flex items-center gap-1">
+                  <TbMapPin className="w-3 h-3" /> {renderLocation(device)}
+                </div>
+              )}
               <div className="text-[10px] text-white/20 font-mono">
                 Last active: {(() => {
                   if (!device.last_active) return 'Unknown';
@@ -492,7 +577,15 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
                 })()}
               </div>
             </div>
-            <button className="w-10 h-10 rounded-2xl hover:bg-destructive/10 hover:text-destructive flex items-center justify-center text-white/40 transition-all shrink-0" onClick={() => handleTerminateDevice(device.id)} title="Terminate session">
+            <button
+              className={cn(
+                "w-10 h-10 rounded-2xl shrink-0 flex items-center justify-center transition-all",
+                isQuarantined ? "text-white/20 cursor-not-allowed" : "hover:bg-destructive/10 hover:text-destructive text-white/40"
+              )}
+              onClick={() => handleTerminateDevice(device.id)}
+              title={isQuarantined ? "Locked during 32-hour quarantine" : "Terminate session"}
+              disabled={isQuarantined}
+            >
               <LogOut className="w-4 h-4" />
             </button>
           </div>
@@ -502,7 +595,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
       {/* Terminate Others */}
       {devices.filter(d => d.hwid !== currentHwid).length > 0 && (
         <div
-          className="flex items-center justify-between p-5 rounded-[28px] bg-destructive/5 border border-destructive/10 group hover:bg-destructive/10 transition-all cursor-pointer"
+          className={cn(
+            "flex items-center justify-between p-5 rounded-[28px] bg-destructive/5 border border-destructive/10 transition-all",
+            isQuarantined ? "opacity-40 cursor-not-allowed" : "group hover:bg-destructive/10 cursor-pointer"
+          )}
           onClick={handleTerminateOthers}
         >
           <div className="flex items-center gap-4">
@@ -535,6 +631,16 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
         </button>
       </div>
 
+      {isQuarantined && (
+        <div className="flex gap-4 p-5 rounded-[28px] bg-amber-500/10 border border-amber-500/30">
+          <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+          <p className="text-xs text-white/70 leading-relaxed">
+            This device is in a 32-hour quarantine. Changing privacy settings is locked until the period ends
+            {quarantineTime ? ` (${quarantineTime} left)` : ''}.
+          </p>
+        </div>
+      )}
+
       <GlassPanel className="p-6 rounded-[28px]">
         <CornerBrackets />
         <div className="flex items-center justify-between">
@@ -547,7 +653,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
               <div className="text-xs text-white/40 mt-0.5">Who can see your last active time</div>
             </div>
           </div>
-          <div className={cn("w-14 h-8 rounded-full p-1 transition-colors duration-300 cursor-pointer shrink-0", isLastSeenVisible ? "bg-primary" : "bg-white/10")} onClick={toggleLastSeen}>
+          <div
+            className={cn("w-14 h-8 rounded-full p-1 transition-colors duration-300 shrink-0", isLastSeenVisible ? "bg-primary" : "bg-white/10", isQuarantined ? "opacity-40 cursor-not-allowed" : "cursor-pointer")}
+            onClick={toggleLastSeen}
+          >
             <div className={cn("w-6 h-6 rounded-full bg-white shadow transition-transform duration-300", isLastSeenVisible ? "translate-x-6" : "translate-x-0")} />
           </div>
         </div>

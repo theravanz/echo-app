@@ -115,7 +115,8 @@ import { useConnection } from "@/hooks/echo/use-connection";
 import { useProfiles } from "@/hooks/echo/use-profiles";
 import { MessageBubble } from "@/components/echo/app/message-bubble";
 import { MediaPicker } from "@/components/echo/app/media-picker";
-import { saveDevice, generateHWID } from "@/lib/db";
+import { saveDevice, generateHWID, getDevices, deleteDevice } from "@/lib/db";
+import { detectDevice } from "@/lib/device-info";
 import { ProfileViewPanel, type ViewedProfile } from "@/components/echo/app/profile-view-panel";
 import dynamic from "next/dynamic";
 import type { UserProfile, Chat, Message, NetworkMode, AppTab, ConnectionStatus } from "@/hooks/echo/types";
@@ -362,7 +363,14 @@ function EchoAppContent() {
               caller_avatar: user.avatar_url || "",
             },
           })
-          .catch((e) => console.warn("[Push] send-call-push failed:", e));
+          .then((res) => {
+            console.log("[Push] send-call-push result:", res?.data ?? res);
+          })
+          .catch((e) => {
+            // Диагностика: 404 = функция не задеплоена, 500 = секреты FCM,
+            // 200+skipped = у получателя не зарегистрирован FCM-токен.
+            console.error("[Push] send-call-push failed:", e?.context ?? e?.message ?? e);
+          });
       } catch (e) {
         console.warn("[Push] failed to invoke send-call-push:", e);
       }
@@ -611,6 +619,27 @@ useEffect(() => {
         localStorage.setItem('echo_device_hwid', hwid); // sync for old code
         setCurrentHwid(hwid);
 
+        // Определяем устройство и геолокацию (ОС/браузер + IP-локация + таймзона + VPN)
+        let meta: any = null;
+        let geo: any = null;
+        try {
+          const detected = await detectDevice(true);
+          meta = detected.meta || null;
+          geo = detected.geo || null;
+        } catch (e) {
+          console.warn('[App] detectDevice failed, using fallback:', e);
+        }
+
+        const device_name = meta?.os_name || navigator.userAgent || 'Echo Desktop';
+        const platform = meta?.platform || navigator.platform || 'unknown';
+        const device_type = meta?.device_type || 'desktop';
+        const os_name = meta?.os_name || '';
+        const browser_name = meta?.browser_name || '';
+        const ip_address = geo?.ip || '';
+        const location = geo?.locationLabel || '';
+        const timezone = geo?.tz || '';
+        const is_vpn = !!geo?.isVpn;
+
         // Register device in native SQLite
         const deviceId = `device_${userData.id}_${Date.now()}`;
         try {
@@ -618,13 +647,35 @@ useEffect(() => {
             id: deviceId,
             user_id: userData.id,
             hwid,
-            device_name: navigator.userAgent || 'Echo Desktop',
-            platform: navigator.platform || 'unknown',
+            device_name,
+            platform,
+            device_type,
+            os_name,
+            browser_name,
+            ip_address,
+            location,
+            timezone,
+            is_vpn,
             is_current: true,
           });
-          console.log('[App] Device registered:', deviceId);
+          console.log('[App] Device registered:', deviceId, { os_name, browser_name, location, is_vpn });
         } catch (e) {
           console.warn('[App] Device registration (native) failed:', e);
+        }
+
+        // Убираем фантомные/устаревшие ЛОКАЛЬНЫЕ записи этого устройства.
+        // getDevices() возвращает только строки, записанные на ЭТОЙ машине,
+        // поэтому удаляем все локальные записи с другим hwid (остатки от прежних
+        // версий generateHWID) — это не трогает другие устройства в облаке.
+        try {
+          const localDevices = await getDevices(userData.id);
+          for (const localD of localDevices) {
+            if (localD.hwid && localD.hwid !== hwid) {
+              try { await deleteDevice(localD.id); } catch (e) { console.warn('[App] Local cleanup skip:', e); }
+            }
+          }
+        } catch (e) {
+          console.warn('[App] Local device cleanup failed:', e);
         }
 
         // Also register/check in Supabase for cloud sync + quarantine
@@ -636,32 +687,76 @@ useEffect(() => {
           console.warn('[App] Supabase device check failed:', e);
         }
 
-        if (!supabaseDevice) {
-          // Register in Supabase — use only columns that exist in the schema
-          try {
-            const { data: insertedDevice, error: insertError } = await supabase.from('devices').insert({
-              id: deviceId,
-              user_id: userData.id,
-              hwid,
-              platform: navigator.platform || 'unknown',
-            }).select().maybeSingle();
+        const row = {
+          id: deviceId,
+          user_id: userData.id,
+          hwid,
+          device_name,
+          platform,
+          device_type,
+          os_name,
+          browser_name,
+          ip_address,
+          location,
+          timezone,
+          is_vpn,
+          is_current: true,
+          last_active: new Date().toISOString(),
+        };
 
-            if (insertError) {
-              console.warn('[App] Supabase device insert error:', insertError.message);
-              // RLS issue — try upsert as fallback
-              const { data: upserted } = await supabase.from('devices').upsert({
+        if (!supabaseDevice) {
+          // Register in Supabase — upsert на уникальный (user_id, hwid)
+          try {
+            const { data: upserted, error: upsertError } = await supabase
+              .from('devices')
+              .upsert(row, { onConflict: 'user_id,hwid', ignoreDuplicates: false })
+              .select()
+              .maybeSingle();
+            if (upsertError) {
+              console.warn('[App] Supabase device upsert error:', upsertError.message);
+              // Fallback: если схема ещё не обновилась (нет новых колонок) —
+              // синхронизируем только базовыми колонками, чтобы устройство
+              // хотя бы зарегистрировалось и карантин работал.
+              const baseRow = {
                 id: deviceId,
                 user_id: userData.id,
                 hwid,
-                platform: navigator.platform || 'unknown',
-              }, { onConflict: 'hwid', ignoreDuplicates: false }).select().maybeSingle();
-              supabaseDevice = upserted;
+                platform,
+                last_active: new Date().toISOString(),
+              };
+              try {
+                const { data: fb } = await supabase
+                  .from('devices')
+                  .upsert(baseRow, { onConflict: 'user_id,hwid', ignoreDuplicates: false })
+                  .select()
+                  .maybeSingle();
+                supabaseDevice = fb || supabaseDevice;
+              } catch (e2) {
+                console.warn('[App] Supabase device fallback sync failed:', e2);
+              }
             } else {
-              supabaseDevice = insertedDevice;
+              supabaseDevice = upserted;
               console.log('[App] Device registered in Supabase:', deviceId);
             }
           } catch (e) {
             console.warn('[App] Supabase device register error:', e);
+          }
+        } else {
+          // Уже есть — обновляем метаданные, чтобы не потерять гео/VPN после перерегистрации
+          try {
+            await supabase.from('devices').update({
+              device_name,
+              platform,
+              os_name,
+              browser_name,
+              ip_address,
+              location,
+              timezone,
+              is_vpn,
+              last_active: new Date().toISOString(),
+            }).eq('id', supabaseDevice.id);
+          } catch (e) {
+            console.warn('[App] Supabase device update failed:', e);
           }
         }
 
@@ -1147,6 +1242,7 @@ useEffect(() => {
               accounts={accounts}
               onClose={() => setIsSettingsOpen(false)}
               isQuarantined={isQuarantined}
+              quarantineTime={quarantineTime}
               onUpdateUser={(patch) => setUser(prev => prev ? { ...prev, ...patch } : prev)}
             />
           </motion.div>

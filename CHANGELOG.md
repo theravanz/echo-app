@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.2.6] - 2026-08-06
+
+### Added
+- **Multi-provider geo + VPN detection** (`lib/device-info.ts`): cross-platform detector определяет ОС/браузер/тип устройства, получает гео по IP через цепочку `ipwho.is` → `ipinfo.io` → `ipapi.co` и считает VPN при несовпадении IP-таймзоны и таймзоны устройства. Используется и при регистрации, и в реальном времени в Settings → Devices.
+- **Supabase migration `0006_devices.sql`**: `devices.id` изменён с UUID на TEXT (приложение пишет `device_<uuid>_<ts>`), добавлены колонки `device_type`, `os_name`, `browser_name`, `ip_address`, `location`, `timezone`, `is_vpn`, создан уникальный индекс `(user_id, hwid)`, добавлены RLS-политики и SECURITY DEFINER-функция `terminate_device_session` для удаления чужих сессий.
+
+### Changed
+- **`lib/db.ts`**: интерфейс `Device` и `saveDevice` расширены новыми полями гео/устройства; SQLite слой теперь принимает и сохраняет `device_type`, `os_name`, `browser_name`, `ip_address`, `location`, `timezone`, `is_vpn`.
+- **`src-tauri/src/storage.rs`**: схема SQLite `devices` расширена новыми колонками, добавлена идемпотентная авто-миграция существующих таблиц, `save_device`/`get_devices` возвращают и принимают расширенный набор полей.
+- **`app/app/page.tsx`**: при регистрации устройства вызывается `detectDevice(true)` и собираются метаданные ОС/браузера/гео; запись в нативный SQLite и Supabase выполняется через `upsert` по `(user_id, hwid)` с фолбэком на базовый набор колонок; при перелогине метаданные устройства обновляются, а устаревшие локальные записи с другим `hwid` очищаются.
+- **Settings → Devices** (`components/echo/app/settings-modal.tsx`): локация/VPN отображается "живым" гео текущего устройства даже если запись в БД устарела; добавлена плашка карантина с таймером, блокирующая смену приватных настроек для новых устройств в течение 32 часов; улучшена иконка платформы (iOS/macOS/Windows/Linux/ChromeOS).
+
+### Security
+- **Push diagnostic**: `send-message-push` и `send-call-push` в клиенте (`hooks/echo/use-messages.ts`, `app/app/page.tsx`) теперь логируют результат/ошибку edge-функции с полным контекстом (`e?.context ?? e?.message ?? e`), чтобы видеть 404 (не задеплоена), 500 (секреты FCM) или `skipped: no_device_token` (у получателя нет токена).
+- Карантин нового устройства: действия с приватными настройками блокируются до окончания 32-часового периода.
+- RLS + SECURITY DEFINER-функция `terminate_device_session` исключают возможность удаления чужих сессий из клиента.
+- Гео-детекция не раскрывает детали ошибок внешних сервисов в UI, все фолбэки тихие.
+
+### Fixed
+- `invalid input syntax for type uuid: "device_..."` при регистрации устройства — `devices.id` приведён к TEXT в миграции, клиент и Rust пишут строковые идентификаторы.
+- Отображение "iOS Chrome" / "Linux armv8l" в списке устройств — канонизация ОС через `userAgent`/`userAgentData` и явная карта иконок.
+- Пустые или устаревшие локации/VPN в Devices — теперь показывается live-гео текущей сессии; при VPN-расхождении в `location` сохраняются оба варианта через `/`.
+
 ## [0.2.5] - 2026-08-02
 
 ### Added

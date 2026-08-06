@@ -39,8 +39,15 @@ pub struct Device {
     pub hwid: String,
     pub device_name: String,
     pub platform: String,
-    pub last_active: i64,
+    pub device_type: String,
+    pub os_name: String,
+    pub browser_name: String,
+    pub ip_address: String,
+    pub location: String,
+    pub timezone: String,
+    pub is_vpn: bool,
     pub is_current: bool,
+    pub last_active: i64,
     pub created_at: i64,
 }
 
@@ -139,6 +146,13 @@ impl StorageManager {
                 hwid TEXT NOT NULL,
                 device_name TEXT DEFAULT 'Unknown Device',
                 platform TEXT DEFAULT '',
+                device_type TEXT DEFAULT 'desktop',
+                os_name TEXT DEFAULT '',
+                browser_name TEXT DEFAULT '',
+                ip_address TEXT DEFAULT '',
+                location TEXT DEFAULT '',
+                timezone TEXT DEFAULT '',
+                is_vpn INTEGER DEFAULT 0,
                 last_active INTEGER DEFAULT (strftime('%s', 'now')),
                 is_current INTEGER DEFAULT 0,
                 created_at INTEGER DEFAULT (strftime('%s', 'now'))
@@ -192,6 +206,56 @@ impl StorageManager {
             panic!("[Storage] Schema failed");
         }
 
+// ── Миграция существующей таблицы devices: добавляем новые колонки ──
+        // CREATE TABLE IF NOT EXISTS не тронет уже созданную таблицу, поэтому
+        // проверяем PRAGMA table_info и добавляем недостающие колонки вручную.
+        {
+            let mut existing: Vec<String> = Vec::new();
+            if let Ok(mut stmt) = conn.prepare("SELECT name FROM pragma_table_info('devices')") {
+                if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                    existing = rows.filter_map(|r| r.ok()).collect();
+                }
+            }
+            let has = |col: &str| existing.iter().any(|c| c == col);
+
+            if !has("os_name") {
+                if let Err(e) = conn.execute("ALTER TABLE devices ADD COLUMN os_name TEXT DEFAULT ''", []) {
+                    log::error!("[Storage] add os_name: {}", e);
+                }
+            }
+            if !has("device_type") {
+                if let Err(e) = conn.execute("ALTER TABLE devices ADD COLUMN device_type TEXT DEFAULT 'desktop'", []) {
+                    log::error!("[Storage] add device_type: {}", e);
+                }
+            }
+            if !has("browser_name") {
+                if let Err(e) = conn.execute("ALTER TABLE devices ADD COLUMN browser_name TEXT DEFAULT ''", []) {
+                    log::error!("[Storage] add browser_name: {}", e);
+                }
+            }
+            if !has("ip_address") {
+                if let Err(e) = conn.execute("ALTER TABLE devices ADD COLUMN ip_address TEXT DEFAULT ''", []) {
+                    log::error!("[Storage] add ip_address: {}", e);
+                }
+            }
+            if !has("location") {
+                if let Err(e) = conn.execute("ALTER TABLE devices ADD COLUMN location TEXT DEFAULT ''", []) {
+                    log::error!("[Storage] add location: {}", e);
+                }
+            }
+            if !has("timezone") {
+                if let Err(e) = conn.execute("ALTER TABLE devices ADD COLUMN timezone TEXT DEFAULT ''", []) {
+                    log::error!("[Storage] add timezone: {}", e);
+                }
+            }
+            if !has("is_vpn") {
+                if let Err(e) = conn.execute("ALTER TABLE devices ADD COLUMN is_vpn INTEGER DEFAULT 0", []) {
+                    log::error!("[Storage] add is_vpn: {}", e);
+                }
+            }
+        }
+
+        eprintln!("[Storage] INIT COMPLETE");
         eprintln!("[Storage] INIT COMPLETE");
         Self {
             conn: Mutex::new(conn),
@@ -432,19 +496,34 @@ pub async fn save_device(
     hwid: String,
     device_name: Option<String>,
     platform: Option<String>,
+    device_type: Option<String>,
+    os_name: Option<String>,
+    browser_name: Option<String>,
+    ip_address: Option<String>,
+    location: Option<String>,
+    timezone: Option<String>,
+    is_vpn: Option<bool>,
     is_current: Option<bool>,
 ) -> Result<(), String> {
     let conn = manager.conn.lock().map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT OR REPLACE INTO devices
-         (id, user_id, hwid, device_name, platform, last_active, is_current, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, strftime('%s','now'), ?6, strftime('%s','now'))",
+         (id, user_id, hwid, device_name, platform, device_type, os_name, browser_name,
+          ip_address, location, timezone, is_vpn, last_active, is_current, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, strftime('%s','now'), ?13, strftime('%s','now'))",
         params![
             id,
             user_id,
             hwid,
             device_name.unwrap_or_else(|| "Unknown Device".into()),
             platform.unwrap_or_default(),
+            device_type.unwrap_or_else(|| "desktop".into()),
+            os_name.unwrap_or_default(),
+            browser_name.unwrap_or_default(),
+            ip_address.unwrap_or_default(),
+            location.unwrap_or_default(),
+            timezone.unwrap_or_default(),
+            if is_vpn.unwrap_or(false) { 1 } else { 0 },
             if is_current.unwrap_or(false) { 1 } else { 0 }
         ],
     )
@@ -460,7 +539,8 @@ pub async fn get_devices(
     let conn = manager.conn.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, user_id, hwid, device_name, platform, last_active, is_current, created_at
+            "SELECT id, user_id, hwid, device_name, platform, device_type, os_name, browser_name,
+                    ip_address, location, timezone, is_vpn, is_current, last_active, created_at
              FROM devices
              WHERE user_id = ?1
              ORDER BY last_active DESC",
@@ -475,9 +555,16 @@ pub async fn get_devices(
                 hwid: row.get(2)?,
                 device_name: row.get(3)?,
                 platform: row.get(4)?,
-                last_active: row.get(5)?,
-                is_current: row.get::<_, i32>(6)? != 0,
-                created_at: row.get(7)?,
+                device_type: row.get(5)?,
+                os_name: row.get(6)?,
+                browser_name: row.get(7)?,
+                ip_address: row.get(8)?,
+                location: row.get(9)?,
+                timezone: row.get(10)?,
+                is_vpn: row.get::<_, i32>(11)? != 0,
+                is_current: row.get::<_, i32>(12)? != 0,
+                last_active: row.get(13)?,
+                created_at: row.get(14)?,
             })
         })
         .map_err(|e| format!("[Storage] get_devices query: {}", e))?

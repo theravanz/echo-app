@@ -58,6 +58,13 @@ export interface Device {
   hwid: string;
   device_name: string;
   platform: string;
+  device_type: string;
+  os_name: string;
+  browser_name: string;
+  ip_address: string;
+  location: string;
+  timezone: string;
+  is_vpn: boolean;
   last_active: number;
   is_current: boolean;
   created_at: number;
@@ -90,6 +97,13 @@ export interface SaveDeviceParams {
   hwid: string;
   device_name?: string;
   platform?: string;
+  device_type?: string;
+  os_name?: string;
+  browser_name?: string;
+  ip_address?: string;
+  location?: string;
+  timezone?: string;
+  is_vpn?: boolean;
   is_current?: boolean;
 }
 
@@ -196,6 +210,13 @@ export async function saveDevice(params: SaveDeviceParams): Promise<void> {
     hwid: params.hwid,
     deviceName: params.device_name ?? null,
     platform: params.platform ?? null,
+    deviceType: params.device_type ?? null,
+    osName: params.os_name ?? null,
+    browserName: params.browser_name ?? null,
+    ipAddress: params.ip_address ?? null,
+    location: params.location ?? null,
+    timezone: params.timezone ?? null,
+    isVpn: params.is_vpn ?? null,
     isCurrent: params.is_current ?? null,
   });
 }

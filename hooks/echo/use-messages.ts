@@ -229,9 +229,16 @@ export function useMessages(chats: Chat[] = []): UseMessagesReturn {
                 sender_avatar: user.avatar_url || "",
               },
             })
-            .catch((e) => console.warn("[Push] send-message-push failed:", e));
+            .then((res) => {
+              console.log("[Push] send-message-push result:", res?.data ?? res);
+            })
+            .catch((e) => {
+              // Не глотаем — даём видимый, полный диагноз (404 = не задеплоена,
+              // 500 = секреты FCM, 200+skipped = у получателя нет токена).
+              console.error("[Push] send-message-push failed:", e?.context ?? e?.message ?? e);
+            });
         } catch (e) {
-          console.warn("[Push] failed to invoke send-message-push:", e);
+          console.error("[Push] failed to invoke send-message-push:", e);
         }
 
         setMessages((prev) =>
