@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod crypto;
+mod device;
 mod notification;
 mod qr_auth;
 mod stickers;
@@ -140,10 +141,22 @@ pub fn run() {
             notification::get_fcm_token,
             notification::show_local_notification,
             notification::start_background_polling,
-            // Crypto commands (BIP-39 + x25519-dalek в фоновом потоке)
+            // Crypto commands (BIP-39 + X25519/x25519-dalek, E2EE ключ в KeyStore)
             crypto::generate_mnemonic,
             crypto::validate_mnemonic,
-            crypto::generate_keys_from_mnemonic,
+            crypto::crypto_derive_keys,
+            crypto::crypto_set_key,
+            crypto::crypto_get_public_key,
+            crypto::crypto_status,
+            crypto::crypto_encrypt,
+            crypto::crypto_decrypt,
+            crypto::crypto_sign,
+            crypto::crypto_verify,
+            crypto::crypto_clear,
+            crypto::crypto_persist_key,
+            crypto::crypto_restore_key,
+            crypto::crypto_qr_ephemeral_keypair,
+            crypto::crypto_qr_decrypt,
             // QR Auth commands (E2EE key exchange: crypto + broadcast via Supabase Realtime)
             qr_auth::qr_send_e2ee_key,
             // Storage commands (rusqlite, AES-256-GCM через vault)
@@ -176,9 +189,8 @@ pub fn run() {
             vault::vault_encrypt,
             vault::vault_decrypt,
             vault::vault_status,
-            vault::vault_save_private_key,
-            vault::vault_load_private_key,
-            vault::vault_delete_private_key,
+            vault::vault_derive_key,
+            vault::vault_logout,
             // Sticker commands
             stickers::decode_webp_info,
             stickers::decode_webp_to_rgba,
@@ -203,6 +215,9 @@ pub fn run() {
             // Порядок важен: сначала storage (создаёт таблицы), потом vault (шифрует)
             init_storage_manager(app.handle());
             init_vault(app.handle());
+            // Phase 0: E2EE-приватный ключ живёт в Rust KeyStore (Zeroizing).
+            // Управляем до команд, чтобы crypto::crypto_* всегда видели состояние.
+            app.manage(crypto::KeyStore::new());
             init_notification_manager(app.handle());
             enable_media_stream(app.handle());
 

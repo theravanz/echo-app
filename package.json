@@ -1,6 +1,6 @@
 {
   "name": "echo-mes",
-  "version": "0.1.0",
+  "version": "0.2.7",
   "private": true,
   "scripts": {
     "build": "next build",
@@ -79,8 +79,6 @@
     "tailwind-merge": "^3.3.1",
     "tailwindcss-animate": "^1.0.7",
     "three": "0.183.2",
-    "tweetnacl": "^1.0.3",
-    "tweetnacl-util": "^0.15.1",
     "jsqr": "^1.4.0",
     "vaul": "^1.1.2",
     "zod": "3.25.76"

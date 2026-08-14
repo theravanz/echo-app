@@ -1,9 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { supabase } from "@/lib/supabase";
-import { migratePrivateKeyToVault, loadPrivateKey } from "@/lib/db";
 // @ts-ignore
 import jsQR from "jsqr";
 import {
@@ -46,9 +44,12 @@ const handleQrFound = useCallback(async (raw: string) => {
     setStatus("sending");
     stopCamera();
     try {
-      // Гарантируем, что ключ реально в vault (миграция из localStorage при необходимости).
-      const migrated = await migratePrivateKeyToVault();
-      if (!migrated) {
+      // Проверяем, что у этого устройства загружен E2EE-ключ в Rust KeyStore.
+      // Приватный ключ НЕ передаётся сюда — qr_send_e2ee_key сам возьмёт его
+      // из KeyStore (Rust) и отправит только зашифрованным (SalsaBox).
+      const { invoke } = await import("@tauri-apps/api/core");
+      const hasKey = await invoke<boolean>("crypto_status");
+      if (!hasKey) {
         setError("E2EE-ключ не найден. Войдите в аккаунт на этом устройстве.");
         setStatus("error");
         return;
@@ -70,16 +71,7 @@ const handleQrFound = useCallback(async (raw: string) => {
 
       const sessionData = { token_hash: issued.token_hash, type: "magiclink" as const };
 
-      // Загружаем E2EE-ключ из vault (или localStorage-фолбэк) и передаём
-      // в Rust-команду — Rust НЕ загружает ключ сам, фронтенд обязан его передать.
-      const e2eeKey = await loadPrivateKey();
-      if (!e2eeKey) {
-        setError("E2EE-ключ не найден. Войдите в аккаунт на этом устройстве.");
-        setStatus("error");
-        return;
-      }
-
-      await invoke("qr_send_e2ee_key", { sessionId, webPubKey: webPubKeyHex, e2eeKey, sessionData });
+      await invoke("qr_send_e2ee_key", { sessionId, webPubKey: webPubKeyHex, sessionData });
 
       setStatus("success");
       setTimeout(() => onClose(), 2000);

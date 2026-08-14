@@ -1,13 +1,16 @@
 //! QR-авторизация: полный конвейер шифрования и отправки E2EE-ключа.
 //!
-//! Мобилка сканирует QR (`app://auth?session_id=…&web_pub_key=…`), генерирует
-//! эфемерную X25519-пару, вычисляет общий секрет (DH), шифрует E2EE-ключ
-//! (XSalsa20-Poly1305 через crypto_box::SalsaBox — совместимо с tweetnacl
-//! nacl.box) и отправляет зашифрованный пакет в канал Supabase Realtime
-//! через REST RPC broadcast_message. Сервер видит только ciphertext.
+//! Мобилка сканирует QR (`app://auth?session_id=…&web_pub_key=…`), вычисляет
+//! общий секрет (DH) со своим E2EE-приватным ключом (он живёт ТОЛЬКО в Rust
+//! `KeyStore` и никуда не возвращается), шифрует E2EE-ключ (XSalsa20-Poly1305
+//! через crypto_box::SalsaBox — совместимо с tweetnacl nacl.box) и отправляет
+//! зашифрованный пакет в канал Supabase Realtime через REST RPC broadcast_message.
+//! Сервер видит только ciphertext.
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use crypto_box::{PublicKey, SecretKey, SalsaBox, aead::{Aead, AeadCore, OsRng}};
 use serde_json::json;
+use tauri::Manager;
 
 /// Транспорт: POST зашифрованного пакета в Supabase Realtime через RPC.
 ///
@@ -57,24 +60,30 @@ pub async fn send_e2ee_key_broadcast(
 
 /// Tauri-команда: полный конвейер QR-авторизации для мобилки.
 ///
-/// E2EE-ключ передаёт фронтенд (loadPrivateKey → vault || localStorage),
-/// а НЕ загружается из vault в Rust. Это решает проблему "vault пуст":
-/// если ключ сохранился в localStorage-fallback (vault_save_private_key
-/// молча упал), фронтенд всё равно его найдёт и передаст сюда.
+/// E2EE-ключ берётся из Rust `KeyStore` (это собственный приватный ключ
+/// устройства, деривированный из seed). Фронтенд НЕ передаёт приватный ключ
+/// и НЕ может его прочитать — он покидает KeyStore только зашифрованным.
 ///
 /// Шаги:
 /// 1. Парсит web_pub_key из hex (из QR).
-/// 2. Генерирует эфемерную X25519-пару (crypto_box::SecretKey).
+/// 2. Берёт свой E2EE-приватный ключ из KeyStore и шифрует его в конверт.
 /// 3. Создаёт JSON-конверт { e2eeKey, session }.
 /// 4. Шифрует через SalsaBox (XSalsa20-Poly1305 = nacl.box).
 /// 5. Отправляет ciphertext в канал auth_<session_id> через REST RPC.
 #[tauri::command]
 pub async fn qr_send_e2ee_key(
+    app: tauri::AppHandle,
     session_id: String,
     web_pub_key: String,
-    e2ee_key: String,
     session_data: Option<serde_json::Value>,
 ) -> Result<(), String> {
+    use crate::crypto::KeyStore;
+
+    // 0. Приватный ключ устройства — из Rust KeyStore (никогда не возвращается в JS).
+    let store = app.state::<KeyStore>();
+    let scalar = store.private_scalar()?;
+    let e2ee_key = BASE64.encode(scalar);
+
     // 1. Распарсить web_pub_key из hex → [u8; 32].
     let web_pub_bytes = hex::decode(&web_pub_key)
         .map_err(|e| format!("[QR] Неверный hex web_pub_key: {}", e))?;

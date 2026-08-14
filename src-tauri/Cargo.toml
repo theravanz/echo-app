@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.1.0"
+version = "0.2.7"
 description = "A Tauri App"
 authors = ["you"]
 license = ""
@@ -38,9 +38,12 @@ x25519-dalek = { version = "2.0", features = ["static_secrets", "precomputed-tab
 crypto_box = "0.9"
 base64 = "0.22"
 sha2 = "0.10"
+argon2 = "0.5"
 aes-gcm = "0.10"
 rand = "0.8"
 hex = "0.4"
+zeroize = { version = "1.9", features = ["std"] }
+subtle = "2"
 
 # Добавить для стикеров:
 image = "0.25"                    # webp, png, jpeg

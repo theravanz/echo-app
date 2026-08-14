@@ -7,11 +7,8 @@ import { useTranslation } from '@/hooks/use-translation';
 import { CountrySelector } from '@/components/auth/country-selector';
 import { auth } from '@/lib/firebase';
 import { supabase } from '@/lib/supabase';
-import { persistSession, savePrivateKey, loadPrivateKey } from '@/lib/db';
+import { persistSession, cryptoKeyStatus } from '@/lib/db';
 import { saveAuthProgress, loadAuthProgress, clearAuthProgress } from '@/lib/auth-storage';
-import nacl from 'tweetnacl';
-// @ts-ignore
-import { encodeBase64 } from 'tweetnacl-util';
 import { QRCodeSVG } from 'qrcode.react';
 // @ts-ignore
 import { invoke } from '@tauri-apps/api/core';
@@ -38,20 +35,17 @@ import {
 } from 'react-icons/tb';
 import { cn } from '@/lib/utils';
 
-// ── E2EE key exchange helpers (tweetnacl, без новых зависимостей) ────
-/** Uint8Array → lowercase hex. */
-function toHex(bytes: Uint8Array): string {
-  return Array.from(bytes).map((b) => b.toString(16).padStart(2, '0')).join('');
-}
+// ── E2EE key exchange helpers (Web Crypto / btoa — без внешних либ) ────
 /** Uint8Array → URL-safe base64 (без padding) — компактнее hex для QR. */
 function toB64Url(bytes: Uint8Array): string {
-  return encodeBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  const bin = Array.from(bytes).map((b) => String.fromCharCode(b)).join('');
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
-/** hex string → Uint8Array. */
-function fromHex(hex: string): Uint8Array {
-  const clean = hex.length % 2 ? '0' + hex : hex;
-  const out = new Uint8Array(clean.length / 2);
-  for (let i = 0; i < out.length; i++) out[i] = parseInt(clean.substr(i * 2, 2), 16);
+/** base64 (std, с padding) → Uint8Array. */
+function b64ToBytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
 }
 
@@ -89,7 +83,6 @@ function AuthPageContent() {
   const [qrApproving, setQrApproving] = useState(false);
 
   // Эфемерный материал Диффи–Хеллмана (только в памяти, на время обмена)
-  const webKeyPairRef = useRef<{ publicKey: Uint8Array; secretKey: Uint8Array } | null>(null);
   const sessionIdRef = useRef<string>('');
   const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
@@ -220,25 +213,36 @@ function AuthPageContent() {
     let done = false; // true после approved/expired — игнорим поздние события
     let expiryTimer: ReturnType<typeof setTimeout> | null = null;
 
-    // 1) Эфемерная X25519-пара (tweetnacl) — только для этого обмена.
-    const webKeyPair = nacl.box.keyPair();
-    webKeyPairRef.current = webKeyPair;
-
-    // 2) Идентификатор комнаты = имя Realtime-канала.
+    // 1) Идентификатор комнаты = имя Realtime-канала.
     const sessionId =
       typeof crypto !== 'undefined' && crypto.randomUUID
         ? crypto.randomUUID()
-        : toHex(nacl.randomBytes(16));
+        : String(Date.now()) + Math.random().toString(36).slice(2);
     sessionIdRef.current = sessionId;
 
-    // 3) QR — внутренний deep link, БЕЗ внешних доменов-заглушек.
-    //    base64url для ключа (43 символа вместо 64 hex) → меньше модулей →
-    //    камера телефона разрешает QR на бóльшем расстоянии.
-    setQrValue(`app://auth?s=${sessionId}&k=${toB64Url(webKeyPair.publicKey)}`);
+    // 2) QR — внутренний deep link, БЕЗ внешних доменов-заглушек.
+    //    Эфемерная X25519-пара создаётся в Rust: секрет живёт в KeyStore
+    //    (Zeroizing) и в JS попадает только публичный ключ для QR.
     const expiresAt = Date.now() + 5 * 60 * 1000; // 5 минут
     setQrStatus('connecting');
 
-    // 4) Завершение обмена: расшифровать E2EE-ключ, сохранить, авторизовать.
+    (async () => {
+      try {
+        if (cancelled) return;
+        const { public_key: webPubKeyB64 } = await invoke<{ public_key: string }>(
+          'crypto_qr_ephemeral_keypair'
+        );
+        if (cancelled) return;
+        // base64url для ключа (43 символа вместо 64 hex) → меньше модулей →
+        // камера телефона разрешает QR на бóльшем расстоянии.
+        setQrValue(`app://auth?s=${sessionId}&k=${toB64Url(b64ToBytes(webPubKeyB64))}`);
+      } catch (err) {
+        console.error('[QR] Не удалось создать эфемерную пару:', err);
+        setQrStatus('expired');
+      }
+    })();
+
+    // 3) Завершение обмена: расшифровать E2EE-ключ (в Rust), авторизовать.
     //    Конверт: { e2eeKey: <base64 32B>, session?: <supabase session> }.
     //    Фолбэк: сырой 32-байтовый ключ, если мобилка не прислала JSON.
     const completeExchange = async (
@@ -247,16 +251,13 @@ function AuthPageContent() {
       nonceHex: string,
     ) => {
       try {
-        const webSecret = webKeyPairRef.current?.secretKey;
-        if (!webSecret) throw new Error('Нет эфемерного приватного ключа');
-
-        const mobPubKey = fromHex(mobPubKeyHex);
-        const nonce = fromHex(nonceHex);        // 24 байта (nacl.box.nonceLength)
-        const ciphertext = fromHex(encryptedHex);
-
-        // nacl.box.open: общий секрет (X25519 DH) вычисляется внутри tweetnacl.
-        const plaintext = nacl.box.open(ciphertext, nonce, mobPubKey, webSecret);
-        if (!plaintext) throw new Error('Расшифровка не удалась (ключ/nonce неверны)');
+        // Расшифровка выполняется в Rust через эфемерный секрет KeyStore.
+        const decRes = await invoke<{ plaintext: string }>('crypto_qr_decrypt', {
+          senderPubKey: mobPubKeyHex,
+          ciphertextHex: encryptedHex,
+          nonceHex,
+        });
+        const plaintext = b64ToBytes(decRes.plaintext);
 
         let e2eeKeyB64 = '';
         let session: { access_token?: string; refresh_token?: string } | null = null;
@@ -265,12 +266,13 @@ function AuthPageContent() {
           e2eeKeyB64 = env.e2eeKey;
           session = env.session ?? null;
         } catch {
-          // Сырой 32-байтовый E2EE-ключ.
-          e2eeKeyB64 = encodeBase64(plaintext);
+          // Сырой 32-байтовый E2EE-ключ (plaintext и есть ключ в base64).
+          e2eeKeyB64 = decRes.plaintext;
         }
         if (!e2eeKeyB64) throw new Error('Пустой E2EE-ключ');
 
-        await savePrivateKey(e2eeKeyB64);
+        // Ключ передаётся в Rust KeyStore — он не пишется в localStorage/SQLite/JS.
+        await invoke('crypto_set_key', { secretKeyB64: e2eeKeyB64 });
 
         // Восстанавливаем Supabase-сессию, если она пришла в конверте.
         if (session?.access_token && session?.refresh_token) {
@@ -281,6 +283,12 @@ function AuthPageContent() {
           if (error) throw error;
           const { data: { session: sbSession } } = await supabase.auth.getSession();
           if (sbSession) await persistSession(sbSession).catch(() => {});
+          // Phase 0: персистим принятый E2EE-ключ device-bound (Rust), если есть user id.
+          if (sbSession?.user?.id) {
+            await invoke('crypto_persist_key', { userId: sbSession.user.id }).catch((e) =>
+              console.error('[QR] persist E2EE key failed:', e)
+            );
+          }
           setIsExistingUser(!!sbSession?.user?.user_metadata?.e2ee_initialized);
         } else {
           setIsExistingUser(true);
@@ -351,7 +359,6 @@ function AuthPageContent() {
       const ch = channelRef.current;
       if (ch) { try { supabase.removeChannel(ch); } catch { /* ignore */ } }
       channelRef.current = null;
-      webKeyPairRef.current = null;
       sessionIdRef.current = '';
     };
   }, [isMobile, returnTo]);
@@ -546,7 +553,7 @@ function AuthPageContent() {
         userIsExisting = !!(data.user?.user_metadata?.e2ee_initialized);
         setIsExistingUser(userIsExisting);
 
-        if (userIsExisting && await loadPrivateKey()) {
+        if (userIsExisting && await cryptoKeyStatus()) {
           setVerifyLoading(false);
           goToStep(5);
           setTimeout(() => {
@@ -606,24 +613,11 @@ function AuthPageContent() {
     setConfirmRecoveryLoading(true);
 
     try {
-      // Генерация ключей в Rust (BIP-39 seed через PBKDF2 в фоновом потоке)
-      const keys = await invoke('generate_keys_from_mnemonic', { mnemonicPhrase: mnemonic }) as any;
+      // Деривация ключей в Rust: BIP-39 seed через PBKDF2 (фоновый поток).
+      // Приватный ключ остаётся в Rust KeyStore (Zeroizing) — вернётся только публичный.
+      const keys = await invoke('crypto_derive_keys', { mnemonicPhrase: mnemonic }) as { public_key: string };
 
-      // Публичный ключ вычисляем через tweetnacl (как в старой версии)
-      // Это гарантирует 100% совместимость со старыми чатами
-      const seedBytes = keys.seed_base64 ? (await import('tweetnacl-util')).decodeBase64(keys.seed_base64) : null;
-      const privateKeyBytes = (await import('tweetnacl-util')).decodeBase64(keys.private_key);
-
-      let publicKeyBase64 = keys.public_key;
-      if (seedBytes && seedBytes.length >= 32) {
-        const seed32 = seedBytes.slice(0, 32);
-        const publicKey = nacl.scalarMult.base(seed32);
-        publicKeyBase64 = encodeBase64(publicKey);
-      } else {
-        // Fallback: используем приватный ключ как seed (32 байта)
-        const publicKey = nacl.scalarMult.base(privateKeyBytes);
-        publicKeyBase64 = encodeBase64(publicKey);
-      }
+      const publicKeyBase64 = keys.public_key;
 
       const { data: { session: recoverySession } } = await supabase.auth.getSession();
       if (recoverySession) {
@@ -636,9 +630,8 @@ function AuthPageContent() {
   }
 }
 
-      await savePrivateKey(keys.private_key);
       localStorage.setItem('echo_public_key', publicKeyBase64);
-      localStorage.setItem('echo_mnemonic_backup', mnemonic);
+      localStorage.removeItem('echo_mnemonic_backup'); // не храним seed в JS/открытом виде
 
       const { error: authError } = await supabase.auth.updateUser({
         data: {
@@ -650,6 +643,10 @@ function AuthPageContent() {
 
       const { data: userData } = await supabase.auth.getUser();
       if (userData?.user) {
+        // Phase 0: персистим E2EE-ключ device-bound (Rust, не через JS-секрет).
+        await invoke('crypto_persist_key', { userId: userData.user.id }).catch((e) =>
+          console.error('[Auth] persist E2EE key failed:', e)
+        );
         await supabase.from('profiles').upsert({
           id: userData.user.id,
           public_key: publicKeyBase64,
@@ -689,20 +686,9 @@ function AuthPageContent() {
 
     setConfirmRecoveryLoading(true);
     try {
-      // Генерация seed через Rust (PBKDF2), публичный ключ — через tweetnacl
-      const keys = await invoke('generate_keys_from_mnemonic', { mnemonicPhrase: cleanMnemonic }) as any;
-
-      // Вычисляем публичный ключ из seed через tweetnacl.scalarMult.base
-      const privateKeyBytes = (await import('tweetnacl-util')).decodeBase64(keys.private_key);
-      let publicKeyBase64 = keys.public_key;
-      if (keys.seed_base64) {
-        const seedBytes = (await import('tweetnacl-util')).decodeBase64(keys.seed_base64);
-        if (seedBytes && seedBytes.length >= 32) {
-          publicKeyBase64 = encodeBase64(nacl.scalarMult.base(seedBytes.slice(0, 32)));
-        }
-      } else {
-        publicKeyBase64 = encodeBase64(nacl.scalarMult.base(privateKeyBytes));
-      }
+      // Деривация ключей в Rust (PBKDF2). Приватный ключ остаётся в KeyStore.
+      const keys = await invoke('crypto_derive_keys', { mnemonicPhrase: cleanMnemonic }) as { public_key: string };
+      const publicKeyBase64 = keys.public_key;
 
       const { data: { user } } = await supabase.auth.getUser();
       const storedPublicKey = user?.user_metadata?.public_key;
@@ -713,9 +699,15 @@ function AuthPageContent() {
         return;
       }
 
-      await savePrivateKey(keys.private_key);
+      // Phase 0: персистим восстановленный E2EE-ключ device-bound (Rust).
+      if (user?.id) {
+        await invoke('crypto_persist_key', { userId: user.id }).catch((e) =>
+          console.error('[Auth] persist restored E2EE key failed:', e)
+        );
+      }
+
       localStorage.setItem('echo_public_key', publicKeyBase64);
-      localStorage.setItem('echo_mnemonic_backup', cleanMnemonic);
+      localStorage.removeItem('echo_mnemonic_backup'); // не храним seed в JS/открытом виде
 
       setConfirmRecoveryLoading(false);
       goToStep(5);

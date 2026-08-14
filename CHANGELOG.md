@@ -1,6 +1,8 @@
 # Changelog
 
+## [0.2.7] - 2026-08-14
 ## [0.2.6] - 2026-08-06
+### Fixed
 
 ### Added
 - **Multi-provider geo + VPN detection** (`lib/device-info.ts`): cross-platform detector определяет ОС/браузер/тип устройства, получает гео по IP через цепочку `ipwho.is` → `ipinfo.io` → `ipapi.co` и считает VPN при несовпадении IP-таймзоны и таймзоны устройства. Используется и при регистрации, и в реальном времени в Settings → Devices.

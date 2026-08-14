@@ -55,7 +55,6 @@ pub struct Device {
 pub struct Account {
     pub id: String,
     pub public_key: String,
-    pub encrypted_seed: String,
     pub display_name: String,
     pub avatar_url: String,
     pub created_at: i64,
@@ -118,7 +117,6 @@ impl StorageManager {
             "CREATE TABLE IF NOT EXISTS accounts (
                 id TEXT PRIMARY KEY,
                 public_key TEXT NOT NULL,
-                encrypted_seed TEXT NOT NULL,
                 display_name TEXT DEFAULT '',
                 avatar_url TEXT DEFAULT '',
                 created_at INTEGER DEFAULT (strftime('%s', 'now')),
@@ -200,12 +198,36 @@ impl StorageManager {
                 opacity REAL DEFAULT 1.0,
                 brightness REAL DEFAULT 1.0,
                 updated_at INTEGER DEFAULT (strftime('%s', 'now'))
+            );
+
+            -- Phase 0 (device-bound): E2EE-priv seed, зашифрованный device-ключом
+            -- (Argon2id от HWID). value = JSON { salt, nonce, ct }. Никогда не plaintext.
+            CREATE TABLE IF NOT EXISTS e2ee_keys (
+                user_id TEXT PRIMARY KEY,
+                payload TEXT NOT NULL,
+                created_at INTEGER DEFAULT (strftime('%s', 'now'))
             );"
         ) {
             log::error!("[Storage] Schema creation failed: {}", e);
             panic!("[Storage] Schema failed");
         }
 
+// ── Phase 0: миграция accounts — удаляем колонку encrypted_seed (если есть) ──
+        // Вектор приватного ключа больше не хранится в БД: seed живёт только в Rust KeyStore.
+        {
+            let mut has_encrypted_seed = false;
+            if let Ok(mut stmt) = conn.prepare("SELECT name FROM pragma_table_info('accounts')") {
+                if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
+                    has_encrypted_seed = rows.filter_map(|r| r.ok()).any(|c| c == "encrypted_seed");
+                }
+            }
+            if has_encrypted_seed {
+                log::info!("[Storage] Migrating: dropping accounts.encrypted_seed (private key is now Rust-only)");
+                if let Err(e) = conn.execute("ALTER TABLE accounts DROP COLUMN encrypted_seed", []) {
+                    log::error!("[Storage] drop encrypted_seed: {}", e);
+                }
+            }
+        }
 // ── Миграция существующей таблицы devices: добавляем новые колонки ──
         // CREATE TABLE IF NOT EXISTS не тронет уже созданную таблицу, поэтому
         // проверяем PRAGMA table_info и добавляем недостающие колонки вручную.
@@ -260,6 +282,40 @@ impl StorageManager {
         Self {
             conn: Mutex::new(conn),
         }
+    }
+
+    // ── Phase 0: device-bound E2EE-ключ (только Rust, payload — зашифрованный seed) ──
+
+    /// Сохранить зашифрованный device-ключом E2EE-seed (payload = JSON, НЕ plaintext).
+    pub(crate) fn e2ee_key_store(&self, user_id: &str, payload: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute(
+            "INSERT OR REPLACE INTO e2ee_keys (user_id, payload, created_at)
+             VALUES (?1, ?2, strftime('%s','now'))",
+            params![user_id, payload],
+        )
+        .map_err(|e| format!("[Storage] e2ee_key_store: {e}"))?;
+        Ok(())
+    }
+
+    /// Прочитать зашифрованный E2EE-seed для user_id (или None, если нет записи).
+    pub(crate) fn e2ee_key_load(&self, user_id: &str) -> Result<Option<String>, String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        let mut stmt = conn
+            .prepare("SELECT payload FROM e2ee_keys WHERE user_id = ?1 LIMIT 1")
+            .map_err(|e| format!("[Storage] e2ee_key_load prepare: {e}"))?;
+        let payload = stmt
+            .query_row(params![user_id], |row| row.get::<_, String>(0))
+            .ok();
+        Ok(payload)
+    }
+
+    /// Удалить запись E2EE-ключа (logout/purge).
+    pub(crate) fn e2ee_key_clear(&self, user_id: &str) -> Result<(), String> {
+        let conn = self.conn.lock().map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM e2ee_keys WHERE user_id = ?1", params![user_id])
+            .map_err(|e| format!("[Storage] e2ee_key_clear: {e}"))?;
+        Ok(())
     }
 }
 
@@ -592,26 +648,21 @@ pub async fn delete_device(
 #[tauri::command]
 pub async fn save_account(
     manager: State<'_, StorageManager>,
-    vault: State<'_, Vault>,
     id: String,
     public_key: String,
-    encrypted_seed: String,
     display_name: Option<String>,
     avatar_url: Option<String>,
 ) -> Result<(), String> {
-    let double_encrypted_seed = encrypt_field(&vault, &encrypted_seed)?;
-
     let conn = manager.conn.lock().map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT OR REPLACE INTO accounts
-         (id, public_key, encrypted_seed, display_name, avatar_url, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5,
+         (id, public_key, display_name, avatar_url, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4,
                  COALESCE((SELECT created_at FROM accounts WHERE id=?1), strftime('%s','now')),
                  strftime('%s','now'))",
         params![
             id,
             public_key,
-            double_encrypted_seed,
             display_name.unwrap_or_default(),
             avatar_url.unwrap_or_default()
         ],
@@ -623,13 +674,12 @@ pub async fn save_account(
 #[tauri::command]
 pub async fn get_account(
     manager: State<'_, StorageManager>,
-    vault: State<'_, Vault>,
     id: String,
 ) -> Result<Option<Account>, String> {
     let conn = manager.conn.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, public_key, encrypted_seed, display_name, avatar_url, created_at, updated_at
+            "SELECT id, public_key, display_name, avatar_url, created_at, updated_at
              FROM accounts
              WHERE id = ?1
              LIMIT 1",
@@ -638,17 +688,13 @@ pub async fn get_account(
 
     let account = stmt
         .query_row(params![id], |row| {
-            let double_encrypted_seed: String = row.get(2)?;
-            let encrypted_seed = decrypt_field_safe(&vault, &double_encrypted_seed)?;
-
             Ok(Account {
                 id: row.get(0)?,
                 public_key: row.get(1)?,
-                encrypted_seed,
-                display_name: row.get(3)?,
-                avatar_url: row.get(4)?,
-                created_at: row.get(5)?,
-                updated_at: row.get(6)?,
+                display_name: row.get(2)?,
+                avatar_url: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
             })
         })
         .ok();

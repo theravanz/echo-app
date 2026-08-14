@@ -1,13 +1,9 @@
 //! Хранилище с AES-256-GCM шифрованием.
 //!
-//! Ключ шифрования генерируется ОДИН раз при первом запуске приложения
-//! (не при обновлении страницы!), сохраняется в app_data_dir/.echo_key.bin
-//! и привязан к устройству. Без key.bin расшифровать данные из echo.db
-//! невозможно.
-//!
-//! ВАЖНО: Rust backend живёт всё время работы приложения. `setup` вызывается
-//! один раз, а page reload (F5) НЕ перезапускает Rust. Vault остаётся в памяти
-//! с готовым ключом. Ключ НЕ генерируется заново при F5.
+//! Ключ шифрования Vault шифрует только данные БД (токены, настройки, профили)
+//! и НЕ хранит E2EE-приватный ключ. После авторизации ключ Vault деривируется
+//! из секрета пользователя (хэш seed) через `vault_derive_key` / `derive_from_seed`
+//! и zero-ится при `vault_logout` + удаляется файл `.echo_key.bin`.
 
 use aes_gcm::{
     aead::{Aead, KeyInit, OsRng},
@@ -21,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::AppHandle;
 use tauri::Manager;
+use zeroize::Zeroizing;
 
 const KEY_SIZE: usize = 32;
 const NONCE_SIZE: usize = 12;
@@ -34,14 +31,14 @@ pub struct EncryptedPayload {
 }
 
 pub struct Vault {
-    key: Mutex<[u8; KEY_SIZE]>,
+    key: Mutex<Option<Zeroizing<[u8; KEY_SIZE]>>>,
     ready: std::sync::atomic::AtomicBool,
 }
 
 impl Vault {
     pub fn new() -> Self {
         Vault {
-            key: Mutex::new([0u8; KEY_SIZE]),
+            key: Mutex::new(None),
             ready: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -50,7 +47,8 @@ impl Vault {
         self.ready.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Загрузить или создать ключ. Вызывается строго ОДИН раз в `setup`.
+    /// Загрузить существующий ключ (backward-compat bootstrap) или пометить
+    /// vault неготовым до `derive_from_seed`. Никогда не хранит E2EE-приватный ключ.
     pub fn initialize(&mut self, app: &AppHandle<tauri::Wry>) -> Result<(), String> {
         let key_path = self.get_key_path(app);
         eprintln!("[Vault] Key path: {:?}", key_path);
@@ -66,32 +64,63 @@ impl Vault {
             let mut key = [0u8; KEY_SIZE];
             key.copy_from_slice(&data);
             log::info!("[Vault] Key LOADED from existing file ({} bytes)", data.len());
-            eprintln!("[Vault] Key loaded OK");
             key
         } else {
-            let mut key = [0u8; KEY_SIZE];
-            OsRng.fill_bytes(&mut key);
-            if let Some(parent) = key_path.parent() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("[Vault] Mkdir error: {}", e))?;
-            }
-            #[cfg(unix)] {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::write(&key_path, &key)
-                    .map_err(|e| format!("[Vault] Write error: {}", e))?;
-                std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).ok();
-            }
-            #[cfg(not(unix))] {
-                std::fs::write(&key_path, &key)
-                    .map_err(|e| format!("[Vault] Write error: {}", e))?;
-            }
-            log::info!("[Vault] New key GENERATED and saved ({} bytes)", key.len());
-            eprintln!("[Vault] New key generated OK");
-            key
+            log::info!("[Vault] No key file yet — vault not ready until derive_from_seed");
+            // Возвращаем None -> vault остаётся неготовым; ключ появится при
+            // `derive_from_seed` (из секрета пользователя), а не из случайного файла.
+            *self.key.lock().map_err(|e| format!("[Vault] Lock: {}", e))? = None;
+            return Ok(());
         };
 
-        *self.key.lock().map_err(|e| format!("[Vault] Lock: {}", e))? = key_bytes;
+        *self.key.lock().map_err(|e| format!("[Vault] Lock: {}", e))? =
+            Some(Zeroizing::new(key_bytes));
         self.ready.store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Деривировать ключ Vault из секрета пользователя (SHA-256) и персистнуть.
+    pub fn derive_key(&self, app: &AppHandle<tauri::Wry>, user_secret: &[u8]) -> Result<(), String> {
+        let key: [u8; KEY_SIZE] = Sha256::digest(user_secret).into();
+        self.set_key_and_persist(app, key)
+    }
+
+    /// Деривировать ключ Vault из BIP-39 seed (SHA-256), перекрывая bootstra-ключ.
+    pub fn derive_from_seed(&self, app: &AppHandle<tauri::Wry>, seed: &[u8]) -> Result<(), String> {
+        let key: [u8; KEY_SIZE] = Sha256::digest(seed).into();
+        self.set_key_and_persist(app, key)
+    }
+
+    fn set_key_and_persist(&self, app: &AppHandle<tauri::Wry>, key: [u8; KEY_SIZE]) -> Result<(), String> {
+        let key_path = self.get_key_path(app);
+        if let Some(parent) = key_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("[Vault] Mkdir error: {}", e))?;
+        }
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(&key_path, &key)
+                .map_err(|e| format!("[Vault] Write error: {}", e))?;
+            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).ok();
+        }
+        #[cfg(not(unix))] {
+            std::fs::write(&key_path, &key)
+                .map_err(|e| format!("[Vault] Write error: {}", e))?;
+        }
+        *self.key.lock().map_err(|e| format!("[Vault] Lock: {}", e))? = Some(Zeroizing::new(key));
+        self.ready.store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Zero-ить ключ в памяти и удалить файл `.echo_key.bin` (logout).
+    pub fn clear(&self, app: &AppHandle<tauri::Wry>) -> Result<(), String> {
+        self.key.lock().map_err(|e| format!("[Vault] Lock: {}", e))?.take();
+        self.ready.store(false, std::sync::atomic::Ordering::Relaxed);
+        let key_path = self.get_key_path(app);
+        if key_path.exists() {
+            std::fs::remove_file(&key_path)
+                .map_err(|e| format!("[Vault] Delete key file: {}", e))?;
+        }
         Ok(())
     }
 
@@ -109,7 +138,8 @@ impl Vault {
             return Err("[Vault] NOT READY".to_string());
         }
         let key_guard = self.key.lock().map_err(|e| format!("[Vault] Lock: {}", e))?;
-        let cipher = Aes256Gcm::new_from_slice(&*key_guard)
+        let key = key_guard.as_ref().ok_or("[Vault] NOT INITIALIZED")?;
+        let cipher = Aes256Gcm::new_from_slice(&key[..])
             .map_err(|e| format!("[Vault] AES init: {}", e))?;
         drop(key_guard);
 
@@ -133,7 +163,8 @@ impl Vault {
             return Err("[Vault] NOT READY".to_string());
         }
         let key_guard = self.key.lock().map_err(|e| format!("[Vault] Lock: {}", e))?;
-        let cipher = Aes256Gcm::new_from_slice(&*key_guard)
+        let key = key_guard.as_ref().ok_or("[Vault] NOT INITIALIZED")?;
+        let cipher = Aes256Gcm::new_from_slice(&key[..])
             .map_err(|e| format!("[Vault] AES init: {}", e))?;
         drop(key_guard);
 
@@ -186,74 +217,17 @@ pub async fn vault_status(app: AppHandle) -> Result<bool, String> {
     Ok(vault.is_ready())
 }
 
-/// Сохранить E2EE приватный ключ в защищённое vault-хранилище.
-/// Ключ шифруется AES-256-GCM и сохраняется в SQLite через storage.
+/// Деривировать ключ Vault из секрета пользователя (SHA-256).
+/// Приватный ключ Vault никогда не возвращается наружу.
 #[tauri::command]
-pub async fn vault_save_private_key(
-    app: AppHandle,
-    storage: tauri::State<'_, crate::storage::StorageManager>,
-    key_base64: String,
-) -> Result<(), String> {
+pub async fn vault_derive_key(app: AppHandle, user_secret: String) -> Result<(), String> {
     let vault = app.state::<Vault>();
-    let encrypted = vault.encrypt_to_json(&key_base64)?;
-
-    // Сохраняем зашифрованный ключ в auth_progress (ключ = "echo_private_key")
-    let conn = storage.conn.lock().map_err(|e| e.to_string())?;
-    conn.execute(
-        "INSERT OR REPLACE INTO auth_progress (key, value, updated_at)
-         VALUES ('echo_private_key', ?1, strftime('%s','now'))",
-        rusqlite::params![encrypted],
-    )
-    .map_err(|e| format!("[Vault] save_private_key: {}", e))?;
-
-    log::info!("[Vault] E2EE private key saved securely");
-    Ok(())
+    vault.derive_key(&app, user_secret.as_bytes())
 }
 
-/// Загрузить E2EE приватный ключ из защищённого vault-хранилища.
+/// Logout: zero-ить ключ Vault в памяти + удалить файл `.echo_key.bin`.
 #[tauri::command]
-pub async fn vault_load_private_key(
-    app: AppHandle,
-    storage: tauri::State<'_, crate::storage::StorageManager>,
-) -> Result<Option<String>, String> {
+pub async fn vault_logout(app: AppHandle) -> Result<(), String> {
     let vault = app.state::<Vault>();
-
-    let conn = storage.conn.lock().map_err(|e| e.to_string())?;
-    let result = conn.query_row(
-        "SELECT value FROM auth_progress WHERE key = 'echo_private_key'",
-        [],
-        |row| row.get::<_, String>(0),
-    );
-
-    match result {
-        Ok(encrypted_json) => {
-            let decrypted = vault.decrypt_from_json(&encrypted_json)?;
-            log::info!("[Vault] E2EE private key loaded securely");
-            Ok(Some(decrypted))
-        }
-        Err(e) => {
-            if matches!(&e, rusqlite::Error::QueryReturnedNoRows) {
-                log::warn!("[Vault] No private key found in storage");
-                Ok(None)
-            } else {
-                Err(format!("[Vault] load_private_key: {}", e))
-            }
-        }
-    }
-}
-
-/// Удалить E2EE приватный ключ из хранилища.
-#[tauri::command]
-pub async fn vault_delete_private_key(
-    storage: tauri::State<'_, crate::storage::StorageManager>,
-) -> Result<(), String> {
-    let conn = storage.conn.lock().map_err(|e| e.to_string())?;
-    conn.execute(
-        "DELETE FROM auth_progress WHERE key = 'echo_private_key'",
-        [],
-    )
-    .map_err(|e| format!("[Vault] delete_private_key: {}", e))?;
-
-    log::info!("[Vault] E2EE private key deleted from storage");
-    Ok(())
+    vault.clear(&app)
 }

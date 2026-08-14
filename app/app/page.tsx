@@ -97,10 +97,6 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { supabase } from "@/lib/supabase";
-import * as bip39 from 'bip39';
-import nacl from 'tweetnacl';
-// @ts-ignore
-import { decodeUTF8, encodeUTF8, decodeBase64, encodeBase64 } from 'tweetnacl-util';
 import { toast } from "sonner";
 import { useTranslation } from "@/hooks/use-translation";
 import { useNotifications } from "@/hooks/echo/use-notifications";
@@ -239,6 +235,36 @@ function EchoAppContent() {
   useEffect(() => {
     if (user?.id) setCurrentUserId(user.id);
   }, [user?.id, setCurrentUserId]);
+
+  // === Phase 0: восстановление E2EE-ключа при старте ===
+  // Rust KeyStore пуст после перезапуска. Ключ персистится device-bound
+  // (Argon2id(HWID+salt)+AES-GCM) и восстанавливается из локальной БД.
+  useEffect(() => {
+    let cancelled = false;
+    if (!user?.id) return;
+    (async () => {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const pub = await invoke<{ public_key: string }>("crypto_restore_key", {
+          userId: user.id,
+        });
+        if (!cancelled && pub?.public_key) {
+          console.log("[E2EE] Restored device-bound key on startup");
+        }
+      } catch (err: any) {
+        const msg = String(err?.message || err);
+        if (!cancelled && msg.includes("HWID_CHANGED")) {
+          // Сменилось железо → нужна мнемоника (можно логировать / редирект на auth-restore).
+          console.warn("[E2EE] HWID changed, recovery via mnemonic required");
+        } else if (!cancelled) {
+          console.info("[E2EE] No stored key yet (first run) —", msg);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
   const { settings: notificationSettings } = useNotificationSettings(user);
 
   // === Reusable function to open chat by username ===

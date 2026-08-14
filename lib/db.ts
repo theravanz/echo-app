@@ -73,7 +73,6 @@ export interface Device {
 export interface Account {
   id: string;
   public_key: string;
-  encrypted_seed: string;
   display_name: string;
   avatar_url: string;
   created_at: number;
@@ -110,7 +109,6 @@ export interface SaveDeviceParams {
 export interface SaveAccountParams {
   id: string;
   public_key: string;
-  encrypted_seed: string;
   display_name?: string;
   avatar_url?: string;
 }
@@ -240,7 +238,6 @@ export async function saveAccount(params: SaveAccountParams): Promise<void> {
   return invoke("save_account", {
     id: params.id,
     publicKey: params.public_key,
-    encryptedSeed: params.encrypted_seed,
     displayName: params.display_name ?? null,
     avatarUrl: params.avatar_url ?? null,
   });
@@ -329,100 +326,32 @@ export async function terminateSession(sessionId: string): Promise<void> {
 }
 
 /**
- * Безопасное хранение E2EE приватного ключа.
- * В Tauri-окружении — ИСКЛЮЧИТЕЛЬНО через vault (AES-256-GCM).
- * localStorage используется только как настоящий dev-фолбэк (не в Tauri),
- * а не как молчаливая заглушка при сбое vault.
+ * E2EE (Phase 0): приватный ключ хранится ТОЛЬКО в Rust `KeyStore`
+ * (`Zeroizing<[u8; 32]>`) и никогда не пишется в localStorage / SQLite / JS.
+ * Эти хелперы — тонкий прокси к Rust IPC, они не читают и не возвращают
+ * приватный ключ наружу.
  */
-export async function savePrivateKey(keyBase64: string): Promise<void> {
-  let tauriInvoke: typeof invoke | null = null;
-  try {
-    ({ invoke: tauriInvoke } = await import('@tauri-apps/api/core'));
-  } catch {
-    // Действительно не в Tauri (браузер/dev) — легитимный фолбэк.
-    localStorage.setItem('echo_private_key_v2', keyBase64);
-    return;
-  }
 
-  // Мы в Tauri — vault ОБЯЗАН сработать. Ошибку больше не глотаем.
-  await tauriInvoke('vault_save_private_key', { keyBase64 });
+/** Загружен ли E2EE-ключ в Rust KeyStore. */
+export async function cryptoKeyStatus(): Promise<boolean> {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<boolean>("crypto_status");
+  } catch {
+    return false;
+  }
 }
 
-/**
- * Миграция ключа из localStorage (legacy-фолбэк) в нативный vault.
- * Вызывать перед любым действием, которому нужен гарантированно
- * защищённый ключ (например, перед QR-авторизацией нового устройства).
- * Возвращает true, если после вызова ключ гарантированно в vault
- * (или мы легитимно не в Tauri и ключ есть в localStorage).
- */
-export async function migratePrivateKeyToVault(): Promise<boolean> {
-  let tauriInvoke: typeof invoke | null = null;
+/** Очистить E2EE-ключ + vault в памяти (logout / purge). */
+export async function clearCryptoKeys(): Promise<void> {
   try {
-    ({ invoke: tauriInvoke } = await import('@tauri-apps/api/core'));
-  } catch {
-    return !!localStorage.getItem('echo_private_key_v2');
-  }
-
-  try {
-    const existing = await tauriInvoke<string | null>('vault_load_private_key');
-    if (existing) return true;
-  } catch (err) {
-    console.error('[DB] vault_load_private_key failed during migration check:', err);
-    return false;
-  }
-
-  const legacyV2 = localStorage.getItem('echo_private_key_v2');
-  const legacyV1 = localStorage.getItem('echo_private_key');
-  const toMigrate = legacyV2 || legacyV1;
-  if (!toMigrate) return false;
-
-  try {
-    await tauriInvoke('vault_save_private_key', { keyBase64: toMigrate });
-  } catch (err) {
-    console.error('[DB] Migration write to vault failed:', err);
-    return false;
-  }
-
-  const verify = await tauriInvoke<string | null>('vault_load_private_key').catch(() => null);
-  if (verify !== toMigrate) {
-    console.error('[DB] Migration verify mismatch — keeping localStorage copy as safety net');
-    return false;
-  }
-
-  localStorage.removeItem('echo_private_key_v2');
-  localStorage.removeItem('echo_private_key');
-  console.info('[DB] Private key migrated from localStorage to vault');
-  return true;
-}
-
-export async function loadPrivateKey(): Promise<string | null> {
-  try {
-    const { invoke } = await import('@tauri-apps/api/core');
-    const result: string | null = await invoke('vault_load_private_key');
-    if (result) return result;
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("crypto_clear");
   } catch {
     // not in Tauri
   }
-  // Fallback #1: новый ключ v2
-  const v2 = localStorage.getItem('echo_private_key_v2');
-  if (v2) return v2;
-  // Fallback #2: старый ключ (миграция)
-  const legacy = localStorage.getItem('echo_private_key');
-  if (legacy) {
-    // Автоматическая миграция на v2
-    localStorage.setItem('echo_private_key_v2', legacy);
-    return legacy;
-  }
-  return null;
-}
-
-export async function deletePrivateKey(): Promise<void> {
-  try {
-    const { invoke } = await import('@tauri-apps/api/core');
-    await invoke('vault_delete_private_key');
-  } catch {
-    // not in Tauri
-  }
+  localStorage.removeItem('echo_public_key');
+  localStorage.removeItem('echo_mnemonic_backup');
   localStorage.removeItem('echo_private_key_v2');
   localStorage.removeItem('echo_private_key');
 }

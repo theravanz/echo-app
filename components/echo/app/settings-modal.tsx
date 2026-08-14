@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { cn, safeChar } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { getDevices, deleteDevice, generateHWID, saveDevice, deletePrivateKey, type Device } from "@/lib/db";
+import { getDevices, deleteDevice, generateHWID, saveDevice, clearCryptoKeys, type Device } from "@/lib/db";
 import { clearAuthProgress } from "@/lib/auth-storage";
 import {
   TbX as X,
@@ -167,7 +167,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
       // ignore
     }
     try {
-      await deletePrivateKey();
+      await clearCryptoKeys();
     } catch {
       // ignore
     }
