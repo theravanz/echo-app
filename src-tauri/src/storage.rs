@@ -1,18 +1,34 @@
-//! Нативное SQLite-хранилище на базе rusqlite.
+//! Нативное SQLite-хранилище на базе rusqlite + SQLCipher (bundled-sqlcipher).
 //!
-//! Архитектура:
-//! - Одно соединение rusqlite внутри StorageManager (Mutex<Connection>)
-//! - Таблицы создаются один раз в new() при старте приложения
-//! - Все 9 команд работают через State<'_, StorageManager>
-//! - Токены и мнемоника шифруются через vault.rs (AES-256-GCM) перед записью
-//! - Внешние ключи ВКЛЮЧЕНЫ (PRAGMA foreign_keys = ON) — referential integrity
+//! Архитектура (Phase 1):
+//! - Весь файл БД зашифрован SQLCipher. Ключ НЕ деривируется из Vault-ключа и
+//!   НЕ переключается (нет rekey) — это device-bound ключ:
+//!   Argon2id(HWID + соль) → HKDF-SHA256 expand (info "echo/db-cipher") → PRAGMA key.
+//!   Это совместимо с мультиаккаунтом и записью БД ещё на экране входа.
+//! - Connection pool (N=4, LIFO, пред-ключеван) вместо Mutex<Connection>.
+//! - Версионированные миграции (V001..V00N) в таблице refinery_schema_history,
+//!   запускаются один раз при старте до инициализации Vault (идемпотентно).
+//! - Двухслойная модель: SQLCipher шифрует весь файл, а Vault (AES-256-GCM от
+//!   seed пользователя) дополнительно шифрует чувствительные строки (токены и т.п.).
+//! - auth_progress разделена → secure_store (чувствительное) + app_settings (темы/обои).
+//! - Внешние ключи ВКЛЮЧЕНЫ (PRAGMA foreign_keys = ON) — referential integrity.
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::ops::{Deref, DerefMut};
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
 
+use crate::device;
 use crate::vault::Vault;
+
+use hkdf::Hkdf;
+use sha2::{Digest, Sha256};
+use zeroize::Zeroizing;
+
 
 // ═══════════════════════════════════════════════════════════════════
 // DTO (Data Transfer Objects) — интерфейсы с фронтендом
@@ -62,17 +78,258 @@ pub struct Account {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// StorageManager — единственный владелец соединения с БД
-// ═══════════════════════════════════════════════════════════════════
+// StorageManager — владелец connection pool (вместо Mutex<Connection>)
+/// Размер пула соединений.
+const POOL_SIZE: usize = 4;
+/// Domain-separation info для HKDF device-ключа в DB-ключ.
+const DB_KEY_INFO: &[u8] = b"echo/db-cipher";
+/// Имя файла-соли для DB-ключа (не секретен).
+const SALT_FILE: &str = "echo.db.key.salt";
+
+/// Миграции, выполняемые при старте (идемпотентно, до Vault).
+const MIGRATIONS: &[(&str, &str)] = &[
+    ("V001__initial_schema", include_str!("../migrations/V001__initial_schema.sql")),
+    ("V002__split_auth_progress", include_str!("../migrations/V002__split_auth_progress.sql")),
+];
+
+/// Прочитать или создать 16-байтовую соль для DB-ключа.
+fn load_or_create_salt(path: &PathBuf) -> Result<Vec<u8>, String> {
+    if path.exists() {
+        let raw = fs::read(path).map_err(|e| format!("[Storage] read salt: {e}"))?;
+        if raw.len() >= 16 {
+            return Ok(raw[..16].to_vec());
+        }
+    }
+    use rand::RngCore;
+    let mut salt = [0u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut salt);
+    fs::write(path, &salt).map_err(|e| format!("[Storage] write salt: {e}"))?;
+    Ok(salt.to_vec())
+}
+
+/// Деривировать SQLCipher-ключ: Argon2id(HWID+salt) -> HKDF-SHA256 (echo/db-cipher).
+fn derive_db_key_hex(machine: &str, salt: &[u8]) -> Result<Zeroizing<String>, String> {
+    let ikm = device::device_key(machine, salt)?;
+    let hk = Hkdf::<Sha256>::new(None, ikm.as_ref());
+    let mut okm = [0u8; 32];
+    hk.expand(DB_KEY_INFO, &mut okm)
+        .map_err(|e| format!("[Storage] HKDF expand: {e}"))?;
+    let hexed = Zeroizing::new(hex::encode(okm));
+    okm.fill(0);
+    Ok(hexed)
+}
+
+/// Открыть/создать SQLCipher-БД, установить ключ и проверить его.
+fn open_keyed(path: &PathBuf, key_hex: &str) -> Result<Connection, String> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+    )
+    .map_err(|e| format!("[Storage] open_with_flags: {e}"))?;
+    conn.pragma_update(None, "key", key_hex)
+        .map_err(|e| format!("[Storage] PRAGMA key: {e}"))?;
+    conn.execute_batch(
+        "PRAGMA foreign_keys = ON;
+         PRAGMA journal_mode = WAL;
+         PRAGMA synchronous = NORMAL;
+         PRAGMA busy_timeout = 5000;",
+    )
+    .map_err(|e| format!("[Storage] PRAGMA init: {e}"))?;
+    conn.prepare("SELECT count(*) FROM sqlite_master")
+        .map_err(|_| "[Storage] wrong key or not a SQLCipher database".to_string())?;
+    Ok(conn)
+}
+
+/// Открывается ли файл нашим ключом (уже корректная SQLCipher-БД)?
+fn opens_with_key(path: &PathBuf, key_hex: &str) -> bool {
+    open_keyed(path, key_hex).is_ok()
+}
+
+/// Является ли файл legacy (plaintext) SQLite с нашими таблицами?
+fn is_legacy_plaintext(path: &PathBuf) -> bool {
+    let Ok(conn) = Connection::open(path) else {
+        return false;
+    };
+    match conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN
+            ('accounts','sessions','devices','messages','themes',
+             'chat_wallpapers','auth_progress','e2ee_keys')",
+        [],
+        |r| r.get::<_, i64>(0),
+    ) {
+        Ok(n) => n > 0,
+        Err(_) => false,
+    }
+}
+
+/// Экранировать одинарные кавычки для ATTACH-пути.
+fn quote_sql_path(path: &PathBuf) -> String {
+    path.to_string_lossy().replace('\'', "''")
+}
+
+/// One-time миграция legacy plaintext echo.db -> новый SQLCipher-файл (ключ).
+/// Standard SQLCipher recipe: открываем legacy как plaintext (src), приаттачиваем
+/// пустой целевой файл с KEY ('enc'), и sqlcipher_export копирует схему+данные.
+/// Старая БД удаляется только после успеха (rollback-безопасно).
+fn migrate_legacy_to_sqlcipher(db_path: &PathBuf, key_hex: &str) -> Result<(), String> {
+    let tmp = db_path.with_extension("db.cipher");
+    if tmp.exists() {
+        let _ = fs::remove_file(&tmp);
+    }
+
+    // Источник открываем ПЛАЙНТЕКСТ-соединением (до Phase 1 файл не зашифрован).
+    let src = Connection::open(db_path).map_err(|e| {
+        format!("[Storage] open legacy source: {e}")
+    })?;
+
+    // Приаттачиваем пустой целевой файл как КЛЮЧЕВАННУЮ БД и экспортируем.
+    // (Никакого явного BEGIN/COMMIT: DETACH запрещён внутри транзакции, а
+    // транзакция не нужна — источник только читается, оригинал трогаем лишь
+    // после успешного создания tmp.)
+    let attach = format!(
+        "ATTACH DATABASE '{}' AS enc KEY '{}';",
+        quote_sql_path(&tmp),
+        key_hex
+    );
+    let export = src
+        .execute_batch(&attach)
+        .and_then(|_| src.execute_batch("SELECT sqlcipher_export('enc');"))
+        .and_then(|_| src.execute_batch("DETACH DATABASE enc;"));
+
+    if let Err(e) = export {
+        drop(src);
+        let _ = fs::remove_file(&tmp);
+        return Err(format!(
+            "[Storage] legacy migration failed, original DB kept intact: {e}"
+        ));
+    }
+    drop(src);
+
+    let bak = db_path.with_extension("db.legacy");
+    if bak.exists() {
+        let _ = fs::remove_file(&bak);
+    }
+    fs::rename(db_path, &bak).map_err(|e| format!("[Storage] rename legacy: {e}"))?;
+    fs::rename(&tmp, db_path).map_err(|e| format!("[Storage] rename cipher: {e}"))?;
+    let _ = fs::remove_file(&bak);
+    Ok(())
+}
+
+/// Выполнить версионированные миграции (идемпотентно). История в refinery_schema_history.
+fn run_migrations(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS refinery_schema_history (
+            version     INTEGER PRIMARY KEY,
+            name        TEXT NOT NULL,
+            applied_on  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%d %H:%M:%S','now')),
+            checksum    TEXT NOT NULL
+        );",
+    )
+    .map_err(|e| format!("[Storage] history table: {e}"))?;
+
+    for (name, sql) in MIGRATIONS {
+        let version: i64 = name
+            .trim_start_matches("V")
+            .trim_matches('0')
+            .parse()
+            .unwrap_or(0);
+
+        let applied: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM refinery_schema_history WHERE version = ?1)",
+                params![version],
+                |r| r.get::<_, bool>(0),
+            )
+            .map_err(|e| format!("[Storage] check migration: {e}"))?;
+        if applied {
+            continue;
+        }
+
+        let checksum = format!("{:x}", Sha256::digest(sql.as_bytes()));
+        conn.execute_batch("BEGIN;")
+            .and_then(|_| conn.execute_batch(sql))
+            .and_then(|_| {
+                conn.execute(
+                    "INSERT INTO refinery_schema_history (version, name, checksum)
+                     VALUES (?1, ?2, ?3)",
+                    params![version, name, checksum],
+                )
+                .map(|_| ())
+            })
+            .and_then(|_| conn.execute_batch("COMMIT;"))
+            .map_err(|e| {
+                let _ = conn.execute_batch("ROLLBACK;");
+                format!("[Storage] apply {name}: {e}")
+            })?;
+        log::info!("[Storage] applied migration {name}");
+    }
+    Ok(())
+}
+/// Простой пул пре-ключеванных SQLCipher-соединений (LIFO через mpsc).
+/// Receiver обёрнут в Mutex: этот Mutex сериализует лишь O(1)-операции
+/// acquire/release, а не сами запросы (каждый поток держит своё Connection
+/// вне мьютекса), поэтому параллельные чтения/записи идут конкурентно и
+/// deadlock-безопасно (Drop возвращает соединение через tx, минуя rx-mutex).
+pub struct Pool {
+    tx: Sender<Connection>,
+    rx: Mutex<Receiver<Connection>>,
+}
+
+impl Pool {
+    fn open(path: &PathBuf, key_hex: &str, size: usize) -> Result<Self, String> {
+        // Unbounded канал: содержит максимум `size` соединений (возвращаем ровно
+        // столько, сколько взяли), поэтому рост памяти ограничен POOL_SIZE.
+        let (tx, rx) = mpsc::channel();
+        for _ in 0..size {
+            let c = open_keyed(path, key_hex)?;
+            tx.send(c).map_err(|e| format!("[Storage] pool send: {e}"))?;
+        }
+        Ok(Pool { tx, rx: Mutex::new(rx) })
+    }
+
+    /// Взять соединение из пула; возвращается в пул в Drop guard.
+    pub fn lock(&self) -> Result<PoolGuard<'_>, String> {
+        let rx = self.rx.lock().map_err(|e| e.to_string())?;
+        let conn = rx.recv().map_err(|_| "[Storage] pool closed".to_string())?;
+        drop(rx);
+        Ok(PoolGuard { pool: self, conn: Some(conn) })
+    }
+}
+
+/// RAII-guard соединения; Deref/DerefMut -> rusqlite::Connection, поэтому вызовы
+/// `manager.conn.lock().map_err(...)?; conn.execute(...)` компилируются без изменений.
+pub struct PoolGuard<'a> {
+    pool: &'a Pool,
+    conn: Option<Connection>,
+}
+
+impl Deref for PoolGuard<'_> {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        self.conn.as_ref().expect("pool guard conn")
+    }
+}
+impl DerefMut for PoolGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Connection {
+        self.conn.as_mut().expect("pool guard conn")
+    }
+}
+impl Drop for PoolGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(c) = self.conn.take() {
+            let _ = self.pool.tx.send(c);
+        }
+    }
+}
 
 pub struct StorageManager {
-    pub(crate) conn: Mutex<Connection>,
+    pub(crate) conn: Pool,
 }
 
 impl StorageManager {
     pub fn new(app: &AppHandle<tauri::Wry>) -> Self {
-        eprintln!("[Storage] STARTING INIT");
-        
+        eprintln!("[Storage] STARTING INIT (SQLCipher)");
+
         let app_dir = app
             .path()
             .app_local_data_dir()
@@ -81,207 +338,60 @@ impl StorageManager {
                 eprintln!("[Storage] NO APP DIR, using fallback");
                 std::path::PathBuf::from("/data/user/0/com.theravanz.echo_tauri")
             });
-        
-        eprintln!("[Storage] app_dir: {:?}", app_dir);
-        
-        if let Err(e) = std::fs::create_dir_all(&app_dir) {
-            eprintln!("[Storage] CREATE DIR FAILED: {}", e);
-        }
-        
-        let db_path = app_dir.join("echo.db");
-        eprintln!("[Storage] DB path: {:?}", db_path);
 
-        let conn = match Connection::open(&db_path) {
-            Ok(c) => {
-                eprintln!("[Storage] DB OPENED OK");
-                c
-            }
-            Err(e) => {
-                eprintln!("[Storage] DB OPEN FAILED: {}", e);
-                panic!("Cannot open database");
+        if let Err(e) = fs::create_dir_all(&app_dir) {
+            eprintln!("[Storage] CREATE DIR FAILED: {e}");
+        }
+
+        let db_path = app_dir.join("echo.db");
+        let salt_path = app_dir.join(SALT_FILE);
+
+        // Device-bound ключ: Argon2id(HWID+salt) -> HKDF -> "echo/db-cipher".
+        let salt = load_or_create_salt(&salt_path)
+            .unwrap_or_else(|e| panic!("[Storage] salt: {e}"));
+        let machine = device::machine_id().unwrap_or_default();
+        let key_hex = derive_db_key_hex(&machine, &salt)
+            .unwrap_or_else(|e| panic!("[Storage] db key: {e}"));
+
+        // Определяем состояние файла и открываем пул.
+        let pool = {
+            if opens_with_key(&db_path, &key_hex) {
+                eprintln!("[Storage] SQLCipher DB present");
+                Pool::open(&db_path, &key_hex, POOL_SIZE)
+                    .unwrap_or_else(|e| panic!("[Storage] open pool: {e}"))
+            } else if db_path.exists() && is_legacy_plaintext(&db_path) {
+                eprintln!("[Storage] legacy plaintext DB detected -> migrating");
+                migrate_legacy_to_sqlcipher(&db_path, &key_hex)
+                    .unwrap_or_else(|e| panic!("[Storage] migration: {e}"));
+                eprintln!("[Storage] data migrated to SQLCipher");
+                Pool::open(&db_path, &key_hex, POOL_SIZE)
+                    .unwrap_or_else(|e| panic!("[Storage] open pool: {e}"))
+            } else {
+                // Файл есть, но не наш ключ и не plaintext -> другой device (HWID
+                // изменился) или битый. БД = кэш: не открываем, recovery мнемоникой.
+                if db_path.exists() {
+                    let stale = db_path.with_extension("db.stale");
+                    eprintln!("[Storage] unreachable DB (HWID change/recovery), archiving");
+                    if fs::rename(&db_path, &stale).is_err() {
+                        let _ = fs::remove_file(&db_path);
+                    }
+                }
+                eprintln!("[Storage] fresh SQLCipher DB");
+                Pool::open(&db_path, &key_hex, POOL_SIZE)
+                    .unwrap_or_else(|e| panic!("[Storage] open pool: {e}"))
             }
         };
 
-        // Оптимизация SQLite с включёнными внешними ключами
-        if let Err(e) = conn.execute_batch(
-            "PRAGMA foreign_keys = ON;
-             PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;
-             PRAGMA busy_timeout = 5000;"
-        ) {
-            log::error!("[Storage] PRAGMA failed: {}", e);
-        }
-
-        // Всеядная схема БЕЗ внешних ключей
-        if let Err(e) = conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS accounts (
-                id TEXT PRIMARY KEY,
-                public_key TEXT NOT NULL,
-                display_name TEXT DEFAULT '',
-                avatar_url TEXT DEFAULT '',
-                created_at INTEGER DEFAULT (strftime('%s', 'now')),
-                updated_at INTEGER DEFAULT (strftime('%s', 'now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                access_token TEXT NOT NULL,
-                refresh_token TEXT DEFAULT '',
-                device_hwid TEXT DEFAULT '',
-                device_name TEXT DEFAULT '',
-                ip_address TEXT DEFAULT '',
-                last_active INTEGER DEFAULT (strftime('%s', 'now')),
-                expires_at INTEGER NOT NULL,
-                created_at INTEGER DEFAULT (strftime('%s', 'now'))
-            );
-            CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
-            CREATE INDEX IF NOT EXISTS idx_sessions_device_hwid ON sessions(device_hwid);
-
-            CREATE TABLE IF NOT EXISTS devices (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                hwid TEXT NOT NULL,
-                device_name TEXT DEFAULT 'Unknown Device',
-                platform TEXT DEFAULT '',
-                device_type TEXT DEFAULT 'desktop',
-                os_name TEXT DEFAULT '',
-                browser_name TEXT DEFAULT '',
-                ip_address TEXT DEFAULT '',
-                location TEXT DEFAULT '',
-                timezone TEXT DEFAULT '',
-                is_vpn INTEGER DEFAULT 0,
-                last_active INTEGER DEFAULT (strftime('%s', 'now')),
-                is_current INTEGER DEFAULT 0,
-                created_at INTEGER DEFAULT (strftime('%s', 'now'))
-            );
-            CREATE INDEX IF NOT EXISTS idx_devices_user_id ON devices(user_id);
-            CREATE INDEX IF NOT EXISTS idx_devices_hwid ON devices(hwid);
-
-            CREATE TABLE IF NOT EXISTS messages (
-                id TEXT PRIMARY KEY,
-                chat_id TEXT NOT NULL,
-                sender_id TEXT NOT NULL,
-                text_content TEXT NOT NULL DEFAULT '',
-                encrypted_content TEXT DEFAULT '',
-                message_type TEXT DEFAULT 'text',
-                timestamp INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
-                status TEXT DEFAULT 'pending'
-            );
-            CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
-            CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp);
-            CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(status);
-
-            CREATE TABLE IF NOT EXISTS auth_progress (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                updated_at INTEGER DEFAULT (strftime('%s', 'now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS themes (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                author TEXT DEFAULT 'Echo',
-                description TEXT DEFAULT '',
-                is_builtin INTEGER DEFAULT 0,
-                css_variables TEXT NOT NULL DEFAULT '{}',
-                metadata_json TEXT NOT NULL DEFAULT '{}',
-                created_at INTEGER DEFAULT (strftime('%s', 'now')),
-                updated_at INTEGER DEFAULT (strftime('%s', 'now'))
-            );
-
-            CREATE TABLE IF NOT EXISTS chat_wallpapers (
-                chat_id TEXT PRIMARY KEY,
-                wallpaper_type TEXT NOT NULL DEFAULT 'solid',
-                wallpaper_value TEXT NOT NULL DEFAULT '',
-                blur REAL DEFAULT 0.0,
-                opacity REAL DEFAULT 1.0,
-                brightness REAL DEFAULT 1.0,
-                updated_at INTEGER DEFAULT (strftime('%s', 'now'))
-            );
-
-            -- Phase 0 (device-bound): E2EE-priv seed, зашифрованный device-ключом
-            -- (Argon2id от HWID). value = JSON { salt, nonce, ct }. Никогда не plaintext.
-            CREATE TABLE IF NOT EXISTS e2ee_keys (
-                user_id TEXT PRIMARY KEY,
-                payload TEXT NOT NULL,
-                created_at INTEGER DEFAULT (strftime('%s', 'now'))
-            );"
-        ) {
-            log::error!("[Storage] Schema creation failed: {}", e);
-            panic!("[Storage] Schema failed");
-        }
-
-// ── Phase 0: миграция accounts — удаляем колонку encrypted_seed (если есть) ──
-        // Вектор приватного ключа больше не хранится в БД: seed живёт только в Rust KeyStore.
+        // Миграции — один раз при старте, до инициализации Vault.
         {
-            let mut has_encrypted_seed = false;
-            if let Ok(mut stmt) = conn.prepare("SELECT name FROM pragma_table_info('accounts')") {
-                if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
-                    has_encrypted_seed = rows.filter_map(|r| r.ok()).any(|c| c == "encrypted_seed");
-                }
-            }
-            if has_encrypted_seed {
-                log::info!("[Storage] Migrating: dropping accounts.encrypted_seed (private key is now Rust-only)");
-                if let Err(e) = conn.execute("ALTER TABLE accounts DROP COLUMN encrypted_seed", []) {
-                    log::error!("[Storage] drop encrypted_seed: {}", e);
-                }
-            }
-        }
-// ── Миграция существующей таблицы devices: добавляем новые колонки ──
-        // CREATE TABLE IF NOT EXISTS не тронет уже созданную таблицу, поэтому
-        // проверяем PRAGMA table_info и добавляем недостающие колонки вручную.
-        {
-            let mut existing: Vec<String> = Vec::new();
-            if let Ok(mut stmt) = conn.prepare("SELECT name FROM pragma_table_info('devices')") {
-                if let Ok(rows) = stmt.query_map([], |row| row.get::<_, String>(0)) {
-                    existing = rows.filter_map(|r| r.ok()).collect();
-                }
-            }
-            let has = |col: &str| existing.iter().any(|c| c == col);
-
-            if !has("os_name") {
-                if let Err(e) = conn.execute("ALTER TABLE devices ADD COLUMN os_name TEXT DEFAULT ''", []) {
-                    log::error!("[Storage] add os_name: {}", e);
-                }
-            }
-            if !has("device_type") {
-                if let Err(e) = conn.execute("ALTER TABLE devices ADD COLUMN device_type TEXT DEFAULT 'desktop'", []) {
-                    log::error!("[Storage] add device_type: {}", e);
-                }
-            }
-            if !has("browser_name") {
-                if let Err(e) = conn.execute("ALTER TABLE devices ADD COLUMN browser_name TEXT DEFAULT ''", []) {
-                    log::error!("[Storage] add browser_name: {}", e);
-                }
-            }
-            if !has("ip_address") {
-                if let Err(e) = conn.execute("ALTER TABLE devices ADD COLUMN ip_address TEXT DEFAULT ''", []) {
-                    log::error!("[Storage] add ip_address: {}", e);
-                }
-            }
-            if !has("location") {
-                if let Err(e) = conn.execute("ALTER TABLE devices ADD COLUMN location TEXT DEFAULT ''", []) {
-                    log::error!("[Storage] add location: {}", e);
-                }
-            }
-            if !has("timezone") {
-                if let Err(e) = conn.execute("ALTER TABLE devices ADD COLUMN timezone TEXT DEFAULT ''", []) {
-                    log::error!("[Storage] add timezone: {}", e);
-                }
-            }
-            if !has("is_vpn") {
-                if let Err(e) = conn.execute("ALTER TABLE devices ADD COLUMN is_vpn INTEGER DEFAULT 0", []) {
-                    log::error!("[Storage] add is_vpn: {}", e);
-                }
+            let conn = pool.lock().expect("[Storage] pool lock for migrations");
+            if let Err(e) = run_migrations(&conn) {
+                panic!("[Storage] migrations failed: {e}");
             }
         }
 
-        eprintln!("[Storage] INIT COMPLETE");
-        eprintln!("[Storage] INIT COMPLETE");
-        Self {
-            conn: Mutex::new(conn),
-        }
+        eprintln!("[Storage] INIT COMPLETE (SQLCipher + pool, {POOL_SIZE} conns)");
+        Self { conn: pool }
     }
 
     // ── Phase 0: device-bound E2EE-ключ (только Rust, payload — зашифрованный seed) ──
@@ -814,7 +924,7 @@ pub async fn get_active_theme_id(
 ) -> Result<Option<String>, String> {
     let conn = manager.conn.lock().map_err(|e| e.to_string())?;
     let result = conn.query_row(
-        "SELECT value FROM auth_progress WHERE key = 'active_theme_id'",
+        "SELECT value FROM app_settings WHERE key = 'active_theme_id'",
         [], |row| row.get::<_, String>(0),
     ).ok();
     Ok(result)
@@ -827,7 +937,7 @@ pub async fn set_active_theme_id(
 ) -> Result<(), String> {
     let conn = manager.conn.lock().map_err(|e| e.to_string())?;
     conn.execute(
-        "INSERT OR REPLACE INTO auth_progress (key, value, updated_at) VALUES ('active_theme_id', ?1, strftime('%s','now'))",
+        "INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('active_theme_id', ?1, strftime('%s','now'))",
         params![theme_id],
     ).map_err(|e| format!("[Storage] set_active_theme: {}", e))?;
     Ok(())
@@ -886,9 +996,147 @@ pub async fn delete_chat_wallpaper(
     Ok(())
 }
 
+
 // ═══════════════════════════════════════════════════════════════════
-// AUTH PROGRESS (3 команды)
+// Тесты (Phase 1): SQLCipher-миграция legacy БД + connection pool.
+// Запуск: cargo test --lib storage::tests
 // ═══════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Создать legacy (plaintext) SQLite-БД вида, который был ДО Phase 1.
+    fn make_legacy_db(path: &PathBuf) -> Result<(), String> {
+        let conn = Connection::open(path).map_err(|e| e.to_string())?;
+        conn.execute_batch(
+            "CREATE TABLE accounts (
+                id TEXT PRIMARY KEY,
+                public_key TEXT NOT NULL,
+                display_name TEXT DEFAULT '',
+                avatar_url TEXT DEFAULT '',
+                created_at INTEGER DEFAULT (strftime('%s','now')),
+                updated_at INTEGER DEFAULT (strftime('%s','now'))
+            );
+            INSERT INTO accounts (id, public_key, display_name) VALUES
+                ('acc-1', 'pubkey-1', 'Alice');",
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    fn unique_path(tag: &str) -> PathBuf {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("echo_test_{tag}_{ts}"))
+    }
+
+    #[test]
+    fn legacy_db_migrates_to_sqlcipher_and_reads_back() {
+        let db = unique_path("legacy.db");
+        let salt_path = unique_path("legacy.salt");
+        make_legacy_db(&db).unwrap();
+
+        let salt = load_or_create_salt(&salt_path).unwrap();
+        let key = derive_db_key_hex("test-machine", &salt).unwrap();
+
+        // До миграции: plaintext, ключом не открывается.
+        assert!(is_legacy_plaintext(&db));
+        assert!(!opens_with_key(&db, &key));
+
+        // Миграция plaintext -> SQLCipher.
+        migrate_legacy_to_sqlcipher(&db, &key).unwrap();
+
+        // После: ключом открывается, plaintext больше не читается.
+        assert!(opens_with_key(&db, &key));
+        assert!(!is_legacy_plaintext(&db));
+
+        // Данные на месте через пул.
+        let pool = Pool::open(&db, &key, POOL_SIZE).unwrap();
+        let conn = pool.lock().unwrap();
+        let name: String = conn
+            .query_row(
+                "SELECT display_name FROM accounts WHERE id='acc-1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "Alice");
+
+        // Идемпотентность миграций: повторный запуск не ломает схему.
+        run_migrations(&conn).unwrap();
+        run_migrations(&conn).unwrap();
+
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_file(&salt_path);
+    }
+
+    #[test]
+    fn wrong_device_key_cannot_open_db() {
+        let db = unique_path("wrongkey.db");
+        let salt_path = unique_path("wrongkey.salt");
+        make_legacy_db(&db).unwrap();
+
+        let salt = load_or_create_salt(&salt_path).unwrap();
+        let key1 = derive_db_key_hex("device-A", &salt).unwrap();
+        let key2 = derive_db_key_hex("device-B", &salt).unwrap();
+        migrate_legacy_to_sqlcipher(&db, &key1).unwrap();
+
+        assert!(opens_with_key(&db, &key1));
+        assert!(!opens_with_key(&db, &key2));
+
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_file(&salt_path);
+    }
+
+    #[test]
+    fn pool_concurrent_queries_no_deadlock() {
+        let db = unique_path("pool.db");
+        let salt_path = unique_path("pool.salt");
+
+        let salt = load_or_create_salt(&salt_path).unwrap();
+        let key = derive_db_key_hex("t", &salt).unwrap();
+        let conn = open_keyed(&db, &key).unwrap();
+        conn.execute_batch("CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1);")
+            .unwrap();
+        drop(conn);
+
+        let pool = std::sync::Arc::new(Pool::open(&db, &key, 4).unwrap());
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let p = std::sync::Arc::clone(&pool);
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..50 {
+                    let conn = p.lock().unwrap();
+                    let v: i64 = conn
+                        .query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0))
+                        .unwrap();
+                    assert_eq!(v, 1);
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let _ = std::fs::remove_file(&db);
+        let _ = std::fs::remove_file(&salt_path);
+    }
+}
+
+/// Куда маршрутизировать auth_progress-запись (Phase 1):
+/// публичное (активная тема) → app_settings; чувствительное
+/// (seed/токены/OTP/auth-progress JSON) → secure_store.
+fn route_table(key: &str) -> &'static str {
+    if key == "active_theme_id" {
+        "app_settings"
+    } else {
+        "secure_store"
+    }
+}
 
 #[tauri::command]
 pub async fn save_auth_progress(
@@ -897,12 +1145,12 @@ pub async fn save_auth_progress(
     value: String,
 ) -> Result<(), String> {
     let conn = manager.conn.lock().map_err(|e| e.to_string())?;
-    conn.execute(
-        "INSERT OR REPLACE INTO auth_progress (key, value, updated_at)
-         VALUES (?1, ?2, strftime('%s','now'))",
-        params![key, value],
-    )
-    .map_err(|e| format!("[Auth] save_progress: {}", e))?;
+    let table = route_table(&key);
+    let sql = format!(
+        "INSERT OR REPLACE INTO {table} (key, value, updated_at) VALUES (?1, ?2, strftime('%s','now'))"
+    );
+    conn.execute(&sql, params![key, value])
+        .map_err(|e| format!("[Auth] save_progress: {e}"))?;
     Ok(())
 }
 
@@ -912,12 +1160,10 @@ pub async fn get_auth_progress(
     key: String,
 ) -> Result<Option<String>, String> {
     let conn = manager.conn.lock().map_err(|e| e.to_string())?;
+    let table = route_table(&key);
+    let sql = format!("SELECT value FROM {table} WHERE key = ?1");
     let result = conn
-        .query_row(
-            "SELECT value FROM auth_progress WHERE key = ?1",
-            params![key],
-            |row| row.get::<_, String>(0),
-        )
+        .query_row(&sql, params![key], |row| row.get::<_, String>(0))
         .ok();
     Ok(result)
 }
@@ -928,7 +1174,10 @@ pub async fn delete_auth_progress(
     key: String,
 ) -> Result<(), String> {
     let conn = manager.conn.lock().map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM auth_progress WHERE key = ?1", params![key])
-        .map_err(|e| format!("[Auth] delete_progress: {}", e))?;
+    let table = route_table(&key);
+    let sql = format!("DELETE FROM {table} WHERE key = ?1");
+    conn.execute(&sql, params![key])
+        .map_err(|e| format!("[Auth] delete_progress: {e}"))?;
     Ok(())
 }
+

@@ -33,6 +33,15 @@ class EchoFirebaseService : FirebaseMessagingService() {
         // читает отсюда, чтобы передать токен в Rust-бэкенд / Supabase.
         FcmTokenHolder.token = token
 
+        // Персистим на случай перезапуска процесса (onNewToken повторно
+        // может не вызваться — Firebase кэширует токен на устройстве).
+        try {
+            getSharedPreferences("echo_fcm", MODE_PRIVATE)
+                .edit().putString("fcm_token", token).apply()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to persist FCM token", e)
+        }
+
         // Отправляем токен в Rust-бэкенд через IPC (broadcast для FcmTokenReceiver)
         sendTokenToRustBackend(token)
     }

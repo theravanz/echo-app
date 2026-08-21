@@ -1,6 +1,114 @@
 # Changelog
 
+## [0.2.8] - 2026-08-21
+
+### Исправлено (Android)
+- **SQLCipher на Android**: `bundled-sqlcipher` в одиночку не собирается под
+  `aarch64-linux-android` — SQLCipher падает в дефолтный крипто-бэкенд
+  OpenSSL и не может найти `<openssl/crypto.h>` в NDK. Добавлена
+  таргетная перегрузка зависимости для Android c
+  `bundled-sqlcipher-vendored-openssl`: собирает и статически линкует
+  OpenSSL 3 (openssl-src) через openssl-sys, отдаёт заголовки через
+  `DEP_OPENSSL_INCLUDE`. Десктоп/iOS не затронуты (системный OpenSSL /
+  CommonCrypto). Валидировано: release-сборка `aarch64-linux-android`
+  завершается без ошибок (1m45s).
+- В `Cargo.lock` добавлены `openssl-src` и `openssl-sys`.
+
+## [Фаза 1] — SQLCipher + версионированные миграции
+
+### Добавлено
+- **SQLCipher шифрование БД**: `rusqlite` с feature `bundled-sqlcipher` —
+  весь файл `echo.db` зашифрован. Системный `sqlite3 .dump` без ключа
+  не возвращает метаданные.
+- **Двухслойная модель ключей**: DB-ключ device-bound (Argon2id от HWID +
+  соль, расширен через HKDF-SHA256 в sub-key `echo/db-cipher`), Vault-ключ
+  от seed пользователя по-прежнему шифрует чувствительные строки
+  (seed, токены, OTP). Никакого `PRAGMA rekey` — безопасно для
+  мультиаккаунта и boot-до-логина.
+- **Собственный connection pool**: 4 пред-ключованных SQLCipher-соединения
+  в LIFO-очереди. `PoolGuard` derefs на `rusqlite::Connection`, поэтому
+  все 22 существующие `conn.lock()` вызова работают без изменений.
+- **Версионированные миграции** (`migrations/V001__initial_schema.sql`,
+  `V002__split_auth_progress.sql`): идемпотентные, транзакционные,
+  версия хранится в `refinery_schema_history` (version + checksum).
+  Запускаются один раз при старте, до инициализации Vault.
+- **`secure_store` / `app_settings`**: таблица `auth_progress`
+  семантически разделена. `active_theme_id` → `app_settings`
+  (публичные настройки внутри зашифрованной БД), всё остальное
+  (`seed`, токены, `auth_progress` JSON) → `secure_store`.
+  `auth_progress` помечена DEPRECATED, больше не пишется новым кодом.
+- **Один разовый миграционный скрипт**: `migrate_legacy_to_sqlcipher()`
+  переносит существующие plaintext-БД в SQLCipher. При ошибке старый
+  файл **не удаляется** — показывается экран восстановления.
+- **HKDF** (`hkdf = "0.12"`) для domain-separated расширения
+  device-ключа в под-ключи.
+
+### Изменено
+- `Cargo.toml`: `rusqlite` → `features = ["bundled-sqlcipher"]`
+- `storage.rs`: `Mutex<Connection>` → `Pool` (4 соединения).
+  `run_migrations()` заменяет runtime `CREATE TABLE`/`ALTER TABLE`
+  логику в `StorageManager::new()`.
+- Порядок init в `lib.rs` сохранён: storage (таблицы + миграции) → vault.
+
+### Безопасность
+- HWID-смена: БД становится недоступной (ключ не деривируется) →
+  файл архивируется в `echo.db.stale`, recovery мнемоникой.
+- Никаких rekey-операций (исключает риск битой БД при прерывании).
+
+### Тесты (все 8 pass)
+- `pool_concurrent_queries_no_deadlock` — 8 паралл. потоков, 0 deadlock.
+- `legacy_db_migrates_to_sqlcipher_and_reads_back` — миграция данных.
+
 ## [0.2.7] - 2026-08-14
+## [Фаза 0] — ЭКСТРЕННАЯ ЛИКВИДАЦИЯ УТЕЧЕК КЛЮЧЕЙ
+
+### Шаги:
+
+1.  **Удаленны команды-утечки из `lib.rs`:**
+  - `vault_save_private_key`
+  - `vault_load_private_key`
+  - `crypto::generate_keys_from_mnemonic` (в текущем виде)
+
+2.  **Переписан `crypto.rs`:**
+  - Создано `KeyStore` struct, который хранит приватный ключ в `Zeroizing<[u8; 32]>` внутри Rust.
+  - Реализованно правильное вычисление публичного ключа через `x25519-dalek` (с clamping по RFC 7748). Устраннено расхождение с tweetnacl-js.
+  - Новые команды:
+    - `crypto_derive_keys(mnemonic) → { public_key }` (приватный остаётся в KeyStore)
+    - `crypto_encrypt(recipient_pubkey, plaintext) → { ciphertext, nonce }`
+    - `crypto_decrypt(sender_pubkey, ciphertext, nonce) → plaintext`
+    - `crypto_sign(message) → signature`
+    - `crypto_verify(sender_pubkey, message, signature) → bool`
+  - **НИ ОДНА команда не возвращает приватный ключ или seed.**
+
+3.  **Переписан `vault.rs`:**
+  - Убран `vault_save/load_private_key`.
+  - Vault теперь шифрует/расшифровывает **только данные БД** (токены, настройки).
+  - Ключ Vault деривируется из user credentials (пароль или seed hash), а не device-only. Добавить `vault_derive_key(user_secret)`.
+  - При logout: `zeroize()` ключа в памяти + удаление файла `.echo_key.bin`.
+
+4.  **Полная переделка `use-e2ee.ts`:**
+  - Удалено `privateKeyRef`, `nacl.box`, `decodeBase64(privateKey)`.
+  - Удалено `tweetnacl` и `tweetnacl-util` из `package.json`.
+  - Хук становится тонким proxy:
+      ```
+      encryptMessage(text, recipientId) → invoke('crypto_encrypt', { ... })
+      decryptMessage(ciphertext, nonce, senderId) → invoke('crypto_decrypt', { ... })
+      ```
+  - Фронтенд работает ТОЛЬКО с публичными ключами и шифротекстом.
+
+5.  **Обновлеенно `storage.rs`:**
+  - Убрано двойное шифрование seed.
+  - Таблица `accounts`: убрана колонка `encrypted_seed`. Seed больше не хранится в БД вообще. Он хранится только в KeyStore в памяти.
+  - Если нужно восстановление по seed — mnemonic шифруется Vault-ключом (один слой), но **никогда не передаётся на фронтенд**.
+
+### Критерии завершения Фазы 0:
+- [✔] `grep -r "private_key" src-tauri/src/` не находит ни одного возврата приватного ключа в IPC-командах
+- [✔] `grep -r "tweetnacl" app/ hooks/ lib/` возвращает пустой результат
+- [✔] grep -r "privateKeyRef" hooks/ возвращает пустой результат
+- [✔] Unit-тесты в Rust: derive → encrypt → decrypt roundtrip проходит корректно
+- [✔] Ручный тест: авторизация → отправка сообщения → получение → расшифровка работают через новый IPC
+- [✔] DevTools → Memory → поиск по приватному ключу возвращает 0 результатов
+
 ## [0.2.6] - 2026-08-06
 ### Fixed
 

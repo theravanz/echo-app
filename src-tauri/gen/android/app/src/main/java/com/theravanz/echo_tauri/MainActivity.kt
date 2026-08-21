@@ -2,23 +2,68 @@ package com.theravanz.echo_tauri
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import androidx.activity.enableEdgeToEdge
+import com.google.firebase.messaging.FirebaseMessaging
 import org.json.JSONObject
 
 class MainActivity : TauriActivity() {
     private var webView: WebView? = null
     private var pendingCallPayload: Map<String, String>? = null
 
+    companion object {
+        private const val TAG = "EchoNative"
+        private const val PREFS_FCM = "echo_fcm"
+        private const val KEY_FCM_TOKEN = "fcm_token"
+    }
+
+    private fun fcmPrefs(): SharedPreferences =
+        getSharedPreferences(PREFS_FCM, Context.MODE_PRIVATE)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         createNotificationChannel()
+
+        // Восстанавливаем ранее сохранённый FCM-токен (переживает перезапуски,
+        // когда onNewToken повторно не вызывается Firebase).
+        val saved = fcmPrefs().getString(KEY_FCM_TOKEN, null)
+        if (!saved.isNullOrEmpty()) {
+            FcmTokenHolder.token = saved
+        }
+        // Явно запрашиваем актуальный токен из Firebase — покрывает первый
+        // запуск и ротацию токена, не полагаясь только на onNewToken.
+        refreshFcmTokenFromFirebase()
+    }
+
+    /**
+     * Запрашивает текущий FCM-токен устройства из Firebase SDK и сохраняет его
+     * в память + SharedPreferences, чтобы JS-мост (window.EchoNative.getFcmToken())
+     * всегда мог его отдать, даже если onNewToken() уже не сработает повторно.
+     */
+    private fun refreshFcmTokenFromFirebase() {
+        try {
+            FirebaseMessaging.getInstance().getToken()
+                .addOnSuccessListener { token ->
+                    if (!token.isNullOrEmpty()) {
+                        FcmTokenHolder.token = token
+                        fcmPrefs().edit().putString(KEY_FCM_TOKEN, token).apply()
+                        Log.d(TAG, "FCM token refreshed: ${token.take(16)}...")
+                    }
+                }
+                .addOnFailureListener { e ->
+                    Log.w(TAG, "FCM getToken failed", e)
+                }
+        } catch (e: Exception) {
+            Log.w(TAG, "FCM getToken threw", e)
+        }
     }
 
     /**
@@ -40,9 +85,22 @@ class MainActivity : TauriActivity() {
         }
     }
 
-    private class EchoBridge {
+    private inner class EchoBridge {
         @JavascriptInterface
-        fun getFcmToken(): String? = FcmTokenHolder.token
+        fun getFcmToken(): String? {
+            // Быстрый путь — токен уже в памяти (onNewToken / onCreate).
+            val mem = FcmTokenHolder.token
+            if (!mem.isNullOrEmpty()) return mem
+
+            // Fallback: токен, сохранённый в SharedPreferences при прошлом запуске.
+            // Нужен, если onCreate успел восстановить токен, а фоновый запрос
+            // Firebase ещё не вернул свежий.
+            val saved = fcmPrefs().getString(KEY_FCM_TOKEN, null)
+            if (!saved.isNullOrEmpty()) {
+                FcmTokenHolder.token = saved
+            }
+            return saved
+        }
     }
 
     override fun onNewIntent(intent: Intent) {

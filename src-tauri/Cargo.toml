@@ -30,7 +30,16 @@ tauri-plugin-single-instance = "2"
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["full"] }
 chrono = { version = "0.4", features = ["serde"] }
-rusqlite = { version = "0.31", features = ["bundled"] }
+# Phase 1 (SQLCipher): весь файл БД зашифрован. bundled-sqlcipher вендорит и
+# статически линкует BSD-лицензированный SQLCipher (CC-сборка на Android OK).
+# ВАЖНО: на Android фичи bundled-sqlcipher НЕДОСТАТОЧНО — без OPENSSL_DIR
+# SQLCipher падает в дефолтный крипто-бэкенд OPENSSL и ищет
+# <openssl/crypto.h>, которого в NDK нет. Поэтому Android использует
+# bundled-sqlcipher-vendored-openssl (static-сборка OpenSSL 3 из openssl-src).
+# Десктоп/iOS остаются на системном OpenSSL / CommonCrypto.
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher"] }
+# HKDF-SHA256: domain-separate расширение device-ключа в под-ключи (db-cipher).
+hkdf = "0.12"
 
 # === Криптография (BIP-39 + Curve25519) ===
 bip39 = { version = "2.1", features = ["rand"] }
@@ -54,3 +63,12 @@ zstd = "0.13"                    # декомпрессия .tgs
 # (getUserMedia для звонков). wry 0.55 по умолчанию НЕ включает его.
 [target.'cfg(any(target_os = "linux", target_os = "dragonfly", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))'.dependencies]
 webkit2gtk = "2.0"
+
+# === Android (SQLCipher crypto backend) ===
+# Фичи bundled-sqlcipher в одиночку на Android НЕДОСТАТОЧНО: без OPENSSL_DIR
+# SQLCipher падает в дефолтный крипто-бэкенд OPENSSL и ищет <openssl/crypto.h>,
+# которого в NDK нет (CC — только Apple; NSS/libtomcrypt — внешние либы).
+# Поэтому на Android вендорим OpenSSL 3 из openssl-src (static) и линкуем
+# его через openssl-sys. Десктоп/iOS остаются на системном OpenSSL/CommonCrypto.
+[target.'cfg(target_os = "android")'.dependencies]
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher-vendored-openssl"] }
