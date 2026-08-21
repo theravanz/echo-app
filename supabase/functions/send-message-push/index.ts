@@ -109,13 +109,14 @@ Deno.serve(async (req: Request) => {
 
     const projectId =
       Deno.env.get('FIREBASE_PROJECT_ID') ?? 'echo-mes';
-    const accessToken = Deno.env.get('FIREBASE_ACCESS_TOKEN');
-    if (!accessToken) {
-      console.error(
-        '[send-message-push] Missing FIREBASE_PROJECT_ID or FIREBASE_ACCESS_TOKEN',
-      );
+    const { getFcmAccessToken } = await import('./_shared/fcm.ts');
+    let accessToken: string;
+    try {
+      accessToken = await getFcmAccessToken();
+    } catch (e) {
+      console.error('[send-message-push] FCM token source error:', e);
       return new Response(
-        JSON.stringify({ error: 'Server misconfiguration' }),
+        JSON.stringify({ error: 'Server misconfiguration (FCM OAuth)' }),
         {
           status: 500,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
