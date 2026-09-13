@@ -85,6 +85,11 @@ const POOL_SIZE: usize = 4;
 const DB_KEY_INFO: &[u8] = b"echo/db-cipher";
 /// Имя файла-соли для DB-ключа (не секретен).
 const SALT_FILE: &str = "echo.db.key.salt";
+/// Файл стабильного идентификатора устройства. iOS/Android не имеют `hostname`
+/// (и вообще субпроцессов), поэтому генерируем UUID при первом запуске и
+/// переиспользуем. Без него device-bound E2EE-ключ не восстановить после
+/// перезапуска (все чаты -> "Key Error").
+const MACHINE_ID_FILE: &str = "machine.id";
 
 /// Миграции, выполняемые при старте (идемпотентно, до Vault).
 const MIGRATIONS: &[(&str, &str)] = &[
@@ -105,6 +110,40 @@ fn load_or_create_salt(path: &PathBuf) -> Result<Vec<u8>, String> {
     rand::rngs::OsRng.fill_bytes(&mut salt);
     fs::write(path, &salt).map_err(|e| format!("[Storage] write salt: {e}"))?;
     Ok(salt.to_vec())
+}
+
+/// Прочитать или создать стабильный идентификатор устройства.
+/// На десктопе используем реальный HWID. На iOS/Android, где `hostname`
+/// (субпроцесс) недоступен или пуст, генерируем UUIDv4 один раз и
+/// переиспользуем — иначе device-bound E2EE-ключ не восстановить после
+/// перезапуска приложения (все чаты -> "Key Error").
+fn load_or_create_machine_id(dir: &PathBuf) -> String {
+    let file = dir.join(MACHINE_ID_FILE);
+    if file.exists() {
+        if let Ok(raw) = fs::read_to_string(&file) {
+            let id = raw.trim().to_string();
+            if !id.is_empty() {
+                return id;
+            }
+        }
+    }
+    use rand::RngCore;
+    let mut buf = [0u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut buf);
+    // Отмечаем UUIDv4 (версия 4, вариант 1/2).
+    buf[6] = (buf[6] & 0x0f) | 0x40;
+    buf[8] = (buf[8] & 0x3f) | 0x80;
+    let hexed = hex::encode(buf);
+    let id = format!(
+        "{}-{}-{}-{}-{}",
+        hexed[..8],
+        hexed[8..12],
+        hexed[12..16],
+        hexed[16..20],
+        hexed[20..32]
+    );
+    let _ = fs::write(&file, id.as_bytes());
+    id
 }
 
 /// Деривировать SQLCipher-ключ: Argon2id(HWID+salt) -> HKDF-SHA256 (echo/db-cipher).
@@ -324,9 +363,16 @@ impl Drop for PoolGuard<'_> {
 
 pub struct StorageManager {
     pub(crate) conn: Pool,
+    /// Стабильный идентификатор устройства (реальный HWID или персистентный UUID).
+    pub(crate) machine_id: String,
 }
 
 impl StorageManager {
+    /// Стабильный идентификатор устройства для device-bound E2EE-ключа.
+    pub(crate) fn machine_id(&self) -> String {
+        self.machine_id.clone()
+    }
+
     pub fn new(app: &AppHandle<tauri::Wry>) -> Self {
         eprintln!("[Storage] STARTING INIT (SQLCipher)");
 
@@ -349,7 +395,13 @@ impl StorageManager {
         // Device-bound ключ: Argon2id(HWID+salt) -> HKDF -> "echo/db-cipher".
         let salt = load_or_create_salt(&salt_path)
             .unwrap_or_else(|e| panic!("[Storage] salt: {e}"));
-        let machine = device::machine_id().unwrap_or_default();
+        // Стабильный идентификатор устройства. iOS/Android часто не имеют
+        // `hostname`/субпроцессов -> device::machine_id() пуст. Тогда генерируем
+        // персистентный UUID, иначе device-bound ключ не переживёт перезапуск.
+        let machine = device::machine_id()
+            .ok()
+            .filter(|m| !m.is_empty())
+            .unwrap_or_else(|| load_or_create_machine_id(&app_dir));
         let key_hex = derive_db_key_hex(&machine, &salt)
             .unwrap_or_else(|e| panic!("[Storage] db key: {e}"));
 
@@ -391,7 +443,7 @@ impl StorageManager {
         }
 
         eprintln!("[Storage] INIT COMPLETE (SQLCipher + pool, {POOL_SIZE} conns)");
-        Self { conn: pool }
+        Self { conn: pool, machine_id: machine }
     }
 
     // ── Phase 0: device-bound E2EE-ключ (только Rust, payload — зашифрованный seed) ──

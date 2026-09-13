@@ -37,6 +37,11 @@ pub async fn send_e2ee_key_broadcast(
 
     let endpoint = format!("{}/rest/v1/rpc/broadcast_message", supabase_url);
 
+    // Диагностика: показываем реальный адрес, на который уходит запрос.
+    // Если в логе виден https://unconfigured.echo.invalid — на устройстве
+    // стоит НЕ этот билд (старая сборка), а не проблема конфигурации.
+    log::info!("[QR-Broadcast] Sending E2EE key to channel auth_{} via {}", session_id, endpoint);
+
     let client = reqwest::Client::new();
     let response = client
         .post(&endpoint)

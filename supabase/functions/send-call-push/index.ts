@@ -107,7 +107,7 @@ Deno.serve(async (req: Request) => {
       Deno.env.get("VITE_FIREBASE_PROJECT_ID") ??
       Deno.env.get("NEXT_PUBLIC_FIREBASE_PROJECT_ID") ??
       "";
-    const { getFcmAccessToken } = await import("./_shared/fcm.ts");
+    const { getFcmAccessToken } = await import("../_shared/fcm.ts");
     let accessToken: string;
     try {
       accessToken = await getFcmAccessToken();

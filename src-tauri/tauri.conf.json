@@ -21,7 +21,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; connect-src 'self' https://aoxzpqwiwuzypydexfrn.supabase.co https://api.microlink.io https://fonts.gstatic.com https://cdn.jsdelivr.net https://*.giphy.com; font-src 'self' data:; frame-src 'none'; object-src 'none'; media-src 'self' https:;",
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; connect-src 'self' https://aoxzpqwiwuzypydexfrn.supabase.co wss://aoxzpqwiwuzypydexfrn.supabase.co ws://aoxzpqwiwuzypydexfrn.supabase.co https://api.microlink.io https://fonts.gstatic.com https://cdn.jsdelivr.net https://*.giphy.com https://ipwho.is https://ipinfo.io https://ipapi.co ipc: http://ipc.localhost; font-src 'self' data:; frame-src 'none'; object-src 'none'; media-src 'self' https:;",
       "assetProtocol": {
         "scope": [
           "$APPDATA/**",

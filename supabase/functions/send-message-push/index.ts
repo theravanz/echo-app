@@ -109,7 +109,7 @@ Deno.serve(async (req: Request) => {
 
     const projectId =
       Deno.env.get('FIREBASE_PROJECT_ID') ?? 'echo-mes';
-    const { getFcmAccessToken } = await import('./_shared/fcm.ts');
+    const { getFcmAccessToken } = await import('../_shared/fcm.ts');
     let accessToken: string;
     try {
       accessToken = await getFcmAccessToken();

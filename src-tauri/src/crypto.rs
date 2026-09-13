@@ -159,12 +159,10 @@ struct DeviceBoundPayload {
 }
 
 /// Шифрует seed device-ключом (Argon2id от HWID). Возвращает JSON payload для БД.
-fn device_encrypt_seed(seed: &[u8]) -> Result<String, String> {
-    let machine = device::machine_id().map_err(|e| format!("[E2EE] {e}"))?;
-
+fn device_encrypt_seed(machine: &str, seed: &[u8]) -> Result<String, String> {
     let mut salt = [0u8; 16];
     SaltOsRng.fill_bytes(&mut salt);
-    let key = device::device_key(&machine, &salt)?;
+    let key = device::device_key(machine, &salt)?;
 
     let mut nonce = [0u8; 12];
     SaltOsRng.fill_bytes(&mut nonce);
@@ -187,15 +185,14 @@ fn device_encrypt_seed(seed: &[u8]) -> Result<String, String> {
 
 /// Расшифровывает seed device-ключом. Если HWID изменился (другая машина) —
 /// вернёт distinct-ошибку `[E2EE] HWID_CHANGED`.
-fn device_decrypt_seed(payload: &str) -> Result<Zeroizing<Vec<u8>>, String> {
+fn device_decrypt_seed(machine: &str, payload: &str) -> Result<Zeroizing<Vec<u8>>, String> {
     let wrapped: DeviceBoundPayload = serde_json::from_str(payload)
         .map_err(|e| format!("[E2EE] payload parse: {e}"))?;
 
-    let machine = device::machine_id().map_err(|e| format!("[E2EE] {e}"))?;
     let salt = BASE64
         .decode(&wrapped.salt)
         .map_err(|e| format!("[E2EE] salt decode: {e}"))?;
-    let key = device::device_key(&machine, &salt)?;
+    let key = device::device_key(machine, &salt)?;
 
     let nonce = BASE64
         .decode(&wrapped.nonce)
@@ -220,7 +217,8 @@ fn device_decrypt_seed(payload: &str) -> Result<Zeroizing<Vec<u8>>, String> {
 /// Внутренний: зашифровать текущий seed (нужно передать seed) и сохранить в БД.
 /// Вызывается из команд Rust после установки ключа.
 pub(crate) fn persist_device_key(app: &AppHandle<tauri::Wry>, user_id: &str, seed: &[u8]) -> Result<(), String> {
-    let payload = device_encrypt_seed(seed)?;
+    let machine = app.state::<StorageManager>().machine_id();
+    let payload = device_encrypt_seed(&machine, seed)?;
     let storage = app.state::<StorageManager>();
     storage.e2ee_key_store(user_id, &payload)
 }
@@ -400,7 +398,8 @@ pub async fn crypto_restore_key(
         .e2ee_key_load(&user_id)?
         .ok_or_else(|| "[E2EE] No stored key".to_string())?;
 
-    let seed = device_decrypt_seed(&payload)?;
+    let machine = storage.machine_id();
+    let seed = device_decrypt_seed(&machine, &payload)?;
     if seed.len() != KEY_SIZE {
         return Err(format!(
             "[E2EE] Stored key wrong size: {} (expected {KEY_SIZE})",
