@@ -136,11 +136,11 @@ fn load_or_create_machine_id(dir: &PathBuf) -> String {
     let hexed = hex::encode(buf);
     let id = format!(
         "{}-{}-{}-{}-{}",
-        hexed[..8],
-        hexed[8..12],
-        hexed[12..16],
-        hexed[16..20],
-        hexed[20..32]
+        &hexed[..8],
+        &hexed[8..12],
+        &hexed[12..16],
+        &hexed[16..20],
+        &hexed[20..32]
     );
     let _ = fs::write(&file, id.as_bytes());
     id
