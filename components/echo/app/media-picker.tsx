@@ -503,7 +503,7 @@ export function MediaPicker({ onEmojiSelect, onStickerSelect, onGifSelect }: Med
       exit={{ opacity: 0, y: 8, scale: 0.98 }}
       transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
       onClick={e => e.stopPropagation()}
-      className="w-[340px] sm:w-[380px] h-[420px] bg-black/80 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col"
+      className="w-full h-full bg-black/40 backdrop-blur-2xl border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col"
     >
       <div className="flex shrink-0 bg-white/[0.02]">
         {tabs.map(tab => (

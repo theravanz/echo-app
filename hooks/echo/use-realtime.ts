@@ -57,6 +57,28 @@ export function useRealtime({
     let reconnectAttempts = 0;
     const MAX_RECONNECT_DELAY = 30000;
 
+    // --- ОБНОВЛЕНИЕ LAST_SEEN ---
+    const updateLastSeen = async () => {
+      if (!user?.id) return;
+      try {
+        await supabase
+          .from("profiles")
+          .update({ last_seen: new Date().toISOString() })
+          .eq("id", user.id);
+        console.log("[Realtime] Last seen updated on disconnect/hidden");
+      } catch (err) {
+        console.error("[Realtime] Failed to update last_seen:", err);
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        updateLastSeen();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    // ----------------------------
+
     const subscribeMsgChannel = () => {
       if (!isMountedRef.current) return;
 
@@ -98,8 +120,15 @@ export function useRealtime({
 
             let decryptedContent = nm.content;
             try {
-              decryptedContent = await decryptRef.current(nm.content, nm.nonce, nm.sender_id);
-            } catch { /* ignore */ }
+              decryptedContent = await decryptRef.current(
+                nm.content,
+                nm.nonce || "",
+                nm.sender_id
+              );
+            } catch (err) {
+              console.error("[Realtime] E2EE Decryption failed for msg:", nm.id, err);
+              decryptedContent = "🔒 Ошибка расшифровки";
+            }
 
             if (selectedChatRef.current && nm.sender_id === selectedChatRef.current.id) {
               onNewMessage({ ...nm, content: decryptedContent } as Message);
@@ -123,7 +152,6 @@ export function useRealtime({
               (nm.sender_id === selectedChatRef.current.id ||
                 nm.receiver_id === selectedChatRef.current.id)
             ) {
-              // Логи звонков не шифруются — байпас E2EE, парсим JSON.
               if (nm.type === "call_log") {
                 const meta = parseCallLogJson(nm.content || "");
                 onUpdateMessage({
@@ -134,9 +162,11 @@ export function useRealtime({
               } else {
                 try {
                   const otherId = nm.sender_id === user.id ? nm.receiver_id : nm.sender_id;
-                  const dec = await decryptRef.current(nm.content, nm.nonce, otherId);
+                  const dec = await decryptRef.current(nm.content, nm.nonce || "", otherId);
                   onUpdateMessage({ ...nm, content: dec } as Message);
-                } catch { /* ignore */ }
+                } catch (err) {
+                  console.error("[Realtime] E2EE Update decryption failed:", err);
+                }
               }
             }
           }
@@ -165,9 +195,6 @@ export function useRealtime({
       pollInterval = setInterval(async () => {
         if (!isMountedRef.current || !user?.id) return;
 
-        // Always poll — even when "connected", as a zombie-connection
-        // safety net. If the WebSocket appears connected but isn't
-        // actually delivering events, this polling catches new messages.
         try {
           const { data } = await supabase
             .from("messages")
@@ -179,7 +206,6 @@ export function useRealtime({
             const latestMessageId = data[0].id;
 
             if (latestMessageId !== lastKnownMessageIdRef.current) {
-              // First poll: initialize baseline without triggering refetch
               if (lastKnownMessageIdRef.current === null) {
                 lastKnownMessageIdRef.current = latestMessageId;
                 return;
@@ -195,7 +221,6 @@ export function useRealtime({
 
     startPolling();
 
-    // Allow visibility/online handlers to force reconnect
     forceReconnectRef.current = () => {
       if (!isMountedRef.current || !user?.id) return;
       console.log("[Realtime] Force reconnect triggered");
@@ -205,7 +230,6 @@ export function useRealtime({
       }
       reconnectAttempts = 0;
       subscribeMsgChannel();
-      // Immediately poll for missed messages
       (async () => {
         try {
           const { data } = await supabase
@@ -225,7 +249,6 @@ export function useRealtime({
       })();
     };
 
-    // Tauri: listen for background messages from Rust polling
     let bgUnlisten: (() => void) | undefined;
     if (isTauri) {
       import("@tauri-apps/api/event")
@@ -245,9 +268,15 @@ export function useRealtime({
         .catch(() => {});
     }
 
+    // --- ЕДИНЫЙ RETURN ДЛЯ ОЧИСТКИ ---
     return () => {
       isMountedRef.current = false;
       forceReconnectRef.current = null;
+
+      // Записываем время выхода
+      updateLastSeen();
+
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       if (msgChannel) supabase.removeChannel(msgChannel);
       if (pollInterval) clearInterval(pollInterval);
       if (fetchChatsTimeoutRef.current) clearTimeout(fetchChatsTimeoutRef.current);

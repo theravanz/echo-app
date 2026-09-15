@@ -1,34 +1,27 @@
 "use client";
 
 /**
- * CallLogMessage — компактная системная плашка звонка в истории чата.
- * Рендерится в ленте сообщений, когда `message.type === "call_log"`.
- *
- * Дизайн: тёмный футуристичный минимализм, размытие (backdrop-blur),
- * закруглённые углы, микро-анимация появления.
+ * CallLogMessage — премиальная, адаптивная плашка звонка.
+ * Использует семантические цвета для идеальной работы в светлой и темной теме.
  */
 
 import { memo } from "react";
 import {
   TbPhoneOutgoing,
   TbPhoneIncoming,
+  TbPhoneOff,
 } from "react-icons/tb";
 import { cn } from "@/lib/utils";
 
 export type CallLogStatus = "outgoing" | "incoming" | "missed";
 
 export interface CallLogMessageProps {
-  /** Направление/результат вызова. */
   status: CallLogStatus;
-  /** Длительность разговора в секундах (0 — звонок не состоялся). */
   duration: number;
-  /** Время вызова (ISO-строка или Unix ms). */
   timestamp: string | number;
-  /** Принадлежит ли лог текущему пользователю. */
   isMe: boolean;
 }
 
-/** Форматирование длительности: 314 → "05:14". */
 function formatDuration(totalSeconds: number): string {
   const s = Math.max(0, Math.floor(totalSeconds || 0));
   const m = Math.floor(s / 60);
@@ -55,53 +48,56 @@ export const CallLogMessage = memo(function CallLogMessage({
   isMe,
 }: CallLogMessageProps) {
   const isMissed = status === "missed";
-  // Для пропущенного используем TbPhoneIncoming (трубка со стрелкой),
-  // окрашенную в красный; для успешных — зелёный входящий/исходящий.
-  const Icon = status === "outgoing" ? TbPhoneOutgoing : TbPhoneIncoming;
-
+  const Icon = isMissed ? TbPhoneOff : (status === "outgoing" ? TbPhoneOutgoing : TbPhoneIncoming);
   const timeLabel = formatTimestamp(timestamp);
   const successful = !isMissed && duration > 0;
 
   return (
-    <div className="flex justify-center my-1.5 animate-in fade-in slide-in-from-bottom-4 duration-500 select-none">
+    <div className={cn("flex w-full", isMe ? "justify-end" : "justify-start")}>
       <div
         className={cn(
-          "flex items-center gap-2.5 px-4 py-2 rounded-full border backdrop-blur-md max-w-[92%]",
-          "bg-white/[0.05] border-white/[0.07]",
-          isMissed && "border-red-500/20 bg-red-500/[0.06]",
-          isMe && "flex-row-reverse",
+          "group flex items-center gap-3 px-4 py-2.5 rounded-2xl transition-all duration-200",
+          "max-w-[85%] md:max-w-[70%]",
+          "mx-3", // Отступы слева и справа от плашки
+
+          // Премиальный адаптивный фон: работает идеально и в светлой, и в темной теме
+          "bg-muted/40 dark:bg-white/5 backdrop-blur-md",
+          "border border-border/40 dark:border-white/5",
+          "hover:bg-muted/60 dark:hover:bg-white/10"
         )}
       >
+        {/* Иконка: использует семантические цвета (primary/destructive), которые адаптируются к теме */}
         <div
           className={cn(
-            "w-8 h-8 rounded-full flex items-center justify-center shrink-0",
+            "flex items-center justify-center w-8 h-8 rounded-full shrink-0 transition-colors",
             isMissed
-              ? "bg-red-500/15 text-red-400"
-              : "bg-emerald-500/15 text-emerald-400",
+              ? "bg-destructive/10 text-destructive"
+              : "bg-primary/10 text-primary"
           )}
         >
           <Icon className="w-4 h-4" />
         </div>
 
-        <div className="flex flex-col leading-tight">
-          <span
-            className={cn(
-              "text-[13px] font-medium",
-              isMissed ? "text-red-300/90" : "text-foreground/90",
-            )}
-          >
-            {STATUS_LABEL[status]}
+        {/* Текстовая часть */}
+        <div className="flex flex-col gap-0.5 min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={cn(
+              "text-sm font-medium",
+              isMissed ? "text-destructive" : "text-foreground"
+            )}>
+              {STATUS_LABEL[status]}
+            </span>
+
             {successful && (
-              <span className="ml-2 text-muted-foreground/80 tabular-nums">
-                • {formatDuration(duration)}
+              <span className="text-xs text-muted-foreground tabular-nums font-medium">
+                {formatDuration(duration)}
               </span>
             )}
+          </div>
+
+          <span className="text-[11px] text-muted-foreground tabular-nums font-medium">
+            {timeLabel}
           </span>
-          {timeLabel && (
-            <span className="text-[11px] text-muted-foreground/60 tabular-nums">
-              {timeLabel}
-            </span>
-          )}
         </div>
       </div>
     </div>

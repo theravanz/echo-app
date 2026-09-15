@@ -74,30 +74,9 @@ import {
   TbBoltOff as ZapOff,
   TbLink as LinkIcon
 } from "react-icons/tb";
-import { cn, safeChar, formatRelativeTime } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  DropdownMenuSeparator,
-  DropdownMenuLabel,
-} from "@/components/ui/dropdown-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cn, safeChar } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { supabase } from "@/lib/supabase";
-import { toast } from "sonner";
 import { useTranslation } from "@/hooks/use-translation";
 import { useNotifications } from "@/hooks/echo/use-notifications";
 import { useNotificationSettings } from "@/hooks/echo/use-notification-settings";
@@ -109,21 +88,15 @@ import { useNetworkQueue } from "@/hooks/echo/use-network-queue";
 import { useRealtime } from "@/hooks/echo/use-realtime";
 import { useConnection } from "@/hooks/echo/use-connection";
 import { useProfiles } from "@/hooks/echo/use-profiles";
-import { MessageBubble } from "@/components/echo/app/message-bubble";
-import { MediaPicker } from "@/components/echo/app/media-picker";
 import { saveDevice, generateHWID, getDevices, deleteDevice } from "@/lib/db";
 import { detectDevice } from "@/lib/device-info";
-import { ProfileViewPanel, type ViewedProfile } from "@/components/echo/app/profile-view-panel";
 import dynamic from "next/dynamic";
 import type { UserProfile, Chat, Message, NetworkMode, AppTab, ConnectionStatus } from "@/hooks/echo/types";
-import { useProfileDetails } from "@/hooks/echo/use-profile-details";
 import { ChatSidebar } from "@/components/echo/app/chat-sidebar";
 import { MobileTabBar } from "@/components/echo/app/mobile-tab-bar";
-import { ChatWallpaper, type WallpaperPreset } from "@/components/echo/app/chat-wallpaper";
-import { ChatBackgroundPicker } from "@/components/echo/app/chat-background-picker";
-import { useContactAccentColor } from "@/hooks/echo/use-contact-accent";
 import { CallOverlay, type OutgoingCallRequest, type CallLogData, deriveRoomId } from "@/components/echo/app/CallOverlay";
 import { serializeCallLog } from "@/hooks/echo/call-log";
+import { ChatArea } from "@/components/echo/app/chat-area";
 
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { listen } from '@tauri-apps/api/event';
@@ -137,25 +110,6 @@ const SettingsModal = dynamic(
 
 const QUARANTINE_HOURS = 32;
 
-
-
-// --- Helper Components ---
-
-const CornerBrackets = () => (
-  <>
-    <div className="absolute -top-1 -left-1 w-4 h-4 border-t-2 border-l-2 border-primary/30 rounded-tl-sm pointer-events-none z-10" />
-    <div className="absolute -top-1 -right-1 w-4 h-4 border-t-2 border-r-2 border-primary/30 rounded-tr-sm pointer-events-none z-10" />
-    <div className="absolute -bottom-1 -left-1 w-4 h-4 border-b-2 border-l-2 border-primary/30 rounded-bl-sm pointer-events-none z-10" />
-    <div className="absolute -bottom-1 -right-1 w-4 h-4 border-b-2 border-r-2 border-primary/30 rounded-br-sm pointer-events-none z-10" />
-  </>
-);
-
-const GlassPanel = ({ children, className }: { children: React.ReactNode, className?: string }) => (
-  <div className={cn("bg-card/30 backdrop-blur-2xl border border-white/5 relative overflow-hidden", className)}>
-    {children}
-  </div>
-);
-
 // --- Main Application Content ---
 
 function EchoAppContent() {
@@ -166,24 +120,21 @@ function EchoAppContent() {
 
   // App State
   const [appLoading, setAppLoading] = useState(true);
-  const [loadingStatus, setLoadingStatus] = useState("Establishing Secure Node...");
   const [activeTab, setActiveTab] = useState<AppTab>('chats');
   const [activeMode, setActiveMode] = useState<NetworkMode>('direct');
   const [user, setUser] = useState<UserProfile | null>(null);
   const [accounts, setAccounts] = useState<any[]>([]);
-  const [isRightPanelOpen, setIsRightPanelOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [outgoingCall, setOutgoingCall] = useState<OutgoingCallRequest | null>(null);
   const [isQuarantined, setIsQuarantined] = useState(false);
   const [quarantineTime, setQuarantineTime] = useState("");
   const [currentHwid, setCurrentHwid] = useState("");
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const userRef = useRef<UserProfile | null>(null);
   const originalChatRef = useRef<Chat | null>(null);
 
+  const [isRightPanelOpen, setIsRightPanelOpen] = useState(false); 
+
   const { chats, setChats, fetchChats, selectedChat, setSelectedChat, selectedChatRef, drafts, saveDraft, onlineUsers } = useChatList(user);
-  const { profile: viewedProfile } = useProfileDetails(isRightPanelOpen ? selectedChat?.id ?? null : null);
 
   const handleMentionClick = useCallback(async (username: string) => {
     try {
@@ -219,18 +170,25 @@ function EchoAppContent() {
     }
   }, [selectedChat, setSelectedChat]);
 
-  // Chat wallpaper state
-  const accentColor = useContactAccentColor(selectedChat?.avatar_url || null, selectedChat?.avatar_color || null);
-  const [chatWallpaper, setChatWallpaper] = useState<{ preset: WallpaperPreset; photoUrl: string | null }>({
-    preset: (selectedChat as any)?.wallpaper_preset || 'solid',
-    photoUrl: (selectedChat as any)?.wallpaper_photo_url || null,
-  });
-  const [bgPickerOpen, setBgPickerOpen] = useState(false);
-
   const { messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage } = useMessages(chats);
-  const { addToQueue, processPendingQueue } = useNetworkQueue();
+  const { processPendingQueue } = useNetworkQueue();
   const { connectionStatus, setConnectionStatus } = useConnection(processPendingQueue);
   const { searchOpen, setSearchOpen, searchQuery, searchResults, isSearching, isSearchFocused, setIsSearchFocused, recentSearches, searchRef, searchTimeoutRef, handleSearch, handleStartChat, clearSearch, setCurrentUserId } = useProfiles();
+
+// Обёртки, чтобы ответ и редактирование взаимно исключали друг друга
+const setReplyingToSafe = (msg: any) => {
+  if (msg) {
+    setEditingMessage(null); // Сбрасываем редактирование, если начинаем отвечать
+  }
+  setReplyingTo(msg);
+};
+
+const setEditingMessageSafe = (msg: any) => {
+  if (msg) {
+    setReplyingTo(null); // Сбрасываем ответ, если начинаем редактировать
+  }
+  setEditingMessage(msg);
+};
 
   useEffect(() => {
     if (user?.id) setCurrentUserId(user.id);
@@ -271,7 +229,7 @@ function EchoAppContent() {
   const openChatByUsername = useCallback(async (rawUsername: string) => {
     if (!user) return;
     const username = rawUsername.replace(/^@/, '');
-    
+
     // Reset UI state to ensure the chat becomes visible
     setIsSettingsOpen(false);
     setActiveTab('chats');
@@ -297,6 +255,7 @@ function EchoAppContent() {
             display_name: profile.display_name,
             avatar_url: profile.avatar_url || undefined,
             avatar_color: profile.avatar_color || undefined,
+            last_seen: profile.last_seen || null,
             bio: profile.bio || undefined,
             public_key: profile.public_key || undefined,
             unreadCount: 0,
@@ -360,7 +319,7 @@ function EchoAppContent() {
     };
   }, [user?.id, registerFcmToken]);
 
- 
+
 
   // === Call initiation ===
   const startOutgoingCall = useCallback(
@@ -466,64 +425,6 @@ useEffect(() => {
   return () => clearTimeout(timeout);
 }, [newMessage, selectedChat?.id, saveDraft, drafts]);
 
-// Chat wallpaper: sync when switching chats
-useEffect(() => {
-  if (!selectedChat) return;
-  if ((selectedChat as any).wallpaper_preset) {
-    setChatWallpaper({
-      preset: (selectedChat as any).wallpaper_preset || 'solid',
-      photoUrl: (selectedChat as any).wallpaper_photo_url || null,
-    });
-  } else {
-    // Fetch wallpaper data for this chat if not already loaded
-    supabase.from('chats').select('wallpaper_preset, wallpaper_photo_url').eq('id', selectedChat.id).maybeSingle().then(({ data }) => {
-      if (data) {
-        setChatWallpaper({
-          preset: (data as any).wallpaper_preset || 'solid',
-          photoUrl: (data as any).wallpaper_photo_url || null,
-        });
-      }
-    });
-  }
-}, [selectedChat?.id]);
-
-// Mobile keyboard: keep header visible when keyboard opens
-useEffect(() => {
-  if (!isMobile || typeof window === 'undefined') return;
-
-  const appRoot = document.getElementById('echo-app-root');
-  if (!appRoot) return;
-
-  const handler = () => {
-    const vv = window.visualViewport;
-    if (!vv) return;
-    // When keyboard is open, visualViewport is smaller than layout viewport
-    const isKeyboardOpen = vv.height < window.innerHeight - 80;
-    if (isKeyboardOpen) {
-      appRoot.style.height = `${vv.height}px`;
-      appRoot.style.position = 'fixed';
-      appRoot.style.top = '0';
-      appRoot.style.left = '0';
-      appRoot.style.right = '0';
-      appRoot.style.overflow = 'hidden';
-    } else {
-      appRoot.style.height = '';
-      appRoot.style.position = '';
-      appRoot.style.top = '';
-      appRoot.style.left = '';
-      appRoot.style.right = '';
-      appRoot.style.overflow = '';
-    }
-  };
-
-  window.visualViewport?.addEventListener('resize', handler);
-  window.visualViewport?.addEventListener('scroll', handler);
-  return () => {
-    window.visualViewport?.removeEventListener('resize', handler);
-    window.visualViewport?.removeEventListener('scroll', handler);
-  };
-}, [isMobile]);
-
   // Deep link listener — warm start (echomes://...) when app is already open
   useEffect(() => {
     let unlisten: (() => void) | null = null;
@@ -532,7 +433,7 @@ useEffect(() => {
       try {
         const fn = await listen<string[]>('deep-link://new-url', async (event) => {
           console.log('[DeepLink] Warm start received:', event.payload);
-          
+
           // В Tauri v2 payload — это уже массив строк, парсить его не нужно
           const urls = Array.isArray(event.payload) ? event.payload : [event.payload];
           const url = urls[0];
@@ -542,7 +443,7 @@ useEffect(() => {
           if (match && match[1]) {
             const username = match[1];
             console.log('[DeepLink] Opening chat with:', username);
-            
+
             // Принудительно выводим окно на передний план
             try {
               const win = getCurrentWindow();
@@ -851,22 +752,18 @@ useRealtime({
 
 // === Fetch messages when switching chats ===
 useEffect(() => {
-  if (selectedChat && user) {
+  if (selectedChat) {
     selectedChatRef.current = selectedChat;
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = 0;
-    }
-    fetchMessages(selectedChat.id, user.id);
   }
-}, [selectedChat?.id, user?.id]);
+}, [selectedChat]);
 
-// === Autoscroll ===
-useEffect(() => {
-  if (scrollRef.current) {
-    scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  if (appLoading) {
+    return (
+      <div className="h-dvh bg-background flex items-center justify-center noise-overlay">
+        <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
+      </div>
+    );
   }
-}, [messages, selectedChat]);
-
   return (
     <div id="echo-app-root" className="flex h-dvh bg-background text-foreground overflow-hidden selection:bg-primary/30 antialiased relative noise-overlay">
 
@@ -958,295 +855,33 @@ useEffect(() => {
       </div>
 
       {/* --- 3. Main Communication Area --- */}
-      <main className={cn(
-        "flex-1 flex flex-col relative z-10 transition-all duration-700 ease-in-out bg-black/[0.02] min-h-0",
-        isMobile && !selectedChat && (activeTab === 'chats' || activeTab === 'community' || activeTab === 'feed') ? "translate-x-full absolute inset-y-0 opacity-0 pointer-events-none" : "translate-x-0 opacity-100 relative"
-      )}>
-
-        {/* Terminal Header */}
-        <header className="h-14 md:h-20 border-b border-white/5 flex items-center justify-between px-4 md:px-8 bg-black/10 backdrop-blur-3xl shrink-0 safe-top" style={{ touchAction: "none" }}>
-          <div className="flex items-center gap-6 min-w-0 flex-1">
-            {isMobile && selectedChat && (
-              <Button variant="ghost" size="icon" className="rounded-2xl text-white/40" onClick={() => { setSelectedChat(null); if (isMobile) setSearchOpen(false); }}>
-                <ArrowLeft className="w-5 h-5" />
-              </Button>
-            )}
-
-            {!isMobile && (
-              <div className="flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/5 rounded-2xl group cursor-default">
-                 <div className={cn("w-2 h-2 rounded-full animate-pulse", activeMode === 'direct' ? "bg-primary" : activeMode === 'relay' ? "bg-amber-500" : "bg-blue-500")} />
-                 <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-white/40 group-hover:text-white/60 transition-colors">
-                    Mode: {activeMode === 'direct' ? 'Mesh Direct' : activeMode === 'relay' ? 'Relay Node' : 'Global Net'}
-                 </span>
-              </div>
-            )}
-
-            {selectedChat && (
-              <div className="flex items-center gap-4 group cursor-pointer min-w-0 flex-1" onClick={() => { setIsRightPanelOpen(!isRightPanelOpen); }}>
-                 <div className="w-10 h-10 rounded-full border border-white/10 flex items-center justify-center text-primary font-bold text-sm shadow-xl shrink-0" style={{ backgroundColor: selectedChat.avatar_color || 'oklch(0.2 0.02 280)' }}>
-                    {selectedChat.avatar_url ? <img src={selectedChat.avatar_url} className="w-full h-full object-cover rounded-full" alt="" /> : (selectedChat.display_name?.[0] || 'U')}
-                 </div>
-                <div className="min-w-0">
-                  <div className="font-bold text-base truncate">{selectedChat.display_name || selectedChat.username}</div>
-                  <div className="text-[10px] font-mono text-white/30 uppercase tracking-widest truncate">@{selectedChat.username}</div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center gap-4">
-             <div className="hidden lg:flex items-center gap-4 px-5 py-2.5 rounded-full bg-white/5 border border-white/5">
-                <div className="flex items-center gap-2">
-                   <Wifi className="w-3.5 h-3.5 text-primary" />
-                   <span className="text-[10px] font-mono font-bold uppercase tracking-widest">12ms</span>
-                </div>
-                <div className="w-px h-3 bg-white/10" />
-                <div className="flex items-center gap-2">
-                   <Database className="w-3.5 h-3.5 text-primary" />
-                   <span className="text-[10px] font-mono font-bold uppercase tracking-widest">3.2MB</span>
-                </div>
-             </div>
-             <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                   <Button variant="ghost" size="icon" className="rounded-2xl text-white/30 hover:text-white hover:bg-white/5 transition-all">
-                      <MoreVertical className="w-5 h-5" />
-                   </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="w-48 bg-black/80 backdrop-blur-2xl border border-white/10 rounded-2xl">
-                   <DropdownMenuItem onClick={() => { setIsRightPanelOpen(true); }}>
-                      <User className="w-4 h-4 mr-2" /> Profile
-                   </DropdownMenuItem>
-                   <DropdownMenuItem onClick={() => setBgPickerOpen(true)}>
-                      <Palette className="w-4 h-4 mr-2" /> Change Wallpaper
-                   </DropdownMenuItem>
-                   <DropdownMenuSeparator className="bg-white/5" />
-                   <DropdownMenuItem onClick={async () => {
-                      if (!selectedChat || !user) return;
-                      const confirmed = window.confirm('Delete all messages in this chat?');
-                      if (!confirmed) return;
-                      await supabase.from("messages").delete().or(
-                         `and(sender_id.eq.${user.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${user.id})`
-                      );
-                      setMessages([]);
-                      toast.success('Chat cleared');
-                   }} className="text-destructive focus:text-destructive">
-                      <Trash2 className="w-4 h-4 mr-2" /> Clear Chat
-                   </DropdownMenuItem>
-                </DropdownMenuContent>
-             </DropdownMenu>
-          </div>
-        </header>
-
-        {/* Messaging Core */}
-        <div className="flex-1 min-h-0 relative overflow-hidden">
-          <ChatWallpaper preset={chatWallpaper.preset} accentColor={accentColor} photoUrl={chatWallpaper.photoUrl} />
-          <div className="relative z-[1] h-full px-3 md:px-12 py-3 md:py-8 overflow-y-auto overscroll-contain scrollbar-hide" ref={scrollRef}>
-            <div className="max-w-4xl mx-auto space-y-4 md:space-y-12">
-
-            {!selectedChat && (
-              <div className="h-[60dvh] flex flex-col items-center justify-center text-center space-y-8 animate-in fade-in zoom-in duration-1000">
-                 <div className="relative group">
-                    <div className="absolute inset-0 bg-primary/20 blur-3xl rounded-full animate-pulse group-hover:bg-primary/30 transition-all duration-1000" />
-                    <div className="relative w-32 h-32 rounded-[48px] bg-card border border-primary/20 flex items-center justify-center shadow-2xl shadow-primary/10 transform -rotate-6 group-hover:rotate-0 transition-transform duration-700">
-                       <Fingerprint className="w-16 h-16 text-primary" />
-                    </div>
-                 </div>
-                 <div className="space-y-4">
-                    <h3 className="text-3xl font-display font-bold tracking-tight">Access Secure Vault</h3>
-                    <p className="text-muted-foreground text-sm max-w-xs mx-auto leading-relaxed">Select a communication node from the sidebar to establish a decentralized P2P tunnel.</p>
-                 </div>
-                 <div className="inline-flex items-center gap-3 px-6 py-3 rounded-full bg-white/5 border border-white/5 text-[10px] font-mono uppercase tracking-[0.3em] text-white/40">
-                    <Lock className="w-3 h-3" />
-                    Encrypted_Storage_Active
-                 </div>
-              </div>
-            )}
-
-            {selectedChat && messages.map((msg, i) => {
-               const isMe = msg.sender_id === user?.id;
-               const showAvatar = i === 0 || messages[i-1].sender_id !== msg.sender_id;
-
-               return (
-                 <MessageBubble
-                    key={msg.id}
-                    msg={msg}
-                    isMe={isMe}
-                    showAvatar={showAvatar}
-                    activeChat={selectedChat}
-                    user={user}
-                    onReply={setReplyingTo}
-                    onEdit={(m) => {
-                      setEditingMessage(m);
-                      setNewMessage(m.content);
-                      textareaRef.current?.focus();
-                    }}
-                     onMentionClick={handleMentionClick}
-                 />
-               );
-            })}
-          </div>
-        </div>
-        </div>
-
-        {/* Input Interface */}
-        {selectedChat && (
-          <footer className={cn("px-2 pb-2 md:px-10 md:pb-6 shrink-0", isMobile && "safe-bottom")} style={{ touchAction: "none" }}>
-             <div className="w-full mx-auto max-w-4xl">
-                <div className="flex items-end gap-2 bg-white/[0.04] border border-white/[0.06] rounded-[20px] md:rounded-[28px] px-3 py-2 md:px-5 md:py-3 backdrop-blur-xl transition-all duration-300 focus-within:border-white/10 focus-within:bg-white/[0.06] shadow-[0_8px_32px_-8px_rgba(0,0,0,0.4)]">
-
-                   {replyingTo && (
-                     <div className="px-4 py-2 bg-black/20 border-b border-white/5 flex items-center justify-between animate-in slide-in-from-bottom-2 duration-300">
-                        <div className="flex items-center gap-3 overflow-hidden">
-                           <Reply className="w-4 h-4 text-primary shrink-0" />
-                           <div className="text-xs truncate">
-                              <div className="font-bold">{replyingTo.sender_id === user?.id ? 'You' : (selectedChat.display_name || selectedChat.username)}</div>
-                              <div className="opacity-60 truncate">{replyingTo.content}</div>
-                           </div>
-                        </div>
-                        <Button variant="ghost" size="icon" className="w-6 h-6 rounded-full" onClick={() => setReplyingTo(null)}><X className="w-4 h-4" /></Button>
-                     </div>
-                   )}
-
-                   {editingMessage && (
-                     <div className="px-4 py-2 bg-primary/10 border-b border-white/5 flex items-center justify-between animate-in slide-in-from-bottom-2 duration-300">
-                        <div className="flex items-center gap-3 overflow-hidden">
-                           <Pen className="w-4 h-4 text-primary shrink-0" />
-                           <div className="text-xs truncate">
-                              <div className="font-bold text-primary">Editing Message</div>
-                              <div className="opacity-60 truncate">{editingMessage.content}</div>
-                           </div>
-                        </div>
-                        <Button variant="ghost" size="icon" className="w-6 h-6 rounded-full" onClick={() => { setEditingMessage(null); setNewMessage(""); }}><X className="w-4 h-4" /></Button>
-                     </div>
-                   )}
-
-                   <div className="flex items-end gap-2">
-                      <div className="flex items-center p-1 gap-1">
-                         <Button variant="ghost" size="icon" className="w-10 h-10 md:w-12 md:h-12 rounded-[28px] text-white/20 hover:text-primary hover:bg-primary/5 transition-all">
-                           <Paperclip className="w-5 h-5" />
-                         </Button>
-                         <Popover>
-                            <PopoverTrigger asChild>
-                               <Button variant="ghost" size="icon" className="w-10 h-10 md:w-12 md:h-12 rounded-[28px] text-white/20 hover:text-primary hover:bg-primary/5 transition-all">
-                                 <Smile className="w-5 h-5" />
-                               </Button>
-                            </PopoverTrigger>
-                            <PopoverContent side="top" align="start" className="p-0 border-none bg-transparent shadow-none">
-                               <MediaPicker
-                                  onEmojiSelect={(emoji) => setNewMessage(prev => prev + emoji)}
-                                  onStickerSelect={(url) => handleSendMessage(selectedChat, user!, '', 'sticker', url, addToQueue)}
-                                  onGifSelect={(url) => handleSendMessage(selectedChat, user!, '', 'gif', url, addToQueue)}
-                               />
-                            </PopoverContent>
-                         </Popover>
-                      </div>
-
-                      <div className="flex-1 mb-1 relative group">
-                        {newMessage.length > 0 && (
-                          <div className="absolute -top-12 left-0 right-0 flex items-center gap-1 p-1.5 bg-black/40 backdrop-blur-xl border border-white/5 rounded-2xl animate-in fade-in slide-in-from-bottom-2 duration-300 z-50">
-                             <button onClick={() => {
-                               const start = textareaRef.current?.selectionStart || 0;
-                               const end = textareaRef.current?.selectionEnd || 0;
-                               const val = newMessage;
-                               setNewMessage(val.substring(0, start) + `**${val.substring(start, end)}**` + val.substring(end));
-                             }} className="w-8 h-8 rounded-lg hover:bg-white/10 flex items-center justify-center transition-colors" title="Bold"><Bold className="w-3.5 h-3.5" /></button>
-                             <button onClick={() => {
-                               const start = textareaRef.current?.selectionStart || 0;
-                               const end = textareaRef.current?.selectionEnd || 0;
-                               const val = newMessage;
-                               setNewMessage(val.substring(0, start) + `*${val.substring(start, end)}*` + val.substring(end));
-                             }} className="w-8 h-8 rounded-lg hover:bg-white/10 flex items-center justify-center transition-colors" title="Italic"><Italic className="w-3.5 h-3.5" /></button>
-                             <button onClick={() => {
-                               const start = textareaRef.current?.selectionStart || 0;
-                               const end = textareaRef.current?.selectionEnd || 0;
-                               const val = newMessage;
-                               setNewMessage(val.substring(0, start) + `\`${val.substring(start, end)}\`` + val.substring(end));
-                             }} className="w-8 h-8 rounded-lg hover:bg-white/10 flex items-center justify-center transition-colors" title="Code"><Code className="w-3.5 h-3.5" /></button>
-                             <div className="w-px h-4 bg-white/10 mx-1" />
-                             <button onClick={() => {
-                               const start = textareaRef.current?.selectionStart || 0;
-                               const end = textareaRef.current?.selectionEnd || 0;
-                               const val = newMessage;
-                               setNewMessage(val.substring(0, start) + `||${val.substring(start, end)}||` + val.substring(end));
-                             }} className="w-8 h-8 rounded-lg hover:bg-white/10 flex items-center justify-center transition-colors" title="Spoiler"><EyeOff className="w-3.5 h-3.5" /></button>
-                          </div>
-                        )}
-                        <textarea
-                          ref={textareaRef}
-                          rows={1}
-                          placeholder={editingMessage ? "Изменить сообщение..." : "Сообщение..."}
-                          value={newMessage}
-                          onChange={(e) => {
-                            setNewMessage(e.target.value);
-                            e.target.style.height = 'auto';
-                            e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
-                          }}
-                          className="w-full bg-transparent border-none py-2.5 px-2 text-[15px] font-medium resize-none outline-none focus:ring-0 placeholder:text-white/10 leading-relaxed scrollbar-hide"
-                          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !isMobile) { e.preventDefault(); handleSendMessage(selectedChat, user!, newMessage); } }}
-                        />
-                      </div>
-
-                      <button
-                        onClick={() => handleSendMessage(selectedChat, user!, newMessage)}
-                        disabled={!newMessage.trim()}
-                        className={cn(
-                          "w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center transition-all shrink-0",
-                          newMessage.trim() ? "bg-primary text-primary-foreground shadow-lg shadow-primary/20" : "bg-white/5 text-white/20"
-                        )}
-                      >
-                         <Send className="w-5 h-5" />
-                      </button>
-                   </div>
-                </div>
-             </div>
-          </footer>
-        )}
-      </main>
-
-      {/* --- Profile View Panel (Right) --- */}
-      <AnimatePresence mode="wait">
-        {selectedChat && isRightPanelOpen && viewedProfile && (
-          <motion.aside
-            initial={isMobile ? { x: "100%", opacity: 0 } : { x: 100, opacity: 0, filter: "blur(10px)" }}
-            animate={{ x: 0, opacity: 1, filter: "blur(0px)" }}
-            exit={isMobile ? { x: "100%", opacity: 0 } : { x: 100, opacity: 0, filter: "blur(10px)" }}
-            transition={{ type: "spring", damping: 30, stiffness: 300, mass: 0.8 }}
-            className={cn(
-              "flex flex-col z-40 shrink-0",
-              isMobile ? "fixed inset-0 w-full h-full safe-top safe-bottom bg-[#0a0a0d]" : "border-l border-white/5 relative w-96"
-            )}
-          >
-            <ProfileViewPanel
-              profile={{
-                ...viewedProfile,
-                is_online: onlineUsers.has(selectedChat.id),
-                last_seen_label: formatRelativeTime(selectedChat.lastMessageTime || new Date().toISOString()),
-              }}
-              onClose={() => {
-                setIsRightPanelOpen(false);
-                if (originalChatRef.current) {
-                  setSelectedChat(originalChatRef.current);
-                  originalChatRef.current = null;
-                }
-              }}
-              onMuteToggle={() => {}}
-              onCall={() => startOutgoingCall(false)}
-              onVideoCall={() => startOutgoingCall(true)}
-              onBlock={async () => {
-                await supabase.from("blocks").insert({ blocker_id: user?.id, blocked_id: selectedChat.id });
-              }}
-              onReport={() => {}}
-              onClearHistory={async () => {
-                if (user) {
-                  await supabase.from("messages").delete().or(
-                    `and(sender_id.eq.${user.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${user.id})`
-                  );
-                }
-              }}
-            />
-          </motion.aside>
-        )}
-      </AnimatePresence>
+        <ChatArea
+          user={user}
+          selectedChat={selectedChat}
+          isMobile={isMobile}
+          activeMode={activeMode}
+          activeTab={activeTab}
+          isRightPanelOpen={isRightPanelOpen}
+          setIsRightPanelOpen={setIsRightPanelOpen}
+          onlineUsers={onlineUsers}
+          chats={chats}
+          onBack={() => {
+            setSelectedChat(null);
+            if (isMobile) setSearchOpen(false);
+          }}
+          onCall={(withVideo) => startOutgoingCall(withVideo)}
+          onMentionClick={handleMentionClick}
+          messages={messages}
+          setMessages={setMessages}
+          replyingTo={replyingTo}
+          setReplyingTo={setReplyingToSafe}
+          editingMessage={editingMessage}
+          setEditingMessage={setEditingMessageSafe}
+          newMessage={newMessage}
+          setNewMessage={setNewMessage}
+          fetchMessages={fetchMessages}
+          handleSendMessage={handleSendMessage}
+        />
 
       {/* --- Settings Modal --- */}
       <AnimatePresence mode="wait">
@@ -1275,20 +910,6 @@ useEffect(() => {
         )}
       </AnimatePresence>
 
-      {/* --- Chat Background Picker --- */}
-      {selectedChat && (
-        <ChatBackgroundPicker
-          open={bgPickerOpen}
-          onClose={() => setBgPickerOpen(false)}
-          chatId={selectedChat.id}
-          accentColor={accentColor}
-          current={chatWallpaper}
-          onChange={(next) => {
-            setChatWallpaper(next);
-          }}
-        />
-      )}
-
       {/* --- Mobile Hotbar --- */}
       {isMobile && !selectedChat && (
         <MobileTabBar
@@ -1298,6 +919,20 @@ useEffect(() => {
         />
       )}
       <style jsx global>{`
+        .safe-top {
+          padding-top: env(safe-area-inset-top);
+        }
+        .safe-bottom {
+          padding-bottom: env(safe-area-inset-bottom);
+        }
+        .safe-y {
+          padding-top: env(safe-area-inset-top);
+          padding-bottom: env(safe-area-inset-bottom);
+        }
+        .safe-x {
+          padding-left: env(safe-area-inset-left);
+          padding-right: env(safe-area-inset-right);
+        }
         .noise-overlay::before {
           content: "";
           position: fixed;

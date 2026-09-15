@@ -27,6 +27,7 @@ export interface Chat {
   lastMessage?: string | null;
   lastMessageType?: 'text' | 'sticker' | 'gif' | null;
   lastMessageTime?: string | null;
+  last_seen?: string | null;
   unreadCount?: number;
   /** Фон чата */
   wallpaper_preset?: 'solid' | 'doodle' | 'photo';

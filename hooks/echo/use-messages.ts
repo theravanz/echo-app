@@ -185,7 +185,7 @@ export function useMessages(chats: Chat[] = []): UseMessagesReturn {
         id: tempId,
         sender_id: user.id,
         receiver_id: selectedChat.id,
-        content: encrypted.content,
+        content: content,
         nonce: encrypted.nonce,
         type: type,
         status: "pending",
@@ -244,7 +244,7 @@ export function useMessages(chats: Chat[] = []): UseMessagesReturn {
         setMessages((prev) =>
           prev.map((m) =>
             m.id === tempId
-              ? { ...m, id: data.id, status: "sent" as const, _pending: false }
+              ? { ...m, id: data.id, status: "sent" as const, _pending: false, content: content }
               : m,
           ),
         );
