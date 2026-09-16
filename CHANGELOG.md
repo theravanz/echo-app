@@ -1,19 +1,49 @@
 # Changelog
 
-## [0.2.8] - 2026-08-21
+## [0.3.0] - 2026-09-16
+### Shield Media — шифрование и сжатие всего медиа
 
-### Исправлено (Android)
-- **SQLCipher на Android**: `bundled-sqlcipher` в одиночку не собирается под
-  `aarch64-linux-android` — SQLCipher падает в дефолтный крипто-бэкенд
-  OpenSSL и не может найти `<openssl/crypto.h>` в NDK. Добавлена
-  таргетная перегрузка зависимости для Android c
-  `bundled-sqlcipher-vendored-openssl`: собирает и статически линкует
-  OpenSSL 3 (openssl-src) через openssl-sys, отдаёт заголовки через
-  `DEP_OPENSSL_INCLUDE`. Десктоп/iOS не затронуты (системный OpenSSL /
-  CommonCrypto). Валидировано: release-сборка `aarch64-linux-android`
-  завершается без ошибок (1m45s).
-- В `Cargo.lock` добавлены `openssl-src` и `openssl-sys`.
+#### Добавлено
+- **Клиентское шифрование медиа (Rust `media.rs`)**: медиа шифруется
+  AES-256-GCM **до** загрузки в Supabase Storage. Медиа-ключ —
+  детерминированный `HKDF-SHA256(ikm = E2EE seed, info = "echo/media")`
+  из уже загруженного в `KeyStore` сида: ключ никогда не покидает Rust,
+  отдельного секрета и нового UX-флоу нет. Команды: `media_encrypt`,
+  `media_decrypt`, `media_key_status`. Unit-тесты: roundtrip + отказ
+  на чужом ключе.
+- **Приватные bucket'ы + RLS** (`0007_media_privacy.sql`):
+  `avatars`, `tracks`, `publications`, `stories` → `public = false`.
+  `getPublicUrl` больше не используется: чтение — только для
+  аутентифицированных через короткоживущий signed-URL,
+  запись/удаление — только владельцу
+  (`storage.foldername(name)[1] = auth.uid()`).
+  По прямой ссылке в браузере — только AES-GCM шифротекст.
+- **Фронтенд-слой**: `lib/media.ts` (encrypt/decrypt/compress),
+  `hooks/echo/use-secure-media.ts` (`loadSecureMediaUrl` +
+  `useSecureMediaUrl`: signed-URL → скачивание → расшифровка в Rust →
+  кэшированный `blob:` URL), компоненты `secure-image.tsx` /
+  `secure-avatar.tsx` (безопасный рендер, в т.ч. внутри `.map()`,
+  с fallback на legacy-URL/инициалы).
 
+#### Изменено
+- **Сжатие изображений «как в Telegram»**: canvas-ресайз + WebP Q82.
+  Аватар ≤512px, обложки ≤1000px, публикации/истории ≤1440px — легко,
+  без заметной потери качества.
+- Загрузка аватара, трека (аудио+обложка), публикаций и историй теперь
+  сжатая + зашифрованная; в БД пишутся `storage_path` + `nonce` + `mime`
+  вместо публичных URL (`0008_media_columns.sql`).
+- Отображение защищённого медиа подключено в: профиль (3 уровня
+  аватара), шапка чата, сайдбар (список + поиск), мини-карточка
+  упоминания, обложка «сейчас играет», сетка публикаций.
+- Legacy-медиа (залитые раньше по публичным ссылкам) продолжают
+  отображаться по прежним ссылкам до перезагрузки.
+
+#### Прочее
+- Починен устаревший тест `device_bound_roundtrip_and_hwid_change`
+  в `crypto.rs` (сигнатура `device_encrypt/decrypt_seed`).
+- `crypto.rs`: `KEY_SIZE` экспортирован (`pub`) для `media.rs`.
+
+## [0.2.9] - 2026-09-16
 ## [Фаза 1] — SQLCipher + версионированные миграции
 
 ### Добавлено
@@ -58,6 +88,20 @@
 ### Тесты (все 8 pass)
 - `pool_concurrent_queries_no_deadlock` — 8 паралл. потоков, 0 deadlock.
 - `legacy_db_migrates_to_sqlcipher_and_reads_back` — миграция данных.
+
+## [0.2.8] - 2026-08-21
+
+### Исправлено (Android)
+- **SQLCipher на Android**: `bundled-sqlcipher` в одиночку не собирается под
+  `aarch64-linux-android` — SQLCipher падает в дефолтный крипто-бэкенд
+  OpenSSL и не может найти `<openssl/crypto.h>` в NDK. Добавлена
+  таргетная перегрузка зависимости для Android c
+  `bundled-sqlcipher-vendored-openssl`: собирает и статически линкует
+  OpenSSL 3 (openssl-src) через openssl-sys, отдаёт заголовки через
+  `DEP_OPENSSL_INCLUDE`. Десктоп/iOS не затронуты (системный OpenSSL /
+  CommonCrypto). Валидировано: release-сборка `aarch64-linux-android`
+  завершается без ошибок (1m45s).
+- В `Cargo.lock` добавлены `openssl-src` и `openssl-sys`.
 
 ## [0.2.7] - 2026-08-14
 ## [Фаза 0] — ЭКСТРЕННАЯ ЛИКВИДАЦИЯ УТЕЧЕК КЛЮЧЕЙ

@@ -30,7 +30,7 @@ use crate::storage::StorageManager;
 use crate::Vault;
 
 // Размер ключей / seed
-const KEY_SIZE: usize = 32;
+pub const KEY_SIZE: usize = 32;
 
 /// Скопировать `[u8; KEY_SIZE]` из `Zeroizing` (без неоднозначности `AsRef<[u8]>`).
 fn zcopy(z: &Zeroizing<[u8; KEY_SIZE]>) -> [u8; KEY_SIZE] {
@@ -697,9 +697,10 @@ mod tests {
         let seed = [0x33u8; KEY_SIZE];
 
         // Шифруем и расшифровываем — OK (тот же machine).
-        let payload = device_encrypt_seed(&seed).unwrap();
+        let machine = "machine-a-static-id";
+        let payload = device_encrypt_seed(machine, &seed).unwrap();
         assert!(!payload.contains(&hex::encode(seed)), "payload must not contain plaintext");
-        let dec = device_decrypt_seed(&payload).unwrap();
+        let dec = device_decrypt_seed(machine, &payload).unwrap();
         assert_eq!(dec.as_slice(), &seed[..]);
 
         // Имитируем смену железа: другой machine → расшифровка должна провалиться.

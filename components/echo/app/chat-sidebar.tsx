@@ -23,6 +23,7 @@ import {
   DropdownMenuLabel,
 } from "@/components/ui/dropdown-menu";
 import type { Chat, UserProfile, AppTab, ConnectionStatus, NetworkMode } from "@/hooks/echo/types";
+import { SecureAvatar } from "./secure-avatar";
 
 interface ChatSidebarProps {
   activeTab: AppTab;
@@ -144,7 +145,9 @@ export function ChatSidebar({
                     searchResults.map(profile => (
                       <button key={profile.id} onClick={() => onStartChat(profile)} className="w-full flex items-center gap-4 p-3 rounded-xl hover:bg-primary/5 transition-all group">
                         <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm overflow-hidden shrink-0">
-                          {profile.avatar_url ? <img src={profile.avatar_url} className="w-full h-full object-cover" alt="" /> : safeChar(profile.display_name || profile.username)}
+                          {profile.avatar_url || profile.avatar_storage_path ? (
+                          <SecureAvatar src={profile.avatar_url} bucket="avatars" path={profile.avatar_storage_path || undefined} nonce={profile.avatar_nonce} mime={profile.avatar_mime} fallback={safeChar(profile.display_name || profile.username)} className="w-full h-full object-cover" />
+                        ) : safeChar(profile.display_name || profile.username)}
                         </div>
                         <div className="text-left min-w-0">
                           <div className="text-sm font-bold truncate text-foreground">{profile.display_name || profile.username}</div>
@@ -194,7 +197,9 @@ export function ChatSidebar({
             <div className="relative shrink-0">
               <div className="w-14 h-14 rounded-full border-2 border-transparent group-hover:border-primary/20 transition-all flex items-center justify-center text-primary font-bold text-lg overflow-hidden shadow-2xl"
                 style={{ backgroundColor: chat.avatar_color || 'oklch(0.2 0.02 280)' }}>
-                {chat.avatar_url ? <img src={chat.avatar_url} className="w-full h-full object-cover" alt="" /> : safeChar(chat.display_name || chat.username)}
+                {chat.avatar_url || chat.avatar_storage_path ? (
+                  <SecureAvatar src={chat.avatar_url} bucket="avatars" path={chat.avatar_storage_path || undefined} nonce={chat.avatar_nonce} mime={chat.avatar_mime} fallback={safeChar(chat.display_name || chat.username)} className="w-full h-full object-cover" />
+                ) : safeChar(chat.display_name || chat.username)}
               </div>
               {onlineUsers.has(chat.id) && <div className="absolute bottom-0.5 right-0.5 w-4 h-4 bg-green-500 border-[3.5px] border-background rounded-full shadow-[0_0_10px_rgba(34,197,94,0.5)]" />}
             </div>

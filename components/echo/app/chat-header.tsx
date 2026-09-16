@@ -18,6 +18,7 @@ import {
   TbTrash,
 } from "react-icons/tb";
 import type { Chat, UserProfile, NetworkMode } from "@/hooks/echo/types";
+import { SecureAvatar } from "./secure-avatar";
 
 interface ChatHeaderProps {
   selectedChat: Chat | null;
@@ -78,8 +79,15 @@ export const ChatHeader = memo(function ChatHeader({
           color: selectedChat.avatar_color ? "white" : "#a1a1aa",
         }}
       >
-        {selectedChat.avatar_url ? (
-          <img src={selectedChat.avatar_url} alt="" className="w-full h-full object-cover" />
+        {selectedChat.avatar_url || selectedChat.avatar_storage_path ? (
+          <SecureAvatar
+            src={selectedChat.avatar_url}
+            bucket="avatars"
+            path={selectedChat.avatar_storage_path || undefined}
+            nonce={selectedChat.avatar_nonce}
+            mime={selectedChat.avatar_mime}
+            className="w-full h-full object-cover"
+          />
         ) : (
           (selectedChat.display_name?.[0] || selectedChat.username?.[0] || "U").toUpperCase()
         )}

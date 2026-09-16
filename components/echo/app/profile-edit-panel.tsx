@@ -37,6 +37,9 @@ import { cn, safeChar } from "@/lib/utils";
 import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import * as mm from "music-metadata";
+import { base64ToBytes, compressAvatar, compressImage, encryptBlob } from "@/lib/media";
+import { useSecureMediaUrl } from "@/hooks/echo/use-secure-media";
+import { SecureImage } from "./secure-image";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -55,6 +58,9 @@ export interface EditableProfile {
   username: string;
   avatar_url: string | null;
   avatar_color?: string | null;
+  avatar_storage_path?: string | null;
+  avatar_nonce?: string | null;
+  avatar_mime?: string | null;
   bio: string | null;
   background: string | null;
   status_emoji: string | null;
@@ -65,6 +71,8 @@ export interface EditableProfile {
   activity_subtitle: string | null;
   activity_cover_url?: string | null;
   activity_file_url?: string | null;
+  activity_cover_path?: string | null;
+  activity_cover_nonce?: string | null;
   activity_gradient?: string | null;
   share_listening_activity: boolean;
   channel_id?: string | null;
@@ -84,6 +92,9 @@ interface UserTrack {
   gradient: string | null;
   audio_path: string;
   cover_path: string | null;
+  audio_nonce?: string | null;
+  cover_nonce?: string | null;
+  cover_mime?: string | null;
 }
 
 interface Channel {
@@ -100,6 +111,9 @@ interface UserPublication {
   media_url: string;
   thumbnail_url: string | null;
   storage_path: string;
+  media_nonce?: string | null;
+  thumbnail_nonce?: string | null;
+  media_mime?: string | null;
 }
 
 interface UserGift {
@@ -113,6 +127,8 @@ interface UserStory {
   media_url: string;
   media_type: "image" | "video";
   storage_path: string;
+  media_nonce?: string | null;
+  media_mime?: string | null;
 }
 
 /* ============================================================= */
@@ -461,6 +477,16 @@ function TrackListItem({ track, onSelect, onDelete }: { track: UserTrack; onSele
   const deleteOpacity = useTransform(x, [-80, -20], [1, 0]);
   const [confirming, setConfirming] = useState(false);
 
+  // Обложка зашифрована -> резолвим blob: URL из приватного bucket (с кэшем).
+  const secureCover = useSecureMediaUrl(
+    "tracks",
+    track.cover_path,
+    track.cover_nonce,
+    track.cover_mime || "image/webp",
+    Boolean(track.cover_path && !track.cover_url),
+  );
+  const coverSrc = track.cover_url || secureCover;
+
   function handleDragEnd(_: any, info: PanInfo) {
     if (info.offset.x < -80) {
       setConfirming(true);
@@ -498,7 +524,7 @@ function TrackListItem({ track, onSelect, onDelete }: { track: UserTrack; onSele
         className="relative w-full flex items-center gap-3 p-2 bg-background text-left"
       >
         <div className="w-14 h-14 rounded-xl shrink-0 overflow-hidden flex items-center justify-center" style={{ background: track.gradient || BACKGROUND_PRESETS[0].css }}>
-          {track.cover_url ? <img src={track.cover_url} className="w-full h-full object-cover" alt="" /> : <Music className="w-6 h-6 text-muted-foreground/80" />}
+          {coverSrc ? <img src={coverSrc} className="w-full h-full object-cover" alt="" /> : <Music className="w-6 h-6 text-muted-foreground/80" />}
         </div>
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-sm truncate">{track.title}</div>
@@ -590,30 +616,59 @@ function TrackPickerSheet({
     setUploading(true);
 
     try {
-      const audio_path = `${userId}/track-${Date.now()}.mp3`;
-      const { error: audioErr } = await supabase.storage.from("tracks").upload(audio_path, audioFile, { upsert: true });
+      // === Аудио: шифруем до загрузки, грузим конверт в приватный bucket ===
+      const audioEnv = await encryptBlob(audioFile);
+      const audio_path = `${userId}/track-${Date.now()}.enc`;
+      const { error: audioErr } = await supabase.storage
+        .from("tracks")
+        .upload(
+          audio_path,
+          new Blob([base64ToBytes(audioEnv.data) as unknown as BlobPart], { type: "application/octet-stream" }),
+          { upsert: true, contentType: "application/octet-stream" },
+        );
       if (audioErr) throw audioErr;
-      const { data: audioPub } = supabase.storage.from("tracks").getPublicUrl(audio_path);
 
-      let cover_url: string | null = null;
       let cover_path: string | null = null;
+      let cover_nonce: string | null = null;
+      let compressedCover: Blob | null = null;
 
       if (coverPreview) {
         const blob = coverFile ?? (await (await fetch(coverPreview)).blob());
-        cover_path = `${userId}/cover-${Date.now()}.jpg`;
-        const { error: coverErr } = await supabase.storage.from("tracks").upload(cover_path, blob, { upsert: true });
-        if (!coverErr) {
-          const { data: coverPub } = supabase.storage.from("tracks").getPublicUrl(cover_path);
-          cover_url = coverPub.publicUrl;
-        }
+        // Обложка: лёгкое сжатие + шифрование.
+        compressedCover = await compressImage(blob, { maxSize: 1000, quality: 0.82 });
+        const coverEnv = await encryptBlob(compressedCover);
+        cover_path = `${userId}/cover-${Date.now()}.enc`;
+        const { error: coverErr } = await supabase.storage
+          .from("tracks")
+          .upload(
+            cover_path,
+            new Blob([base64ToBytes(coverEnv.data) as unknown as BlobPart], { type: "application/octet-stream" }),
+            { upsert: true, contentType: "application/octet-stream" },
+          );
+        if (!coverErr) cover_nonce = coverEnv.nonce;
       }
 
-      const avgColor = cover_url ? await averageColorFromImage(cover_url) : null;
+      // Средний цвет для градиента считаем по локальному blob (без публичного URL).
+      let avgColor: { r: number; g: number; b: number } | null = null;
+      if (compressedCover && cover_path) {
+        avgColor = await averageColorFromImage(URL.createObjectURL(compressedCover));
+      }
       const gradient = gradientFromColor(avgColor);
 
       const { data: inserted, error: insertErr } = await supabase
         .from("user_tracks")
-        .insert({ owner_id: userId, title, artist, file_url: audioPub.publicUrl, cover_url, gradient, audio_path, cover_path })
+        .insert({
+          owner_id: userId,
+          title,
+          artist,
+          file_url: null,
+          cover_url: null,
+          gradient,
+          audio_path,
+          cover_path,
+          audio_nonce: audioEnv.nonce,
+          cover_nonce,
+        })
         .select()
         .single();
 
@@ -976,17 +1031,35 @@ function ProfileViewer({
     const file = e.target.files?.[0];
     if (!file) return;
     const media_type: "image" | "video" = file.type.startsWith("video") ? "video" : "image";
-    const ext = file.name.split(".").pop() || (media_type === "video" ? "mp4" : "jpg");
-    const storage_path = `${profile.id}/pub-${Date.now()}.${ext}`;
+    const storage_path = `${profile.id}/pub-${Date.now()}.enc`;
 
     try {
-      const { error: upErr } = await supabase.storage.from("publications").upload(storage_path, file, { upsert: true });
+      // Изображения сжимаем, видео — только шифруем (canvas не нужен).
+      const source = media_type === "image"
+        ? await compressImage(file, { maxSize: 1440, quality: 0.82 })
+        : file;
+      const env = await encryptBlob(source);
+      const { error: upErr } = await supabase.storage
+        .from("publications")
+        .upload(
+          storage_path,
+          new Blob([base64ToBytes(env.data) as unknown as BlobPart], { type: "application/octet-stream" }),
+          { upsert: true, contentType: "application/octet-stream" },
+        );
       if (upErr) throw upErr;
-      const { data: pub } = supabase.storage.from("publications").getPublicUrl(storage_path);
 
       const { data: inserted, error: insErr } = await supabase
         .from("publications")
-        .insert({ owner_id: profile.id, media_type, media_url: pub.publicUrl, thumbnail_url: media_type === "image" ? pub.publicUrl : null, storage_path })
+        .insert({
+          owner_id: profile.id,
+          media_type,
+          media_url: null,
+          thumbnail_url: null,
+          storage_path,
+          media_nonce: env.nonce,
+          thumbnail_nonce: media_type === "image" ? env.nonce : null,
+          media_mime: source.type || "application/octet-stream",
+        })
         .select()
         .single();
       if (insErr) throw insErr;
@@ -1015,17 +1088,25 @@ function ProfileViewer({
     const file = e.target.files?.[0];
     if (!file) return;
     const media_type: "image" | "video" = file.type.startsWith("video") ? "video" : "image";
-    const ext = file.name.split(".").pop() || (media_type === "video" ? "mp4" : "jpg");
-    const storage_path = `${profile.id}/story-${Date.now()}.${ext}`;
+    const storage_path = `${profile.id}/story-${Date.now()}.enc`;
 
     try {
-      const { error: upErr } = await supabase.storage.from("stories").upload(storage_path, file, { upsert: true });
+      const source = media_type === "image"
+        ? await compressImage(file, { maxSize: 1440, quality: 0.82 })
+        : file;
+      const env = await encryptBlob(source);
+      const { error: upErr } = await supabase.storage
+        .from("stories")
+        .upload(
+          storage_path,
+          new Blob([base64ToBytes(env.data) as unknown as BlobPart], { type: "application/octet-stream" }),
+          { upsert: true, contentType: "application/octet-stream" },
+        );
       if (upErr) throw upErr;
-      const { data: pub } = supabase.storage.from("stories").getPublicUrl(storage_path);
 
       const { data: inserted, error: insErr } = await supabase
         .from("stories")
-        .insert({ owner_id: profile.id, media_type, media_url: pub.publicUrl, storage_path })
+        .insert({ owner_id: profile.id, media_type, media_url: null, storage_path, media_nonce: env.nonce, media_mime: source.type || "application/octet-stream" })
         .select()
         .single();
       if (insErr) throw insErr;
@@ -1410,8 +1491,8 @@ function ProfileViewer({
             )}
             {publications.map((p) => (
               <div key={p.id} className="aspect-square rounded-2xl bg-muted overflow-hidden relative group">
-                {p.thumbnail_url ? (
-                  <img src={p.thumbnail_url} className="w-full h-full object-cover" alt="" />
+                {p.thumbnail_url || p.thumbnail_nonce ? (
+                  <SecureImage src={p.thumbnail_url} bucket="publications" path={p.storage_path} nonce={p.thumbnail_nonce} mime={p.media_mime} className="w-full h-full object-cover" fallback={<div className="w-full h-full flex items-center justify-center"><ImageIcon className="w-5 h-5 text-muted-foreground/20" /></div>} />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center">
                     <ImageIcon className="w-5 h-5 text-muted-foreground/20" />
@@ -1485,6 +1566,16 @@ function ProfileEditor({
 
   const anySheetOpen = trackPickerOpen || channelPickerOpen || datePickerOpen;
 
+  // Безопасная аватарка: если новый формат (storage_path+nonce) — резолвим blob: URL.
+  const secureAvatarUrl = useSecureMediaUrl(
+    "avatars",
+    draft.avatar_storage_path,
+    draft.avatar_nonce,
+    draft.avatar_mime || "image/webp",
+    Boolean(draft.avatar_storage_path),
+  );
+  const shownAvatar = avatarPreview ?? secureAvatarUrl;
+
   function set<K extends keyof EditableProfile>(key: K, value: EditableProfile[K]) {
     setDraft((d) => ({ ...d, [key]: value }));
   }
@@ -1501,6 +1592,8 @@ function ProfileEditor({
     set("activity_title", track.title);
     set("activity_subtitle", track.artist);
     set("activity_cover_url", track.cover_url);
+    set("activity_cover_path", track.cover_path);
+    set("activity_cover_nonce", track.cover_nonce);
     set("activity_file_url", track.file_url);
     set("activity_gradient", track.gradient);
     set("share_listening_activity", true);
@@ -1511,6 +1604,8 @@ function ProfileEditor({
     set("activity_title", null);
     set("activity_subtitle", null);
     set("activity_cover_url", null);
+    set("activity_cover_path", null);
+    set("activity_cover_nonce", null);
     set("activity_file_url", null);
     set("activity_gradient", null);
     set("share_listening_activity", false);
@@ -1538,12 +1633,27 @@ function ProfileEditor({
     setSaving(true);
     try {
       let avatar_url = draft.avatar_url;
+      let avatar_storage_path = draft.avatar_storage_path;
+      let avatar_nonce = draft.avatar_nonce;
+      let avatar_mime = draft.avatar_mime;
       if (avatarFile) {
-        const path = `${draft.id}/avatar-${Date.now()}.jpg`;
-        const { error: uploadError } = await supabase.storage.from("avatars").upload(path, avatarFile, { upsert: true });
+        // 1) Лёгкое сжатие "как в Telegram" (WebP Q82, ≤512px).
+        const compressed = await compressAvatar(avatarFile);
+        // 2) Шифрование до загрузки (AES-256-GCM, ключ в Rust).
+        const env = await encryptBlob(compressed);
+        const path = `${draft.id}/avatar-${Date.now()}.enc`;
+        const { error: uploadError } = await supabase.storage
+          .from("avatars")
+          .upload(
+            path,
+            new Blob([base64ToBytes(env.data) as unknown as BlobPart], { type: "application/octet-stream" }),
+            { upsert: true, contentType: "application/octet-stream" },
+          );
         if (uploadError) throw uploadError;
-        const { data: pub } = supabase.storage.from("avatars").getPublicUrl(path);
-        avatar_url = pub.publicUrl;
+        avatar_storage_path = path;
+        avatar_nonce = env.nonce;
+        avatar_mime = compressed.type || "image/webp";
+        avatar_url = null;
       }
 
       const { error } = await supabase
@@ -1560,18 +1670,29 @@ function ProfileEditor({
           activity_title: draft.share_listening_activity ? draft.activity_title : null,
           activity_subtitle: draft.share_listening_activity ? draft.activity_subtitle : null,
           activity_cover_url: draft.share_listening_activity ? draft.activity_cover_url : null,
+          activity_cover_path: draft.share_listening_activity ? draft.activity_cover_path : null,
+          activity_cover_nonce: draft.share_listening_activity ? draft.activity_cover_nonce : null,
           activity_file_url: draft.share_listening_activity ? draft.activity_file_url : null,
           activity_gradient: draft.share_listening_activity ? draft.activity_gradient : null,
           share_listening_activity: draft.share_listening_activity,
           channel_id: draft.channel_id ?? null,
           avatar_url,
+          avatar_storage_path,
+          avatar_nonce,
+          avatar_mime,
         })
         .eq("id", draft.id);
 
       if (error) throw error;
 
       toast.success("Профиль обновлён");
-      onSaved?.({ ...draft, avatar_url });
+      onSaved?.({
+        ...draft,
+        avatar_url,
+        avatar_storage_path,
+        avatar_nonce,
+        avatar_mime,
+      });
       onClose();
     } catch (err) {
       console.error("Profile save error:", err);
@@ -1624,7 +1745,7 @@ function ProfileEditor({
                 onClick={() => fileInputRef.current?.click()}
                 className="group relative w-[92px] h-[92px] rounded-full overflow-hidden bg-muted border-4 border-[#0a0a0d] flex items-center justify-center font-bold text-4xl text-primary"
               >
-                {avatarPreview ? <img src={avatarPreview} className="w-full h-full object-cover" alt="" /> : safeChar(draft.display_name)}
+                {shownAvatar ? <img src={shownAvatar} className="w-full h-full object-cover" alt="" /> : safeChar(draft.display_name)}
                 <div className="absolute inset-0 bg-background/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                   <Camera className="w-5 h-5" />
                 </div>

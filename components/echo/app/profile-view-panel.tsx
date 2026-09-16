@@ -26,6 +26,8 @@ import {
   TbShare2,
 } from "react-icons/tb";
 import { cn, safeChar } from "@/lib/utils";
+import { useSecureMediaUrl } from "@/hooks/echo/use-secure-media";
+import { SecureImage } from "./secure-image";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -48,6 +50,9 @@ export interface ProfilePublication {
   id: string;
   media_type: "image" | "video";
   thumbnail_url: string | null;
+  storage_path?: string | null;
+  thumbnail_nonce?: string | null;
+  media_mime?: string | null;
 }
 
 export interface ProfileStory {
@@ -62,6 +67,9 @@ export interface ViewedProfile {
   username: string;
   avatar_url: string | null;
   avatar_color?: string | null;
+  avatar_storage_path?: string | null;
+  avatar_nonce?: string | null;
+  avatar_mime?: string | null;
   bio: string | null;
   background: string | null;
   status_emoji: string | null;
@@ -73,6 +81,8 @@ export interface ViewedProfile {
   activity_title: string | null;
   activity_subtitle: string | null;
   activity_cover_url?: string | null;
+  activity_cover_path?: string | null;
+  activity_cover_nonce?: string | null;
   channel_name: string | null;
   channel_username: string | null;
   channel_subscribers: number | null;
@@ -166,6 +176,25 @@ export function ProfileViewPanel({
   const hasActivity = !!profile.activity_title;
   const age = profile.birth_date && !profile.birth_date_hide_year ? calculateAge(profile.birth_date) : null;
 
+  // Защищённое медиа: если есть storage_path+nonce — резолвим blob: URL.
+  const secureAvatar = useSecureMediaUrl(
+    "avatars",
+    profile.avatar_storage_path,
+    profile.avatar_nonce,
+    profile.avatar_mime || "image/webp",
+    Boolean(profile.avatar_storage_path),
+  );
+  const avatarSrc = profile.avatar_url || secureAvatar;
+
+  const secureActivityCover = useSecureMediaUrl(
+    "tracks",
+    profile.activity_cover_path,
+    profile.activity_cover_nonce,
+    "image/webp",
+    Boolean(profile.activity_cover_path && !profile.activity_cover_url),
+  );
+  const activityCoverSrc = profile.activity_cover_url || secureActivityCover;
+
   return (
     <div className="flex flex-col h-full bg-background text-foreground overflow-hidden">
       <div className="flex-1 overflow-y-auto overscroll-contain scrollbar-hide">
@@ -234,8 +263,8 @@ export function ProfileViewPanel({
                     }}
                     className="group relative w-[92px] h-[92px] rounded-full overflow-hidden bg-muted border-4 border-[#0a0a0d] flex items-center justify-center font-bold text-4xl text-primary"
                   >
-                    {profile.avatar_url ? (
-                      <img src={profile.avatar_url} className="w-full h-full object-cover" alt="" />
+                    {avatarSrc ? (
+                      <img src={avatarSrc} className="w-full h-full object-cover" alt="" />
                     ) : (
                       safeChar(profile.display_name || profile.username)
                     )}
@@ -277,8 +306,8 @@ export function ProfileViewPanel({
                 className="absolute inset-0 z-40 bg-background"
               >
                 <div className="absolute inset-0">
-                  {profile.avatar_url ? (
-                    <img src={profile.avatar_url} className="w-full h-full object-cover" alt="" />
+                  {avatarSrc ? (
+                    <img src={avatarSrc} className="w-full h-full object-cover" alt="" />
                   ) : (
                     <div className="w-full h-full bg-muted flex items-center justify-center text-6xl font-bold text-primary">
                       {safeChar(profile.display_name || profile.username)}
@@ -335,8 +364,8 @@ export function ProfileViewPanel({
                   transition={{ type: "spring", damping: 25 }}
                   className="relative w-full h-full"
                 >
-                  {profile.avatar_url ? (
-                    <img src={profile.avatar_url} className="w-full h-full object-contain" alt="" />
+                  {avatarSrc ? (
+                    <img src={avatarSrc} className="w-full h-full object-contain" alt="" />
                   ) : (
                     <div className="w-full h-full bg-muted flex items-center justify-center text-8xl font-bold text-primary">
                       {safeChar(profile.display_name || profile.username)}
@@ -386,8 +415,8 @@ export function ProfileViewPanel({
         {hasActivity && (
           <div className="mx-5 mt-5 rounded-[20px] p-3.5 flex items-center gap-3 bg-gradient-to-br from-[#4a3d1a] to-[#2e2510]">
             <div className="w-[42px] h-[42px] rounded-xl bg-black/20 flex items-center justify-center shrink-0 overflow-hidden">
-              {profile.activity_cover_url ? (
-                <img src={profile.activity_cover_url} className="w-full h-full object-cover" alt="" />
+              {activityCoverSrc ? (
+                <img src={activityCoverSrc} className="w-full h-full object-cover" alt="" />
               ) : (
                 <Music className="w-[18px] h-[18px] text-amber-200" />
               )}
@@ -517,8 +546,8 @@ export function ProfileViewPanel({
                 key={p.id}
                 className="aspect-square rounded-2xl bg-muted overflow-hidden relative"
               >
-                {p.thumbnail_url ? (
-                  <img src={p.thumbnail_url} className="w-full h-full object-cover" alt="" />
+                {p.thumbnail_url || p.thumbnail_nonce ? (
+                  <SecureImage src={p.thumbnail_url} bucket="publications" path={p.storage_path} nonce={p.thumbnail_nonce} mime={p.media_mime} className="w-full h-full object-cover" fallback={<div className="w-full h-full flex items-center justify-center"><ImageIcon className="w-5 h-5 text-muted-foreground/60" /></div>} />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center">
                     <ImageIcon className="w-5 h-5 text-muted-foreground/60" />
