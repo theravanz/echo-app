@@ -16,10 +16,14 @@ import {
   TbBold as Bold,
   TbItalic as Italic,
   TbCode as Code,
-  TbEyeOff as EyeOff,
+    TbEyeOff as EyeOff,
   TbKeyboard as Keyboard,
+  TbMicrophone as Mic,
   TbChevronDown as ChevronDown,
 } from "react-icons/tb";
+
+import { toast } from "sonner";
+import { pickRecorderMime, MAX_VOICE_SECONDS } from "@/lib/voice";
 
 interface ChatInputProps {
   newMessage: string;
@@ -35,11 +39,12 @@ interface ChatInputProps {
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
   isFullPickerOpen: boolean;
   onToggleFullPicker: () => void;
+  onSendVoice?: (blob: Blob, durationSec: number) => void;
 }
 
 export function ChatInput({
   newMessage, setNewMessage, replyingTo, setReplyingTo, editingMessage, setEditingMessage,
-  onSend, selectedChat, user, isMobile, textareaRef, isFullPickerOpen, onToggleFullPicker,
+  onSend, selectedChat, user, isMobile, textareaRef, isFullPickerOpen, onToggleFullPicker, onSendVoice,
 }: ChatInputProps) {
   const localTextareaRef = useRef<HTMLTextAreaElement>(null);
   const taRef = textareaRef || localTextareaRef;
@@ -122,6 +127,141 @@ export function ChatInput({
 
   const hasText = typeof newMessage === "string" && newMessage.trim().length > 0;
   const canSend = hasText || !!editingMessage;
+
+  // ───────── ГОЛОС: удержание → запись ─────────
+  type RecState = "idle" | "rec" | "locked";
+  const [rec, setRec] = useState<RecState>("idle");
+  const [recSec, setRecSec] = useState(0);
+  const recRef = useRef<RecState>("idle");
+  useEffect(() => { recRef.current = rec; }, [rec]);
+
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<BlobPart[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const startedAtRef = useRef<number>(0);
+  const holdTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const recTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pressRef = useRef<{ x: number; y: number; t: number; moved: boolean } | null>(null);
+  const cancelRef = useRef(false);
+  const stopOnUpRef = useRef(false);
+  const onSendVoiceRef = useRef(onSendVoice);
+  useEffect(() => { onSendVoiceRef.current = onSendVoice; }, [onSendVoice]);
+
+  const cleanupRecordingDom = async () => {
+    if (recTimerRef.current) { clearInterval(recTimerRef.current); recTimerRef.current = null; }
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+  };
+
+  const startVoiceRecording = async () => {
+    if (recRef.current !== "idle") return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      const mime = pickRecorderMime();
+      const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      mediaRecorderRef.current = mr;
+      audioChunksRef.current = [];
+      cancelRef.current = false;
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      mr.onstop = () => {
+        const chunks = audioChunksRef.current;
+        audioChunksRef.current = [];
+        const cancelled = cancelRef.current;
+        cleanupRecordingDom();
+        if (!cancelled && chunks.length) {
+          const blob = new Blob(chunks, { type: mime || "audio/webm" });
+          const dur = Math.max(0.1, (Date.now() - startedAtRef.current) / 1000);
+          onSendVoiceRef.current?.(blob, Math.min(dur, MAX_VOICE_SECONDS));
+        }
+        setRec("idle"); setRecSec(0);
+      };
+      mr.onerror = () => { cancelRef.current = true; mr.stop?.(); };
+      mr.start(200);
+      startedAtRef.current = Date.now();
+      setRec("rec"); setRecSec(0);
+      recTimerRef.current = setInterval(() => setRecSec((s) => s + 1), 1000);
+    } catch {
+      toast.error("Не удалось начать запись");
+      await cleanupRecordingDom();
+      setRec("idle"); setRecSec(0);
+    }
+  };
+
+  const stopVoiceRecording = (send = true) => {
+    if (recRef.current === "idle") return;
+    if (!send) cancelRef.current = true;
+    const mr = mediaRecorderRef.current;
+    if (mr && mr.state === "recording") mr.stop();
+  };
+
+  const onVoiceBtnDown = (e: React.PointerEvent<HTMLButtonElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    pressRef.current = { x: e.clientX, y: e.clientY, t: Date.now(), moved: false };
+    cancelRef.current = false;
+    if (recRef.current === "locked") {
+      stopOnUpRef.current = true; // повторный тап в «закреплённом» режиме: стоп и отправка
+      return;
+    }
+    // Долгое удержание (touch ИЛИ mouse) → запись. Ранее hold-таймер в
+    // onVoiceBtnMove очищался при любом микродвижении мыши за первые 220 м с —
+    // из-за чего на ПК запись не стартовала. Теперь очищаем только для touch.
+    holdTimerRef.current = setTimeout(() => {
+      if (pressRef.current) startVoiceRecording();
+    }, 220);
+  };
+
+  const onVoiceBtnMove = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const p = pressRef.current;
+    if (!p) return;
+    const dx = e.clientX - p.x;
+    const dy = e.clientY - p.y;
+    if (Math.abs(dx) > 8 || Math.abs(dy) > 8) p.moved = true;
+    if (recRef.current === "idle") {
+      // Дать возможность снять палец до начала записи (touch only).
+      if (p.moved && holdTimerRef.current && isMobile) {
+        clearTimeout(holdTimerRef.current);
+        holdTimerRef.current = null;
+      }
+      return;
+    }
+    if (recRef.current === "rec") {
+      if (dy < -55) {
+        // Свайп вверх — закрепить запись (отпустить не нужно).
+        setRec("locked"); recRef.current = "locked";
+        if (navigator.vibrate) navigator.vibrate(20);
+      } else if (dx < -80 || dy > 60) {
+        // Свайп влево / вниз — отмена.
+        cancelRef.current = true;
+        stopVoiceRecording(false);
+      }
+    }
+  };
+
+  const onVoiceBtnUp = (e: React.PointerEvent<HTMLButtonElement>) => {
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    if (holdTimerRef.current) { clearTimeout(holdTimerRef.current); holdTimerRef.current = null; }
+    if (recRef.current === "rec") {
+      // Обычное отпускание — стоп и отправить запись.
+      stopVoiceRecording(true);
+      return;
+    }
+    if (stopOnUpRef.current) {
+      stopOnUpRef.current = false;
+      stopVoiceRecording(true);
+    }
+  };
+
+  const onVoiceBtnLeave = () => {
+    if (holdTimerRef.current && recRef.current === "idle") {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+  };
+
+
 
   const handleSendOrCollapse = () => {
     if (isMobile && isMobilePickerOpen && isMobilePickerExpanded) {
@@ -253,29 +393,51 @@ export function ChatInput({
         </div>
 
         <button
-          onClick={handleSendOrCollapse}
-          disabled={!canSend && !(isMobile && isMobilePickerOpen && isMobilePickerExpanded)}
+          onPointerDown={onVoiceBtnDown}
+          onPointerMove={onVoiceBtnMove}
+          onPointerUp={onVoiceBtnUp}
+          onPointerCancel={onVoiceBtnLeave}
+          onPointerLeave={onVoiceBtnLeave}
+          onClick={rec === "idle" ? handleSendOrCollapse : undefined}
+          disabled={!canSend && !(isMobile && isMobilePickerOpen && isMobilePickerExpanded) && rec === "idle"}
           className={cn(
             "shrink-0 w-9 h-9 md:w-10 md:h-10 rounded-xl flex items-center justify-center transition-all duration-300 mb-0.5",
-            (isMobile && isMobilePickerOpen && isMobilePickerExpanded)
-              ? "bg-white/[0.08] text-white hover:bg-white/[0.15] scale-95"
-              : canSend
-                ? "bg-primary text-primary-foreground shadow-md shadow-primary/20 hover:scale-105 active:scale-95"
-                : "bg-white/[0.04] text-zinc-700 cursor-default"
+            rec === "rec"
+              ? "bg-red-500 text-white hover:bg-red-400 shadow-md shadow-red-500/30 animate-pulse"
+              : rec === "locked"
+                ? "bg-amber-500 text-zinc-900 shadow-md shadow-amber-500/30"
+                : (isMobile && isMobilePickerOpen && isMobilePickerExpanded)
+                  ? "bg-white/[0.08] text-white hover:bg-white/[0.15] scale-95"
+                  : canSend
+                    ? "bg-primary text-primary-foreground shadow-md shadow-primary/20 hover:scale-105 active:scale-95"
+                    : "bg-primary/10 text-primary hover:bg-primary/20",
           )}
         >
           <AnimatePresence mode="wait" initial={false}>
-            {isMobile && isMobilePickerOpen && isMobilePickerExpanded ? (
-              <motion.div key="down" initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 10, opacity: 0 }}>
+            {rec === "rec" ? (
+              <motion.div key="rec" initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }} className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-white" />
+                <span className="text-[10px] font-mono">{recSec}</span>
+              </motion.div>
+            ) : rec === "locked" ? (
+              <motion.div key="locked" initial={{ scale: 0.8 }} animate={{ scale: 1 }} exit={{ scale: 0.8 }} transition={{ duration: 0.15 }}>
+                <Mic className="w-[18px] h-[18px]" />
+              </motion.div>
+            ) : isMobile && isMobilePickerOpen && isMobilePickerExpanded ? (
+              <motion.div key="down" initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 10, opacity: 0 }} transition={{ duration: 0.15 }}>
                 <ChevronDown className="w-[18px] h-[18px]" />
               </motion.div>
             ) : editingMessage ? (
-              <motion.div key="check" initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 10, opacity: 0 }}>
+              <motion.div key="check" initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 10, opacity: 0 }} transition={{ duration: 0.15 }}>
                 <Check className="w-[18px] h-[18px]" />
               </motion.div>
-            ) : (
-              <motion.div key="send" initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 10, opacity: 0 }}>
+            ) : canSend ? (
+              <motion.div key="send" initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 10, opacity: 0 }} transition={{ duration: 0.15 }}>
                 <Send className="w-[18px] h-[18px]" />
+              </motion.div>
+            ) : (
+              <motion.div key="mic" initial={{ y: -10, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 10, opacity: 0 }} transition={{ duration: 0.15 }}>
+                <Mic className="w-[19px] h-[19px]" />
               </motion.div>
             )}
           </AnimatePresence>

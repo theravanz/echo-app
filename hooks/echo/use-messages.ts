@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { useE2EE } from "./use-e2ee";
 import { generateTempId } from "./use-network-queue";
 import { parseCallLogJson } from "./call-log";
+import { encryptAndUploadVoice, parseVoiceMeta, type VoiceMeta } from "@/lib/voice";
 import type { Message, PendingMessage, Chat, UserProfile } from "./types";
 
 interface UseMessagesReturn {
@@ -25,6 +26,12 @@ interface UseMessagesReturn {
     type?: "text" | "sticker" | "gif",
     customContent?: string,
     onAddToQueue?: (msg: PendingMessage) => void,
+  ) => Promise<void>;
+  handleSendVoice: (
+    selectedChat: Chat,
+    user: UserProfile,
+    blob: Blob,
+    durationSec: number,
   ) => Promise<void>;
   handleEditMessage: (
     selectedChat: Chat,
@@ -79,6 +86,11 @@ export function useMessages(chats: Chat[] = []): UseMessagesReturn {
               call_status: meta.status,
               call_duration: meta.duration,
             } as Message;
+          }
+          // Голосовые: content — plaintext JSON-метаданные (аудио зашифровано
+          // отдельно в bucket `voice`). Дешифратор текста не вызываем.
+          if (m.type === "voice") {
+            return { ...m, voice: parseVoiceMeta(m.content) } as Message;
           }
           const otherId =
             m.sender_id === currentUserId ? m.receiver_id : m.sender_id;
@@ -266,6 +278,43 @@ export function useMessages(chats: Chat[] = []): UseMessagesReturn {
     [editingMessage, replyingTo, encryptMessage, handleEditMessage],
   );
 
+  const handleSendVoice = useCallback(
+    async (selectedChat: Chat, user: UserProfile, blob: Blob, durationSec: number) => {
+      if (!selectedChat || !user || !blob) return;
+      try {
+        // 1) E2EE-шифрование аудио (crypto_box на ключ получателя) + upload в приватный `voice`.
+        const meta = await encryptAndUploadVoice(user.id, selectedChat.id, blob, durationSec);
+        // 2) content — plaintext JSON-метаданные (не секретны), nonce-колонка не используется.
+        const { error } = await supabase
+          .from("messages")
+          .insert({
+            sender_id: user.id,
+            receiver_id: selectedChat.id,
+            content: JSON.stringify(meta),
+            type: "voice",
+            status: "sent",
+          });
+        if (error) throw error;
+
+        // Push получателю — фоном.
+        try {
+          supabase.functions.invoke("send-message-push", {
+            body: {
+              receiver_id: selectedChat.id,
+              sender_id: user.id,
+              sender_name: user.display_name || user.username || "",
+              sender_avatar: user.avatar_url || "",
+            },
+          }).catch(() => {});
+        } catch { /* ignore */ }
+      } catch (err) {
+        console.error("[Voice] send failed:", err);
+        toast.error("Не удалось отправить голосовое сообщение");
+      }
+    },
+    [],
+  );
+
   return {
     messages,
     setMessages,
@@ -278,6 +327,7 @@ export function useMessages(chats: Chat[] = []): UseMessagesReturn {
     fetchMessages,
     handleSendMessage,
     handleEditMessage,
+    handleSendVoice,
     messagesCacheKey: "",
   };
 }

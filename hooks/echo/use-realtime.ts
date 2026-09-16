@@ -4,6 +4,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { useE2EE } from "./use-e2ee";
 import { parseCallLogJson } from "./call-log";
+import { parseVoiceMeta } from "@/lib/voice";
 import type { UserProfile, Chat, Message } from "./types";
 
 interface UseRealtimeProps {
@@ -98,6 +99,16 @@ export function useRealtime({
 
           if (nm.receiver_id === user.id) {
             debouncedFetchChats();
+
+            // Голосовые: content — plaintext JSON-метаданные (аудио зашифровано
+            // отдельно в bucket `voice`). Дешифратор текста не вызываем.
+            if (nm.type === "voice") {
+              onNewMessage({
+                ...nm,
+                voice: parseVoiceMeta(nm.content),
+              } as Message);
+              return;
+            }
 
             // Логи звонков не шифруются — байпас E2EE, парсим JSON.
             if (nm.type === "call_log") {

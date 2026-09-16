@@ -170,7 +170,7 @@ function EchoAppContent() {
     }
   }, [selectedChat, setSelectedChat]);
 
-  const { messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage } = useMessages(chats);
+  const { messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage, handleSendVoice } = useMessages(chats);
   const { processPendingQueue } = useNetworkQueue();
   const { connectionStatus, setConnectionStatus } = useConnection(processPendingQueue);
   const { searchOpen, setSearchOpen, searchQuery, searchResults, isSearching, isSearchFocused, setIsSearchFocused, recentSearches, searchRef, searchTimeoutRef, handleSearch, handleStartChat, clearSearch, setCurrentUserId } = useProfiles();
@@ -881,6 +881,7 @@ useEffect(() => {
           setNewMessage={setNewMessage}
           fetchMessages={fetchMessages}
           handleSendMessage={handleSendMessage}
+          handleSendVoice={handleSendVoice}
         />
 
       {/* --- Settings Modal --- */}
