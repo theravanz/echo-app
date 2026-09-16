@@ -3,6 +3,7 @@
 import React, { memo, useRef, useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
 import { LinkPreview } from "./link-preview";
+import { SecureAvatar } from "./secure-avatar";
 import { CallLogMessage } from "./CallLogMessage";
 import {
   TbCheck as Check,
@@ -84,7 +85,7 @@ const extractMentions = (text: string) => {
 };
 
 function MentionMiniCard({ username, onClick }: { username: string; onClick?: (u: string) => void }) {
-  const [profile, setProfile] = useState<{ display_name?: string; avatar_url?: string; bio?: string | null } | null>(null);
+  const [profile, setProfile] = useState<{ display_name?: string; avatar_url?: string; avatar_storage_path?: string | null; avatar_nonce?: string | null; avatar_mime?: string | null; bio?: string | null } | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -93,7 +94,7 @@ function MentionMiniCard({ username, onClick }: { username: string; onClick?: (u
     (async () => {
       try {
         const { supabase } = await import("@/lib/supabase");
-        const { data } = await supabase.from("profiles").select("display_name,avatar_url,bio").eq("username", username).maybeSingle();
+        const { data } = await supabase.from("profiles").select("display_name,avatar_url,avatar_storage_path,avatar_nonce,avatar_mime,bio").eq("username", username).maybeSingle();
         if (!cancelled) { setProfile(data); setLoading(false); }
       } catch { if (!cancelled) setLoading(false); }
     })();
@@ -102,8 +103,8 @@ function MentionMiniCard({ username, onClick }: { username: string; onClick?: (u
 
   return (
     <button onClick={() => onClick?.(username)} className="flex w-full max-w-[320px] items-start gap-3 rounded-2xl border border-white/10 bg-zinc-900/80 backdrop-blur-md p-3.5 text-left transition hover:border-primary/50 hover:bg-zinc-800">
-      {loading ? <div className="h-11 w-11 shrink-0 rounded-full bg-white/10 animate-pulse" /> : profile?.avatar_url ? (
-        <img src={profile.avatar_url} alt="" className="h-11 w-11 shrink-0 rounded-full object-cover border border-white/5" />
+      {loading ? <div className="h-11 w-11 shrink-0 rounded-full bg-white/10 animate-pulse" /> : (profile?.avatar_url || profile?.avatar_storage_path) ? (
+        <SecureAvatar src={profile.avatar_url} bucket="avatars" path={profile.avatar_storage_path || undefined} nonce={profile.avatar_nonce} mime={profile.avatar_mime} className="h-11 w-11 shrink-0 rounded-full object-cover border border-white/5" />
       ) : (
         <div className="h-11 w-11 shrink-0 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm border border-primary/20">{username[0].toUpperCase()}</div>
       )}

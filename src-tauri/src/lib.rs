@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod crypto;
+mod media;
 mod device;
 mod notification;
 mod qr_auth;
@@ -157,6 +158,10 @@ pub fn run() {
             crypto::crypto_restore_key,
             crypto::crypto_qr_ephemeral_keypair,
             crypto::crypto_qr_decrypt,
+            // Media encryption commands (Shield Media: AES-256-GCM)
+            media::media_encrypt,
+            media::media_decrypt,
+            media::media_key_status,
             // QR Auth commands (E2EE key exchange: crypto + broadcast via Supabase Realtime)
             qr_auth::qr_send_e2ee_key,
             // Storage commands (rusqlite, AES-256-GCM через vault)

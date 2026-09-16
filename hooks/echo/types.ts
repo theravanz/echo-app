@@ -8,6 +8,9 @@ export interface UserProfile {
   display_name?: string;
   avatar_url?: string;
   avatar_color?: string;
+  avatar_storage_path?: string | null;
+  avatar_nonce?: string | null;
+  avatar_mime?: string | null;
   bio?: string;
   public_key?: string;
   email?: string;
@@ -22,6 +25,9 @@ export interface Chat {
   display_name?: string;
   avatar_url?: string;
   avatar_color?: string;
+  avatar_storage_path?: string | null;
+  avatar_nonce?: string | null;
+  avatar_mime?: string | null;
   bio?: string;
   public_key?: string;
   lastMessage?: string | null;
