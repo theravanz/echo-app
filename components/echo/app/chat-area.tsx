@@ -44,13 +44,14 @@ interface ChatAreaProps {
   setNewMessage: React.Dispatch<React.SetStateAction<string>>;
   fetchMessages: (chatId: string, userId: string) => void;
   handleSendMessage: (chat: Chat, user: UserProfile, content: string) => void;
+  handleSendVoice: (chat: Chat, user: UserProfile, blob: Blob, durationSec: number) => void;
   isRightPanelOpen: boolean;
   setIsRightPanelOpen: (open: boolean) => void;
 }
 
 export function ChatArea({
   user, selectedChat, isMobile, activeMode, activeTab, onlineUsers, chats, onBack, onCall, onMentionClick,
-  messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage, isRightPanelOpen, setIsRightPanelOpen
+  messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage, handleSendVoice, isRightPanelOpen, setIsRightPanelOpen
 }: ChatAreaProps) {
   const [bgPickerOpen, setBgPickerOpen] = useState(false);
   const [isMediaPickerOpen, setIsMediaPickerOpen] = useState(false);
@@ -203,6 +204,7 @@ export function ChatArea({
             editingMessage={editingMessage}
             setEditingMessage={setEditingMessageSafe}
             onSend={() => handleSendMessage(selectedChat, user!, newMessage)}
+            onSendVoice={(blob, sec) => handleSendVoice(selectedChat, user!, blob, sec)}
             selectedChat={selectedChat}
             user={user}
             isMobile={isMobile}

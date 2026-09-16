@@ -2,6 +2,8 @@
 
 import React, { memo, useRef, useState, useEffect } from "react";
 import { cn } from "@/lib/utils";
+import { motion } from "framer-motion";
+import { loadVoiceUrl, parseVoiceMeta } from "@/lib/voice";
 import { LinkPreview } from "./link-preview";
 import { SecureAvatar } from "./secure-avatar";
 import { CallLogMessage } from "./CallLogMessage";
@@ -133,23 +135,68 @@ function formatDuration(seconds: number) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-function VoiceBubble({ msg, isMe, onContextMenu, innerRef }: { msg: any; isMe: boolean; onContextMenu: (e: React.MouseEvent) => void; innerRef: React.RefObject<HTMLDivElement | null> }) {
+function VoiceBubble({ msg, isMe, onContextMenu, innerRef }: { msg: any; isMe: boolean; onContextMenu?: (e: React.MouseEvent) => void; innerRef?: React.RefObject<HTMLDivElement | null> }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
-  const duration = msg.media_duration ?? 0;
-  function toggle() { if (!audioRef.current) return; playing ? audioRef.current.pause() : audioRef.current.play(); setPlaying(!playing); }
+  const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const meta = (msg as any).voice ?? parseVoiceMeta(msg?.content);
+  const duration = meta?.duration || (msg as any).media_duration || 0;
+
+  async function toggle() {
+    const el = audioRef.current;
+    if (!el) return;
+    if (playing) { el.pause(); setPlaying(false); return; }
+    if (!url) {
+      if (!meta) return;
+      setLoading(true);
+      const u = await loadVoiceUrl(meta, msg.sender_id);
+      setLoading(false);
+      if (!u) return;
+      setUrl(u);
+      requestAnimationFrame(() => {
+        el.play().then(() => setPlaying(true)).catch(() => {});
+      });
+      return;
+    }
+    el.play().then(() => setPlaying(true)).catch(() => {});
+  }
+
   return (
-    <div ref={innerRef} onContextMenu={onContextMenu} className={cn("flex items-center gap-3 rounded-2xl px-4 py-3 min-w-[200px] max-w-[280px]", isMe ? "bg-primary-foreground/95 text-black" : "bg-zinc-800/80 backdrop-blur-md border border-white/5 text-white")}>
-      <audio ref={audioRef} src={msg.media_url} onTimeUpdate={(e) => setProgress(e.currentTarget.currentTime / (duration || e.currentTarget.duration || 1))} onEnded={() => { setPlaying(false); setProgress(0); }} hidden />
-      <button onClick={toggle} className={cn("w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-colors", isMe ? "bg-black text-white hover:bg-zinc-800" : "bg-primary text-white hover:bg-primary/90")}>
-        {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+    <div ref={innerRef} onContextMenu={onContextMenu} className={cn("flex items-center gap-3 rounded-2xl px-4 py-3 min-w-[210px] max-w-[280px]", isMe ? "bg-primary-foreground/95 text-black" : "bg-zinc-800/80 backdrop-blur-md border border-white/5 text-white")}>
+      <audio
+        ref={audioRef}
+        src={url ?? undefined}
+        onTimeUpdate={(e) => setProgress(e.currentTarget.currentTime / (duration || e.currentTarget.duration || 1))}
+        onEnded={() => { setPlaying(false); setProgress(0); }}
+        hidden
+      />
+      <button
+        onClick={toggle}
+        className={cn("w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-colors", isMe ? "bg-black text-white hover:bg-zinc-800" : "bg-primary text-white hover:bg-primary/90", loading && "opacity-70")}
+      >
+        {loading ? (
+          <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+            <path className="opacity-90" d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+        ) : playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
       </button>
-      <div className="relative flex items-center gap-[3px] flex-1 h-5">
+      <div className="relative flex items-center gap-[3px] flex-1 h-5 overflow-hidden">
         {Array.from({ length: 24 }).map((_, i) => {
           const barProgress = i / 24;
           const h = 6 + ((i * 7) % 14);
-          return <div key={i} className="w-[3px] rounded-full transition-colors duration-150" style={{ height: h, background: barProgress <= progress ? (isMe ? "#000" : "currentColor") : isMe ? "#00000030" : "#ffffff30" }} />;
+          const active = barProgress <= progress;
+          return (
+            <motion.div
+              key={i}
+              className="w-[3px] rounded-full"
+              style={{ height: h, background: active ? (isMe ? "#000" : "currentColor") : isMe ? "#00000030" : "#ffffff30", transformOrigin: "center" }}
+              animate={playing ? { scaleY: [1, 1 + ((i * 7) % 10) / 10, 1] } : { scaleY: 1 }}
+              transition={playing ? { repeat: Infinity, duration: 0.7 + (i % 5) * 0.12, ease: "easeInOut", delay: i * 0.04 } : { duration: 0.2 }}
+            />
+          );
         })}
       </div>
       <span className="text-[11px] font-medium opacity-70 shrink-0 tabular-nums">{formatDuration(duration)}</span>
@@ -246,6 +293,27 @@ export const MessageBubble = memo(({
       >
         <div className={cn("flex flex-col", isMe ? "items-end" : "items-start")}>
           <CallLogMessage status={msg.call_status ?? "missed"} duration={Number(msg.call_duration ?? 0)} timestamp={msg.created_at} isMe={isMe} />
+        </div>
+      </div>
+    );
+  }
+
+  // 1.5. ГОЛОСОВЫЕ СООБЩЕНИЯ (E2EE-аудио в приватном bucket)
+  if (msg.type === "voice") {
+    return (
+      <div
+        className={cn(
+          "flex items-end gap-2 group animate-in fade-in slide-in-from-bottom-3 duration-300",
+          "transition-all duration-300 ease-out relative select-none",
+          isMe ? "flex-row-reverse" : "flex-row",
+          isDimmed ? "blur-[4px] opacity-20 pointer-events-none" : "z-50"
+        )}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        onTouchMove={handleTouchMove}
+      >
+        <div className={cn("flex flex-col", isMe ? "items-end" : "items-start")}>
+          <VoiceBubble msg={msg} isMe={isMe} />
         </div>
       </div>
     );

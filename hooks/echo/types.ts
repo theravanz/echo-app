@@ -46,7 +46,13 @@ export interface Message {
   receiver_id: string;
   content: string;
   nonce?: string;
-  type?: 'text' | 'sticker' | 'gif';
+  type?: 'text' | 'sticker' | 'gif' | 'voice' | 'call_log';
+  voice?: {
+    path: string;
+    nonce: string;
+    mime: string;
+    duration: number;
+  } | null;
   status?: 'pending' | 'sent' | 'read';
   created_at: string;
   reply_to_id?: string | null;

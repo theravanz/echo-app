@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased]
+### Добавлено
+- **Голосовые сообщения в `chat-input.tsx`**: hold-to-record (touch + mouse).
+  - `onVoiceBtnDown` — `setPointerCapture`, запоминание точки нажатия; при
+    долгом удержании (>220 мс) — `startVoiceRecording` для **любого**
+    указателя (touch ИЛИ mouse).
+  - `onVoiceBtnMove` — жесты во время записи: свайп вверх → закрепить
+    (`locked`, запись продолжается без удержания), свайп влево/вниз →
+    отмена. Очистка hold-таймера — **только для touch**: микродвижения
+    мыши больше не отбраковывают запись на ПК.
+  - `onVoiceBtnUp` — стоп + отправка (`stopVoiceRecording(true)`), либо
+    стоп по повторному тапу в режиме `locked`.
+  - UI: иконка микрофона ↔ индикатор записи (красная точка + счётчик
+    секунд) ↔ закреплённый микрофон. Использует `lib/voice.ts`
+    (`pickRecorderMime`, `MAX_VOICE_SECONDS`) и `onSendVoice` из
+    `useMessages` → `encryptAndUploadVoice`.
+
 ## [0.3.0] - 2026-09-16
 ### Shield Media — шифрование и сжатие всего медиа
 
