@@ -22,22 +22,24 @@ import { supabase } from "@/lib/supabase";
  */
 
 /** ArrayBuffer -> base64 (без блока на больших файлах, для < ~8 МБ). */
-export function bytesToBase64(buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf);
+export function bytesToBase64(bytes: Uint8Array<ArrayBuffer> | ArrayBuffer): string {
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  const CHUNK = 0x8000;
+  for (let i = 0; i < u8.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(
+      null,
+      u8.subarray(i, i + CHUNK) as unknown as number[],
+    );
   }
   return btoa(binary);
 }
 
-/** base64 -> Uint8Array. */
-export function base64ToBytes(b64: string): Uint8Array {
-  const binary = atob(b64.replace(/\s+/g, ""));
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
+export function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
+  const bin = atob(b64);
+  const u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
 }
 
 export function isSecureEnvelope(nonce?: string | null, data?: string | null): boolean {

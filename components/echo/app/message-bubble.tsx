@@ -14,6 +14,7 @@ import {
   TbRelationOneToOne as RelayIcon,
   TbPlayerPlayFilled as Play,
   TbPlayerPauseFilled as Pause,
+  TbAlertCircle as TbAlertCircle,
 } from "react-icons/tb";
 
 interface MessageBubbleProps {
@@ -135,14 +136,23 @@ function formatDuration(seconds: number) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 
-function VoiceBubble({ msg, isMe, onContextMenu, innerRef }: { msg: any; isMe: boolean; onContextMenu?: (e: React.MouseEvent) => void; innerRef?: React.RefObject<HTMLDivElement | null> }) {
+function VoiceBubble({ msg, isMe, recipientId, onContextMenu, innerRef }: {
+  msg: any;
+  isMe: boolean;
+  recipientId: string;
+  onContextMenu?: (e: React.MouseEvent) => void;
+  innerRef?: React.RefObject<HTMLDivElement | null>;
+}) {
   const audioRef = useRef<HTMLAudioElement>(null);
+  const waveRef = useRef<HTMLDivElement>(null);
   const [playing, setPlaying] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [url, setUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0); // 0..1
+  const [url, setUrl] = useState<string | null>(null);
+  const [dur, setDur] = useState(0);
   const meta = (msg as any).voice ?? parseVoiceMeta(msg?.content);
-  const duration = meta?.duration || (msg as any).media_duration || 0;
+  const metaDur = meta?.duration || (msg as any).media_duration || 0;
+  const total = dur || metaDur;
 
   async function toggle() {
     const el = audioRef.current;
@@ -151,7 +161,7 @@ function VoiceBubble({ msg, isMe, onContextMenu, innerRef }: { msg: any; isMe: b
     if (!url) {
       if (!meta) return;
       setLoading(true);
-      const u = await loadVoiceUrl(meta, msg.sender_id);
+      const u = await loadVoiceUrl(meta, recipientId);
       setLoading(false);
       if (!u) return;
       setUrl(u);
@@ -163,18 +173,55 @@ function VoiceBubble({ msg, isMe, onContextMenu, innerRef }: { msg: any; isMe: b
     el.play().then(() => setPlaying(true)).catch(() => {});
   }
 
+  function seek(e: React.PointerEvent<HTMLDivElement>) {
+    const el = audioRef.current;
+    const wave = waveRef.current;
+    if (!el || !wave || !total) return;
+    const rect = wave.getBoundingClientRect();
+    const ratio = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    el.currentTime = ratio * total;
+    setProgress(ratio);
+  }
+
   return (
-    <div ref={innerRef} onContextMenu={onContextMenu} className={cn("flex items-center gap-3 rounded-2xl px-4 py-3 min-w-[210px] max-w-[280px]", isMe ? "bg-primary-foreground/95 text-black" : "bg-zinc-800/80 backdrop-blur-md border border-white/5 text-white")}>
+    <div
+      ref={innerRef}
+      onContextMenu={onContextMenu}
+      className={cn(
+        // Ширина: резиновая до 288px, но никогда не шире вьюпорта минус хром чата
+        "flex items-center gap-2 md:gap-3 rounded-2xl px-3 py-2.5 md:px-4 md:py-3",
+        "w-[min(288px,calc(100vw-110px))]",
+        isMe
+          ? "bg-primary-foreground/95 text-zinc-900"
+          : "bg-zinc-800/90 border border-white/10 text-white backdrop-blur-md"
+      )}
+    >
       <audio
         ref={audioRef}
         src={url ?? undefined}
-        onTimeUpdate={(e) => setProgress(e.currentTarget.currentTime / (duration || e.currentTarget.duration || 1))}
+        onLoadedMetadata={(e) => {
+          const d = e.currentTarget.duration;
+          if (Number.isFinite(d) && d > 0) setDur(d);
+        }}
+        onTimeUpdate={(e) => {
+          const t = total || e.currentTarget.duration || 1;
+          setProgress(e.currentTarget.currentTime / t);
+        }}
         onEnded={() => { setPlaying(false); setProgress(0); }}
         hidden
       />
+
       <button
         onClick={toggle}
-        className={cn("w-9 h-9 rounded-full flex items-center justify-center shrink-0 transition-colors", isMe ? "bg-black text-white hover:bg-zinc-800" : "bg-primary text-white hover:bg-primary/90", loading && "opacity-70")}
+        aria-label={playing ? "Пауза" : "Воспроизвести"}
+        className={cn(
+          "h-9 w-9 md:h-10 md:w-10 rounded-full flex items-center justify-center shrink-0 transition-all",
+          "hover:scale-105 active:scale-95",
+          isMe
+            ? "bg-zinc-900 text-white hover:bg-zinc-800"
+            : "bg-primary text-white shadow-md shadow-primary/30 hover:bg-primary/90",
+          loading && "opacity-70"
+        )}
       >
         {loading ? (
           <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
@@ -183,23 +230,40 @@ function VoiceBubble({ msg, isMe, onContextMenu, innerRef }: { msg: any; isMe: b
           </svg>
         ) : playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
       </button>
-      <div className="relative flex items-center gap-[3px] flex-1 h-5 overflow-hidden">
-        {Array.from({ length: 24 }).map((_, i) => {
-          const barProgress = i / 24;
+
+      {/* Волна: бары резиновые (flex-1), клик/тап — seek */}
+      <div
+        ref={waveRef}
+        onPointerDown={seek}
+        className="relative flex items-center gap-[2px] flex-1 h-7 md:h-8 min-w-0 cursor-pointer"
+      >
+        {Array.from({ length: 28 }).map((_, i) => {
+          const barProgress = i / 28;
           const h = 6 + ((i * 7) % 14);
           const active = barProgress <= progress;
           return (
             <motion.div
               key={i}
-              className="w-[3px] rounded-full"
-              style={{ height: h, background: active ? (isMe ? "#000" : "currentColor") : isMe ? "#00000030" : "#ffffff30", transformOrigin: "center" }}
+              className="flex-1 min-w-[2px] rounded-full"
+              style={{
+                height: h,
+                background: active
+                  ? (isMe ? "rgb(24 24 27)" : "rgb(var(--primary) / 1)")
+                  : (isMe ? "rgba(24,24,27,0.25)" : "rgba(255,255,255,0.4)"),
+                transformOrigin: "center",
+              }}
               animate={playing ? { scaleY: [1, 1 + ((i * 7) % 10) / 10, 1] } : { scaleY: 1 }}
-              transition={playing ? { repeat: Infinity, duration: 0.7 + (i % 5) * 0.12, ease: "easeInOut", delay: i * 0.04 } : { duration: 0.2 }}
+              transition={playing
+                ? { repeat: Infinity, duration: 0.7 + (i % 5) * 0.12, ease: "easeInOut", delay: i * 0.04 }
+                : { duration: 0.2 }}
             />
           );
         })}
       </div>
-      <span className="text-[11px] font-medium opacity-70 shrink-0 tabular-nums">{formatDuration(duration)}</span>
+
+      <span className="text-[11px] md:text-xs font-medium opacity-80 shrink-0 tabular-nums w-8 text-right">
+        {formatDuration(total)}
+      </span>
     </div>
   );
 }
@@ -300,6 +364,28 @@ export const MessageBubble = memo(({
 
   // 1.5. ГОЛОСОВЫЕ СООБЩЕНИЯ (E2EE-аудио в приватном bucket)
   if (msg.type === "voice") {
+    const meta = parseVoiceMeta(msg?.content);
+    const recipientId = meta?.to
+      ?? (isMe
+        ? (activeChat?.other_user_id ?? activeChat?.participant_id ?? activeChat?.user_id)
+        : user?.id);
+
+    if (!recipientId) {
+      // Не знаем, чьим ключом расшифровывать — честно показываем сломанное
+      return (
+        <div className={cn(
+          "flex items-end gap-2 group animate-in fade-in slide-in-from-bottom-3 duration-300",
+          isMe ? "flex-row-reverse" : "flex-row",
+          isDimmed ? "blur-[4px] opacity-20 pointer-events-none" : "z-50"
+        )}>
+          <div className={cn("flex items-center gap-3 rounded-2xl px-4 py-3 min-w-[210px] bg-zinc-800/80 border border-white/5 text-zinc-400 text-[13px]")}>
+            <TbAlertCircle className="w-4 h-4 text-red-400" />
+            Голосовое не удалось расшифровать
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div
         className={cn(
@@ -313,7 +399,7 @@ export const MessageBubble = memo(({
         onTouchMove={handleTouchMove}
       >
         <div className={cn("flex flex-col", isMe ? "items-end" : "items-start")}>
-          <VoiceBubble msg={msg} isMe={isMe} />
+          <VoiceBubble msg={msg} isMe={isMe} recipientId={recipientId} />
         </div>
       </div>
     );
