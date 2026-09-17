@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Echo",
-  "version": "0.2.7",
+  "version": "0.3.0",
   "identifier": "com.theravanz.echo-tauri",
   "build": {
     "frontendDist": "../out",
@@ -11,17 +11,18 @@
   },
   "app": {
     "windows": [
-      {
-        "title": "Echo",
-        "width": 800,
-        "height": 600,
-        "resizable": true,
-        "fullscreen": false,
-        "visible": true
-      }
-    ],
+    {
+      "title": "Echo",
+      "width": 800,
+      "height": 600,
+      "resizable": true,
+      "fullscreen": false,
+      "visible": true,
+      "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --use-fake-ui-for-media-stream"
+    }
+  ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; connect-src 'self' https://aoxzpqwiwuzypydexfrn.supabase.co wss://aoxzpqwiwuzypydexfrn.supabase.co ws://aoxzpqwiwuzypydexfrn.supabase.co https://api.microlink.io https://fonts.gstatic.com https://cdn.jsdelivr.net https://*.giphy.com https://ipwho.is https://ipinfo.io https://ipapi.co ipc: http://ipc.localhost; font-src 'self' data:; frame-src 'none'; object-src 'none'; media-src 'self' https:;",
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:; connect-src 'self' https://aoxzpqwiwuzypydexfrn.supabase.co wss://aoxzpqwiwuzypydexfrn.supabase.co ws://aoxzpqwiwuzypydexfrn.supabase.co https://api.microlink.io https://fonts.gstatic.com https://cdn.jsdelivr.net https://*.giphy.com https://ipwho.is https://ipinfo.io https://ipapi.co ipc: http://ipc.localhost; font-src 'self' data:; frame-src 'none'; object-src 'none'; media-src 'self' https: blob:;",
       "assetProtocol": {
         "scope": [
           "$APPDATA/**",
@@ -38,6 +39,9 @@
     "icon": [
       "icons/icon.png"
     ],
+    "macOS": {
+    "entitlements": "./Entitlements.plist"
+    },
     "android": {
     }
   },
