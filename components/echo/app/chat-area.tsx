@@ -10,7 +10,15 @@ import { useProfileDetails } from "@/hooks/echo/use-profile-details";
 import { ChatWallpaper, type WallpaperPreset } from "@/components/echo/app/chat-wallpaper";
 import { ChatBackgroundPicker } from "@/components/echo/app/chat-background-picker";
 import { ProfileViewPanel } from "@/components/echo/app/profile-view-panel";
-import { MessageBubble } from "@/components/echo/app/message-bubble";
+import { MessageBubble, type UploadUiState } from "@/components/echo/app/message-bubble";
+import {
+  encryptAndUploadFile,
+  parseFileMeta,
+  openFileMessage,
+  keyUserFor,
+  MAX_FILE_BYTES,
+  type FileUploadHandle,
+} from "@/lib/files";
 import { MessageContextMenu, type ContextMenuTarget } from "@/components/echo/app/message-context-menu";
 import { ChatInput } from "@/components/echo/app/chat-input";
 import { ChatHeader } from "@/components/echo/app/chat-header";
@@ -21,6 +29,7 @@ import {
   TbLock as Lock,
 } from "react-icons/tb";
 import type { UserProfile, Chat, Message, NetworkMode, AppTab } from "@/hooks/echo/types";
+
 
 interface ChatAreaProps {
   user: UserProfile | null;
@@ -75,6 +84,102 @@ export function ChatArea({
   const setEditingMessageSafe = (msg: any) => {
     if (msg) setReplyingTo(null);
     setEditingMessage(msg);
+  };
+
+  // ─── ФАЙЛЫ: upload-стейты + обработчики ───
+  const [uploadStates, setUploadStates] = useState<Map<string, UploadUiState>>(new Map());
+  const fileHandlesRef = useRef<Map<string, FileUploadHandle>>(new Map());
+
+  const otherPartyId = (selectedChat as any)?.other_user_id
+    ?? (selectedChat as any)?.peer_id
+    ?? (selectedChat as any)?.user_id
+    ?? (selectedChat as any)?.participant_id
+    ?? selectedChat?.id;
+
+  const onSendFile = (file: File) => {
+    if (!selectedChat || !user) return;
+    if (file.size > MAX_FILE_BYTES) {
+      toast.error(`Файл больше 10 МБ (${(file.size / 1048576).toFixed(1)} МБ)`);
+      return;
+    }
+    const localId = `file-local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // Оптимистичное сообщение: в content кладём мету с пустыми path/nonce —
+    // FileBubble сразу покажет имя и размер, а кольцо придёт через uploadStates
+    const optimistic: Message = {
+      id: localId,
+      sender_id: user.id,
+      receiver_id: selectedChat.id,
+      type: "file",
+      content: JSON.stringify({
+        path: "", nonce: "",
+        mime: file.type || "application/octet-stream",
+        name: file.name, size: file.size,
+        to: otherPartyId, kind: "file",
+      }),
+      created_at: new Date().toISOString(),
+      status: "sending",
+    } as Message;
+    setMessages(prev => [...prev, optimistic]);
+
+    const handle = encryptAndUploadFile(user.id, otherPartyId, file, {
+      onProgress: (loaded, total) =>
+        setUploadStates(prev => new Map(prev).set(localId, { status: "uploading", loaded, total })),
+      onStatus: (s) =>
+        setUploadStates(prev => {
+          const n = new Map(prev);
+          const cur = n.get(localId) ?? { status: "uploading" as const, loaded: 0, total: 0 };
+          n.set(localId, { ...cur, status: s });
+          return n;
+        }),
+    });
+    fileHandlesRef.current.set(localId, handle);
+
+    handle.metaPromise.then(async (meta) => {
+      const { data: inserted, error } = await supabase.from("messages").insert({
+        sender_id: user.id,
+        receiver_id: selectedChat.id,
+        type: "file",
+        content: JSON.stringify(meta),
+        status: "sent",
+      }).select().single();
+      if (error) throw error;
+
+      setMessages(prev => prev.map(m => m.id === localId ? (inserted as Message) : m));
+      fileHandlesRef.current.delete(localId);
+      setUploadStates(prev => { const n = new Map(prev); n.delete(localId); return n; });
+    }).catch((err) => {
+      fileHandlesRef.current.delete(localId);
+      if (err?.cancelled) {
+        // Пользователь нажал крестик — убираем баббл целиком
+        setMessages(prev => prev.filter(m => m.id !== localId));
+      } else {
+        console.error("[FILE] upload failed:", err);
+        setUploadStates(prev => new Map(prev).set(localId, { status: "error", loaded: 0, total: 0 }));
+        toast.error("Не удалось отправить файл");
+      }
+    });
+  };
+
+  const handleFileCancel = (msg: any) => {
+    fileHandlesRef.current.get(msg?.id)?.cancel();
+  };
+
+  const handleFileResume = (msg: any) => {
+    fileHandlesRef.current.get(msg?.id)?.resume();
+  };
+
+  const handleFileOpen = async (msg: any) => {
+    if (!user) return;
+    const meta = parseFileMeta(msg?.content);
+    if (!meta || !meta.path) return; // ещё льётся — открывать нечего
+    const keyUserId = keyUserFor(msg, meta.to, user.id);
+    try {
+      await openFileMessage(meta, keyUserId);
+    } catch (e) {
+      console.error("[FILE] open failed:", e);
+      toast.error("Не удалось открыть файл");
+    }
   };
 
   useEffect(() => {
@@ -188,6 +293,10 @@ export function ChatArea({
                       e.preventDefault();
                       setContextMenu({ message: msg, isMine, anchorRect: rect });
                     }}
+                    uploadState={uploadStates.get(currentId)}
+                    onFileOpen={handleFileOpen}
+                    onFileCancel={handleFileCancel}
+                    onFileResume={handleFileResume}
                   />
                 );
               })}
@@ -205,6 +314,7 @@ export function ChatArea({
             setEditingMessage={setEditingMessageSafe}
             onSend={() => handleSendMessage(selectedChat, user!, newMessage)}
             onSendVoice={(blob, sec) => handleSendVoice(selectedChat, user!, blob, sec)}
+            onSendFile={onSendFile}
             selectedChat={selectedChat}
             user={user}
             isMobile={isMobile}

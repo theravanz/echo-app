@@ -57,6 +57,8 @@ subtle = "2"
 # Добавить для стикеров:
 image = "0.25"                    # webp, png, jpeg
 zstd = "0.13"                    # декомпрессия .tgs
+tauri-plugin-fs = "2"
+tauri-plugin-opener = "2"
 
 # === WebKitGTK (Linux only) ===
 # Нужен для прямого доступа к WebKitSettings — включить media_stream

@@ -31,7 +31,7 @@ export interface Chat {
   bio?: string;
   public_key?: string;
   lastMessage?: string | null;
-  lastMessageType?: 'text' | 'sticker' | 'gif' | null;
+  lastMessageType?: 'text' | 'sticker' | 'gif' | 'voice' | 'call_log' | 'file' | null;
   lastMessageTime?: string | null;
   last_seen?: string | null;
   unreadCount?: number;
@@ -46,14 +46,14 @@ export interface Message {
   receiver_id: string;
   content: string;
   nonce?: string;
-  type?: 'text' | 'sticker' | 'gif' | 'voice' | 'call_log';
+  type?: 'text' | 'sticker' | 'gif' | 'voice' | 'call_log' | 'file';
   voice?: {
     path: string;
     nonce: string;
     mime: string;
     duration: number;
   } | null;
-  status?: 'pending' | 'sent' | 'read';
+  status?: "sending" | "pending" | "sent" | "read";
   created_at: string;
   reply_to_id?: string | null;
   reply_to?: {

@@ -24,7 +24,11 @@ fn argon_params() -> Result<Params, String> {
 pub fn machine_id() -> Result<String, String> {
     #[cfg(target_os = "linux")]
     {
-        for path in ["/etc/machine-id", "/var/lib/dbus/machine-id", "/proc/sys/kernel/random/boot_id"] {
+        for path in [
+            "/etc/machine-id",
+            "/var/lib/dbus/machine-id",
+            "/proc/sys/kernel/random/boot_id",
+        ] {
             if let Ok(raw) = std::fs::read_to_string(path) {
                 let id = raw.trim().to_string();
                 if !id.is_empty() {
@@ -50,11 +54,7 @@ pub fn machine_id() -> Result<String, String> {
                     if let Some(idx) = line.find("IOPlatformUUID") {
                         let frag = &line[idx..];
                         if let Some(eq) = frag.find('=') {
-                            let uuid = frag[eq + 1..]
-                                .trim()
-                                .trim_matches('"')
-                                .trim()
-                                .to_string();
+                            let uuid = frag[eq + 1..].trim().trim_matches('"').trim().to_string();
                             if !uuid.is_empty() {
                                 return Ok(uuid);
                             }

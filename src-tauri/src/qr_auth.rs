@@ -8,7 +8,10 @@
 //! Сервер видит только ciphertext.
 
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
-use crypto_box::{PublicKey, SecretKey, SalsaBox, aead::{Aead, AeadCore, OsRng}};
+use crypto_box::{
+    aead::{Aead, AeadCore, OsRng},
+    PublicKey, SalsaBox, SecretKey,
+};
 use serde_json::json;
 use tauri::Manager;
 
@@ -40,7 +43,11 @@ pub async fn send_e2ee_key_broadcast(
     // Диагностика: показываем реальный адрес, на который уходит запрос.
     // Если в логе виден https://unconfigured.echo.invalid — на устройстве
     // стоит НЕ этот билд (старая сборка), а не проблема конфигурации.
-    log::info!("[QR-Broadcast] Sending E2EE key to channel auth_{} via {}", session_id, endpoint);
+    log::info!(
+        "[QR-Broadcast] Sending E2EE key to channel auth_{} via {}",
+        session_id,
+        endpoint
+    );
 
     let client = reqwest::Client::new();
     let response = client
@@ -59,7 +66,10 @@ pub async fn send_e2ee_key_broadcast(
         return Err(format!("[QR-Broadcast] RPC returned {}: {}", status, text));
     }
 
-    log::info!("[QR-Broadcast] E2EE key sent to channel auth_{}", session_id);
+    log::info!(
+        "[QR-Broadcast] E2EE key sent to channel auth_{}",
+        session_id
+    );
     Ok(())
 }
 
@@ -90,8 +100,8 @@ pub async fn qr_send_e2ee_key(
     let e2ee_key = BASE64.encode(scalar);
 
     // 1. Распарсить web_pub_key из hex → [u8; 32].
-    let web_pub_bytes = hex::decode(&web_pub_key)
-        .map_err(|e| format!("[QR] Неверный hex web_pub_key: {}", e))?;
+    let web_pub_bytes =
+        hex::decode(&web_pub_key).map_err(|e| format!("[QR] Неверный hex web_pub_key: {}", e))?;
     let web_pub_array: [u8; 32] = web_pub_bytes
         .try_into()
         .map_err(|_| "[QR] web_pub_key должен быть 32 байта".to_string())?;
@@ -137,6 +147,9 @@ pub async fn qr_send_e2ee_key(
     )
     .await?;
 
-    log::info!("[QR] E2EE key exchange complete: channel auth_{}", session_id);
+    log::info!(
+        "[QR] E2EE key exchange complete: channel auth_{}",
+        session_id
+    );
     Ok(())
 }

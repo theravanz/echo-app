@@ -8,6 +8,7 @@ import { generateTempId } from "./use-network-queue";
 import { parseCallLogJson } from "./call-log";
 import { encryptAndUploadVoice, parseVoiceMeta, type VoiceMeta } from "@/lib/voice";
 import type { Message, PendingMessage, Chat, UserProfile } from "./types";
+import { parseFileMeta } from "@/lib/files";
 
 interface UseMessagesReturn {
   messages: Message[];
@@ -91,6 +92,11 @@ export function useMessages(chats: Chat[] = []): UseMessagesReturn {
           // отдельно в bucket `voice`). Дешифратор текста не вызываем.
           if (m.type === "voice") {
             return { ...m, voice: parseVoiceMeta(m.content) } as Message;
+          }
+          // Файлы: content — plaintext JSON-мета (шифротекст лежит отдельно
+          // в bucket `files`). Дешифратор текста не вызываем.
+          if (m.type === "file") {
+            return { ...m, file: parseFileMeta(m.content) } as Message;
           }
           const otherId =
             m.sender_id === currentUserId ? m.receiver_id : m.sender_id;

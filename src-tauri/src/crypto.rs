@@ -14,7 +14,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use bip39::{Language, Mnemonic};
 use crypto_box::{
     aead::{Aead as _, AeadCore as _, OsRng},
-    PublicKey as BoxPublicKey, SecretKey as BoxSecretKey, SalsaBox,
+    PublicKey as BoxPublicKey, SalsaBox, SecretKey as BoxSecretKey,
 };
 use rand::{rngs::OsRng as SaltOsRng, RngCore};
 use serde::{Deserialize, Serialize};
@@ -22,8 +22,8 @@ use sha2::{Digest, Sha256};
 use std::sync::Mutex;
 use subtle::ConstantTimeEq;
 use tauri::{AppHandle, Manager};
-use zeroize::Zeroizing;
 use x25519_dalek::{PublicKey as XPublic, StaticSecret};
+use zeroize::Zeroizing;
 
 use crate::device;
 use crate::storage::StorageManager;
@@ -167,8 +167,8 @@ fn device_encrypt_seed(machine: &str, seed: &[u8]) -> Result<String, String> {
     let mut nonce = [0u8; 12];
     SaltOsRng.fill_bytes(&mut nonce);
 
-    let cipher = Aes256Gcm::new_from_slice(&key[..])
-        .map_err(|e| format!("[E2EE] AES init: {e}"))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(&key[..]).map_err(|e| format!("[E2EE] AES init: {e}"))?;
     drop(key);
 
     let ct = cipher
@@ -186,8 +186,8 @@ fn device_encrypt_seed(machine: &str, seed: &[u8]) -> Result<String, String> {
 /// Расшифровывает seed device-ключом. Если HWID изменился (другая машина) —
 /// вернёт distinct-ошибку `[E2EE] HWID_CHANGED`.
 fn device_decrypt_seed(machine: &str, payload: &str) -> Result<Zeroizing<Vec<u8>>, String> {
-    let wrapped: DeviceBoundPayload = serde_json::from_str(payload)
-        .map_err(|e| format!("[E2EE] payload parse: {e}"))?;
+    let wrapped: DeviceBoundPayload =
+        serde_json::from_str(payload).map_err(|e| format!("[E2EE] payload parse: {e}"))?;
 
     let salt = BASE64
         .decode(&wrapped.salt)
@@ -201,8 +201,8 @@ fn device_decrypt_seed(machine: &str, payload: &str) -> Result<Zeroizing<Vec<u8>
         .decode(&wrapped.ct)
         .map_err(|e| format!("[E2EE] ct decode: {e}"))?;
 
-    let cipher = Aes256Gcm::new_from_slice(&key[..])
-        .map_err(|e| format!("[E2EE] AES init: {e}"))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(&key[..]).map_err(|e| format!("[E2EE] AES init: {e}"))?;
     drop(key);
 
     match cipher.decrypt(AesNonce::from_slice(&nonce), ct.as_ref()) {
@@ -216,7 +216,11 @@ fn device_decrypt_seed(machine: &str, payload: &str) -> Result<Zeroizing<Vec<u8>
 
 /// Внутренний: зашифровать текущий seed (нужно передать seed) и сохранить в БД.
 /// Вызывается из команд Rust после установки ключа.
-pub(crate) fn persist_device_key(app: &AppHandle<tauri::Wry>, user_id: &str, seed: &[u8]) -> Result<(), String> {
+pub(crate) fn persist_device_key(
+    app: &AppHandle<tauri::Wry>,
+    user_id: &str,
+    seed: &[u8],
+) -> Result<(), String> {
     let machine = app.state::<StorageManager>().machine_id();
     let payload = device_encrypt_seed(&machine, seed)?;
     let storage = app.state::<StorageManager>();
@@ -228,7 +232,9 @@ pub(crate) fn persist_device_key(app: &AppHandle<tauri::Wry>, user_id: &str, see
 // ═══════════════════════════════════════════════════════════════════
 
 fn b64_to_32(s: &str) -> Result<[u8; KEY_SIZE], String> {
-    let v = BASE64.decode(s).map_err(|e| format!("base64 decode: {}", e))?;
+    let v = BASE64
+        .decode(s)
+        .map_err(|e| format!("base64 decode: {}", e))?;
     let len = v.len();
     let arr: [u8; KEY_SIZE] = v
         .as_slice()
@@ -572,13 +578,9 @@ pub async fn crypto_qr_decrypt(
     let esk = store.ephemeral_scalar()?;
     let sender = hex_to_32(&sender_pub_key)?;
 
-    let salsa = SalsaBox::new(
-        &BoxPublicKey::from(sender),
-        &BoxSecretKey::from(esk),
-    );
+    let salsa = SalsaBox::new(&BoxPublicKey::from(sender), &BoxSecretKey::from(esk));
 
-    let nonce_bytes = hex::decode(&nonce_hex)
-        .map_err(|e| format!("[crypto] nonce hex: {}", e))?;
+    let nonce_bytes = hex::decode(&nonce_hex).map_err(|e| format!("[crypto] nonce hex: {}", e))?;
     if nonce_bytes.len() != 24 {
         return Err(format!(
             "[crypto] nonce must be 24 bytes, got {}",
@@ -586,8 +588,7 @@ pub async fn crypto_qr_decrypt(
         ));
     }
     let nonce = crypto_box::aead::Nonce::<SalsaBox>::from_slice(&nonce_bytes);
-    let ct = hex::decode(&ciphertext_hex)
-        .map_err(|e| format!("[crypto] ciphertext hex: {}", e))?;
+    let ct = hex::decode(&ciphertext_hex).map_err(|e| format!("[crypto] ciphertext hex: {}", e))?;
 
     let pt = salsa
         .decrypt(nonce, ct.as_slice())
@@ -608,7 +609,9 @@ mod tests {
     #[test]
     fn derivation_exposes_only_public_key() {
         let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-        let seed = Mnemonic::parse_in(Language::English, mnemonic).unwrap().to_seed("");
+        let seed = Mnemonic::parse_in(Language::English, mnemonic)
+            .unwrap()
+            .to_seed("");
         let mut priv_a = [0u8; KEY_SIZE];
         priv_a.copy_from_slice(&seed[..KEY_SIZE]);
 
@@ -623,9 +626,14 @@ mod tests {
     #[test]
     fn derive_encrypt_decrypt_roundtrip() {
         let mnemonic_a = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-        let seed_a = Mnemonic::parse_in(Language::English, mnemonic_a).unwrap().to_seed("");
-        let mnemonic_b = "legal winner thank year wave sausage worth useful legal winner thank yellow";
-        let seed_b = Mnemonic::parse_in(Language::English, mnemonic_b).unwrap().to_seed("");
+        let seed_a = Mnemonic::parse_in(Language::English, mnemonic_a)
+            .unwrap()
+            .to_seed("");
+        let mnemonic_b =
+            "legal winner thank year wave sausage worth useful legal winner thank yellow";
+        let seed_b = Mnemonic::parse_in(Language::English, mnemonic_b)
+            .unwrap()
+            .to_seed("");
 
         let mut priv_a = [0u8; KEY_SIZE];
         let mut priv_b = [0u8; KEY_SIZE];
@@ -647,7 +655,9 @@ mod tests {
             &BoxSecretKey::from(ks_a.private_scalar().unwrap()),
         );
         let nonce = SalsaBox::generate_nonce(&mut rng);
-        let ct = salsa_ab.encrypt(&nonce, b"hello echo e2ee".as_slice()).unwrap();
+        let ct = salsa_ab
+            .encrypt(&nonce, b"hello echo e2ee".as_slice())
+            .unwrap();
 
         // B расшифровывает от A (тот же DH-секрет).
         let salsa_ba = SalsaBox::new(
@@ -662,7 +672,9 @@ mod tests {
     #[test]
     fn sign_verify_roundtrip() {
         let mnemonic = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
-        let seed = Mnemonic::parse_in(Language::English, mnemonic).unwrap().to_seed("");
+        let seed = Mnemonic::parse_in(Language::English, mnemonic)
+            .unwrap()
+            .to_seed("");
         let mut priv_a = [0u8; KEY_SIZE];
         priv_a.copy_from_slice(&seed[..KEY_SIZE]);
 
@@ -699,7 +711,10 @@ mod tests {
         // Шифруем и расшифровываем — OK (тот же machine).
         let machine = "machine-a-static-id";
         let payload = device_encrypt_seed(machine, &seed).unwrap();
-        assert!(!payload.contains(&hex::encode(seed)), "payload must not contain plaintext");
+        assert!(
+            !payload.contains(&hex::encode(seed)),
+            "payload must not contain plaintext"
+        );
         let dec = device_decrypt_seed(machine, &payload).unwrap();
         assert_eq!(dec.as_slice(), &seed[..]);
 
@@ -710,7 +725,11 @@ mod tests {
         let salt = [0xAAu8; 16];
         let key_a = device::device_key(machine_a, &salt).unwrap();
         let key_b = device::device_key(machine_b, &salt).unwrap();
-        assert_ne!(key_a.as_slice(), key_b.as_slice(), "different HWIDs -> different keys");
+        assert_ne!(
+            key_a.as_slice(),
+            key_b.as_slice(),
+            "different HWIDs -> different keys"
+        );
 
         // Убеждаемся, что AES-GCM даст сбой при расшифровке чужим ключом.
         let mut nonce = [0u8; 12];
@@ -721,7 +740,9 @@ mod tests {
             .unwrap();
         let cipher_b = Aes256Gcm::new_from_slice(&key_b[..]).unwrap();
         assert!(
-            cipher_b.decrypt(AesNonce::from_slice(&nonce), ct.as_ref()).is_err(),
+            cipher_b
+                .decrypt(AesNonce::from_slice(&nonce), ct.as_ref())
+                .is_err(),
             "must fail with wrong device key"
         );
     }

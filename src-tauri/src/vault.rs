@@ -54,33 +54,47 @@ impl Vault {
         eprintln!("[Vault] Key path: {:?}", key_path);
 
         let key_bytes = if key_path.exists() {
-            let data = std::fs::read(&key_path)
-                .map_err(|e| format!("[Vault] Read error: {}", e))?;
+            let data =
+                std::fs::read(&key_path).map_err(|e| format!("[Vault] Read error: {}", e))?;
             if data.len() != KEY_SIZE {
                 return Err(format!(
-                    "[Vault] Invalid key size: {} (expected {})", data.len(), KEY_SIZE
+                    "[Vault] Invalid key size: {} (expected {})",
+                    data.len(),
+                    KEY_SIZE
                 ));
             }
             let mut key = [0u8; KEY_SIZE];
             key.copy_from_slice(&data);
-            log::info!("[Vault] Key LOADED from existing file ({} bytes)", data.len());
+            log::info!(
+                "[Vault] Key LOADED from existing file ({} bytes)",
+                data.len()
+            );
             key
         } else {
             log::info!("[Vault] No key file yet — vault not ready until derive_from_seed");
             // Возвращаем None -> vault остаётся неготовым; ключ появится при
             // `derive_from_seed` (из секрета пользователя), а не из случайного файла.
-            *self.key.lock().map_err(|e| format!("[Vault] Lock: {}", e))? = None;
+            *self
+                .key
+                .lock()
+                .map_err(|e| format!("[Vault] Lock: {}", e))? = None;
             return Ok(());
         };
 
-        *self.key.lock().map_err(|e| format!("[Vault] Lock: {}", e))? =
-            Some(Zeroizing::new(key_bytes));
+        *self
+            .key
+            .lock()
+            .map_err(|e| format!("[Vault] Lock: {}", e))? = Some(Zeroizing::new(key_bytes));
         self.ready.store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
     /// Деривировать ключ Vault из секрета пользователя (SHA-256) и персистнуть.
-    pub fn derive_key(&self, app: &AppHandle<tauri::Wry>, user_secret: &[u8]) -> Result<(), String> {
+    pub fn derive_key(
+        &self,
+        app: &AppHandle<tauri::Wry>,
+        user_secret: &[u8],
+    ) -> Result<(), String> {
         let key: [u8; KEY_SIZE] = Sha256::digest(user_secret).into();
         self.set_key_and_persist(app, key)
     }
@@ -91,31 +105,41 @@ impl Vault {
         self.set_key_and_persist(app, key)
     }
 
-    fn set_key_and_persist(&self, app: &AppHandle<tauri::Wry>, key: [u8; KEY_SIZE]) -> Result<(), String> {
+    fn set_key_and_persist(
+        &self,
+        app: &AppHandle<tauri::Wry>,
+        key: [u8; KEY_SIZE],
+    ) -> Result<(), String> {
         let key_path = self.get_key_path(app);
         if let Some(parent) = key_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("[Vault] Mkdir error: {}", e))?;
+            std::fs::create_dir_all(parent).map_err(|e| format!("[Vault] Mkdir error: {}", e))?;
         }
-        #[cfg(unix)] {
+        #[cfg(unix)]
+        {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::write(&key_path, &key)
-                .map_err(|e| format!("[Vault] Write error: {}", e))?;
+            std::fs::write(&key_path, &key).map_err(|e| format!("[Vault] Write error: {}", e))?;
             std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).ok();
         }
-        #[cfg(not(unix))] {
-            std::fs::write(&key_path, &key)
-                .map_err(|e| format!("[Vault] Write error: {}", e))?;
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&key_path, &key).map_err(|e| format!("[Vault] Write error: {}", e))?;
         }
-        *self.key.lock().map_err(|e| format!("[Vault] Lock: {}", e))? = Some(Zeroizing::new(key));
+        *self
+            .key
+            .lock()
+            .map_err(|e| format!("[Vault] Lock: {}", e))? = Some(Zeroizing::new(key));
         self.ready.store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
     /// Zero-ить ключ в памяти и удалить файл `.echo_key.bin` (logout).
     pub fn clear(&self, app: &AppHandle<tauri::Wry>) -> Result<(), String> {
-        self.key.lock().map_err(|e| format!("[Vault] Lock: {}", e))?.take();
-        self.ready.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.key
+            .lock()
+            .map_err(|e| format!("[Vault] Lock: {}", e))?
+            .take();
+        self.ready
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         let key_path = self.get_key_path(app);
         if key_path.exists() {
             std::fs::remove_file(&key_path)
@@ -125,11 +149,10 @@ impl Vault {
     }
 
     fn get_key_path(&self, app: &AppHandle<tauri::Wry>) -> PathBuf {
-        let app_dir = app.path().app_data_dir()
-            .unwrap_or_else(|_| {
-                eprintln!("[Vault] WARN: app_data_dir() failed, using ./data");
-                std::path::PathBuf::from("./data")
-            });
+        let app_dir = app.path().app_data_dir().unwrap_or_else(|_| {
+            eprintln!("[Vault] WARN: app_data_dir() failed, using ./data");
+            std::path::PathBuf::from("./data")
+        });
         app_dir.join(KEY_FILE)
     }
 
@@ -137,17 +160,21 @@ impl Vault {
         if !self.is_ready() {
             return Err("[Vault] NOT READY".to_string());
         }
-        let key_guard = self.key.lock().map_err(|e| format!("[Vault] Lock: {}", e))?;
+        let key_guard = self
+            .key
+            .lock()
+            .map_err(|e| format!("[Vault] Lock: {}", e))?;
         let key = key_guard.as_ref().ok_or("[Vault] NOT INITIALIZED")?;
-        let cipher = Aes256Gcm::new_from_slice(&key[..])
-            .map_err(|e| format!("[Vault] AES init: {}", e))?;
+        let cipher =
+            Aes256Gcm::new_from_slice(&key[..]).map_err(|e| format!("[Vault] AES init: {}", e))?;
         drop(key_guard);
 
         let mut nonce_bytes = [0u8; NONCE_SIZE];
         OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        let ciphertext = cipher.encrypt(nonce, plaintext.as_bytes())
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext.as_bytes())
             .map_err(|e| format!("[Vault] Encrypt failed: {}", e))?;
         let checksum = hex::encode(Sha256::digest(plaintext.as_bytes()));
 
@@ -162,26 +189,34 @@ impl Vault {
         if !self.is_ready() {
             return Err("[Vault] NOT READY".to_string());
         }
-        let key_guard = self.key.lock().map_err(|e| format!("[Vault] Lock: {}", e))?;
+        let key_guard = self
+            .key
+            .lock()
+            .map_err(|e| format!("[Vault] Lock: {}", e))?;
         let key = key_guard.as_ref().ok_or("[Vault] NOT INITIALIZED")?;
-        let cipher = Aes256Gcm::new_from_slice(&key[..])
-            .map_err(|e| format!("[Vault] AES init: {}", e))?;
+        let cipher =
+            Aes256Gcm::new_from_slice(&key[..]).map_err(|e| format!("[Vault] AES init: {}", e))?;
         drop(key_guard);
 
-        let nonce_bytes = BASE64.decode(&payload.nonce)
+        let nonce_bytes = BASE64
+            .decode(&payload.nonce)
             .map_err(|e| format!("[Vault] Nonce decode: {}", e))?;
         let nonce = Nonce::from_slice(&nonce_bytes);
-        let ciphertext = BASE64.decode(&payload.data)
+        let ciphertext = BASE64
+            .decode(&payload.data)
             .map_err(|e| format!("[Vault] Data decode: {}", e))?;
 
-        let plaintext = cipher.decrypt(nonce, ciphertext.as_ref())
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext.as_ref())
             .map_err(|e| format!("[Vault] Decrypt FAILED: {}", e))?;
-        let result = String::from_utf8(plaintext)
-            .map_err(|e| format!("[Vault] UTF-8: {}", e))?;
+        let result = String::from_utf8(plaintext).map_err(|e| format!("[Vault] UTF-8: {}", e))?;
 
         let expected = hex::encode(Sha256::digest(result.as_bytes()));
         if expected != payload.checksum {
-            return Err(format!("[Vault] Checksum MISMATCH (got {}, expected {})", payload.checksum, expected));
+            return Err(format!(
+                "[Vault] Checksum MISMATCH (got {}, expected {})",
+                payload.checksum, expected
+            ));
         }
 
         Ok(result)
@@ -193,8 +228,8 @@ impl Vault {
     }
 
     pub fn decrypt_from_json(&self, json_str: &str) -> Result<String, String> {
-        let payload: EncryptedPayload = serde_json::from_str(json_str)
-            .map_err(|e| format!("[Vault] JSON parse: {}", e))?;
+        let payload: EncryptedPayload =
+            serde_json::from_str(json_str).map_err(|e| format!("[Vault] JSON parse: {}", e))?;
         self.decrypt(&payload)
     }
 }

@@ -29,7 +29,6 @@ use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-
 // ═══════════════════════════════════════════════════════════════════
 // DTO (Data Transfer Objects) — интерфейсы с фронтендом
 // ═══════════════════════════════════════════════════════════════════
@@ -93,8 +92,14 @@ const MACHINE_ID_FILE: &str = "machine.id";
 
 /// Миграции, выполняемые при старте (идемпотентно, до Vault).
 const MIGRATIONS: &[(&str, &str)] = &[
-    ("V001__initial_schema", include_str!("../migrations/V001__initial_schema.sql")),
-    ("V002__split_auth_progress", include_str!("../migrations/V002__split_auth_progress.sql")),
+    (
+        "V001__initial_schema",
+        include_str!("../migrations/V001__initial_schema.sql"),
+    ),
+    (
+        "V002__split_auth_progress",
+        include_str!("../migrations/V002__split_auth_progress.sql"),
+    ),
 ];
 
 /// Прочитать или создать 16-байтовую соль для DB-ключа.
@@ -217,9 +222,8 @@ fn migrate_legacy_to_sqlcipher(db_path: &PathBuf, key_hex: &str) -> Result<(), S
     }
 
     // Источник открываем ПЛАЙНТЕКСТ-соединением (до Phase 1 файл не зашифрован).
-    let src = Connection::open(db_path).map_err(|e| {
-        format!("[Storage] open legacy source: {e}")
-    })?;
+    let src =
+        Connection::open(db_path).map_err(|e| format!("[Storage] open legacy source: {e}"))?;
 
     // Приаттачиваем пустой целевой файл как КЛЮЧЕВАННУЮ БД и экспортируем.
     // (Никакого явного BEGIN/COMMIT: DETACH запрещён внутри транзакции, а
@@ -321,9 +325,13 @@ impl Pool {
         let (tx, rx) = mpsc::channel();
         for _ in 0..size {
             let c = open_keyed(path, key_hex)?;
-            tx.send(c).map_err(|e| format!("[Storage] pool send: {e}"))?;
+            tx.send(c)
+                .map_err(|e| format!("[Storage] pool send: {e}"))?;
         }
-        Ok(Pool { tx, rx: Mutex::new(rx) })
+        Ok(Pool {
+            tx,
+            rx: Mutex::new(rx),
+        })
     }
 
     /// Взять соединение из пула; возвращается в пул в Drop guard.
@@ -331,7 +339,10 @@ impl Pool {
         let rx = self.rx.lock().map_err(|e| e.to_string())?;
         let conn = rx.recv().map_err(|_| "[Storage] pool closed".to_string())?;
         drop(rx);
-        Ok(PoolGuard { pool: self, conn: Some(conn) })
+        Ok(PoolGuard {
+            pool: self,
+            conn: Some(conn),
+        })
     }
 }
 
@@ -393,8 +404,8 @@ impl StorageManager {
         let salt_path = app_dir.join(SALT_FILE);
 
         // Device-bound ключ: Argon2id(HWID+salt) -> HKDF -> "echo/db-cipher".
-        let salt = load_or_create_salt(&salt_path)
-            .unwrap_or_else(|e| panic!("[Storage] salt: {e}"));
+        let salt =
+            load_or_create_salt(&salt_path).unwrap_or_else(|e| panic!("[Storage] salt: {e}"));
         // Стабильный идентификатор устройства. iOS/Android часто не имеют
         // `hostname`/субпроцессов -> device::machine_id() пуст. Тогда генерируем
         // персистентный UUID, иначе device-bound ключ не переживёт перезапуск.
@@ -402,8 +413,8 @@ impl StorageManager {
             .ok()
             .filter(|m| !m.is_empty())
             .unwrap_or_else(|| load_or_create_machine_id(&app_dir));
-        let key_hex = derive_db_key_hex(&machine, &salt)
-            .unwrap_or_else(|e| panic!("[Storage] db key: {e}"));
+        let key_hex =
+            derive_db_key_hex(&machine, &salt).unwrap_or_else(|e| panic!("[Storage] db key: {e}"));
 
         // Определяем состояние файла и открываем пул.
         let pool = {
@@ -443,7 +454,10 @@ impl StorageManager {
         }
 
         eprintln!("[Storage] INIT COMPLETE (SQLCipher + pool, {POOL_SIZE} conns)");
-        Self { conn: pool, machine_id: machine }
+        Self {
+            conn: pool,
+            machine_id: machine,
+        }
     }
 
     // ── Phase 0: device-bound E2EE-ключ (только Rust, payload — зашифрованный seed) ──
@@ -495,16 +509,17 @@ fn encrypt_field(vault: &Vault, plaintext: &str) -> Result<String, String> {
 fn decrypt_field_safe(vault: &Vault, encrypted_json: &str) -> Result<String, rusqlite::Error> {
     if !vault.is_ready() {
         return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
-            std::io::Error::new(std::io::ErrorKind::Other, "Vault not ready")
+            std::io::Error::new(std::io::ErrorKind::Other, "Vault not ready"),
         )));
     }
     if encrypted_json.is_empty() {
         return Ok(String::new());
     }
     vault.decrypt_from_json(encrypted_json).map_err(|e| {
-        rusqlite::Error::ToSqlConversionFailure(Box::new(
-            std::io::Error::new(std::io::ErrorKind::Other, e)
-        ))
+        rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e,
+        )))
     })
 }
 
@@ -526,7 +541,7 @@ pub async fn save_session(
     expires_at: i64,
 ) -> Result<(), String> {
     eprintln!("[Storage] save_session CALLED for user: {}", user_id);
-    
+
     let encrypted_access = encrypt_field(&vault, &access_token)?;
     let encrypted_refresh = encrypt_field(&vault, refresh_token.as_deref().unwrap_or(""))?;
 
@@ -605,10 +620,7 @@ pub async fn get_session(
 }
 
 #[tauri::command]
-pub async fn delete_session(
-    manager: State<'_, StorageManager>,
-    id: String,
-) -> Result<(), String> {
+pub async fn delete_session(manager: State<'_, StorageManager>, id: String) -> Result<(), String> {
     let conn = manager.conn.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM sessions WHERE id = ?1", params![id])
         .map_err(|e| format!("[Storage] delete_session: {}", e))?;
@@ -793,10 +805,7 @@ pub async fn get_devices(
 }
 
 #[tauri::command]
-pub async fn delete_device(
-    manager: State<'_, StorageManager>,
-    id: String,
-) -> Result<(), String> {
+pub async fn delete_device(manager: State<'_, StorageManager>, id: String) -> Result<(), String> {
     let conn = manager.conn.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM devices WHERE id = ?1", params![id])
         .map_err(|e| format!("[Storage] delete_device: {}", e))?;
@@ -928,45 +937,58 @@ pub async fn get_theme(
     let mut stmt = conn
         .prepare("SELECT id, name, author, description, is_builtin, css_variables, metadata_json, created_at, updated_at FROM themes WHERE id = ?1 LIMIT 1")
         .map_err(|e| format!("[Storage] get_theme prepare: {}", e))?;
-    let theme = stmt.query_row(params![id], |row| {
-        Ok(Theme {
-            id: row.get(0)?, name: row.get(1)?, author: row.get(2)?,
-            description: row.get(3)?, is_builtin: row.get::<_, i32>(4)? != 0,
-            css_variables: row.get(5)?, metadata_json: row.get(6)?,
-            created_at: row.get(7)?, updated_at: row.get(8)?,
+    let theme = stmt
+        .query_row(params![id], |row| {
+            Ok(Theme {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                author: row.get(2)?,
+                description: row.get(3)?,
+                is_builtin: row.get::<_, i32>(4)? != 0,
+                css_variables: row.get(5)?,
+                metadata_json: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
         })
-    }).ok();
+        .ok();
     Ok(theme)
 }
 
 #[tauri::command]
-pub async fn get_all_themes(
-    manager: State<'_, StorageManager>,
-) -> Result<Vec<Theme>, String> {
+pub async fn get_all_themes(manager: State<'_, StorageManager>) -> Result<Vec<Theme>, String> {
     let conn = manager.conn.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare("SELECT id, name, author, description, is_builtin, css_variables, metadata_json, created_at, updated_at FROM themes ORDER BY is_builtin DESC, name ASC")
         .map_err(|e| format!("[Storage] get_all_themes prepare: {}", e))?;
-    let themes: Vec<Theme> = stmt.query_map([], |row| {
-        Ok(Theme {
-            id: row.get(0)?, name: row.get(1)?, author: row.get(2)?,
-            description: row.get(3)?, is_builtin: row.get::<_, i32>(4)? != 0,
-            css_variables: row.get(5)?, metadata_json: row.get(6)?,
-            created_at: row.get(7)?, updated_at: row.get(8)?,
+    let themes: Vec<Theme> = stmt
+        .query_map([], |row| {
+            Ok(Theme {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                author: row.get(2)?,
+                description: row.get(3)?,
+                is_builtin: row.get::<_, i32>(4)? != 0,
+                css_variables: row.get(5)?,
+                metadata_json: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
+            })
         })
-    }).map_err(|e| format!("[Storage] get_all_themes query: {}", e))?
-    .filter_map(|r| r.ok()).collect();
+        .map_err(|e| format!("[Storage] get_all_themes query: {}", e))?
+        .filter_map(|r| r.ok())
+        .collect();
     Ok(themes)
 }
 
 #[tauri::command]
-pub async fn delete_theme(
-    manager: State<'_, StorageManager>,
-    id: String,
-) -> Result<(), String> {
+pub async fn delete_theme(manager: State<'_, StorageManager>, id: String) -> Result<(), String> {
     let conn = manager.conn.lock().map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM themes WHERE id = ?1 AND is_builtin = 0", params![id])
-        .map_err(|e| format!("[Storage] delete_theme: {}", e))?;
+    conn.execute(
+        "DELETE FROM themes WHERE id = ?1 AND is_builtin = 0",
+        params![id],
+    )
+    .map_err(|e| format!("[Storage] delete_theme: {}", e))?;
     Ok(())
 }
 
@@ -975,10 +997,13 @@ pub async fn get_active_theme_id(
     manager: State<'_, StorageManager>,
 ) -> Result<Option<String>, String> {
     let conn = manager.conn.lock().map_err(|e| e.to_string())?;
-    let result = conn.query_row(
-        "SELECT value FROM app_settings WHERE key = 'active_theme_id'",
-        [], |row| row.get::<_, String>(0),
-    ).ok();
+    let result = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = 'active_theme_id'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
     Ok(result)
 }
 
@@ -1026,14 +1051,19 @@ pub async fn get_chat_wallpaper(
     let mut stmt = conn
         .prepare("SELECT chat_id, wallpaper_type, wallpaper_value, blur, opacity, brightness, updated_at FROM chat_wallpapers WHERE chat_id = ?1 LIMIT 1")
         .map_err(|e| format!("[Storage] get_chat_wallpaper prepare: {}", e))?;
-    let wallpaper = stmt.query_row(params![chat_id], |row| {
-        Ok(ChatWallpaper {
-            chat_id: row.get(0)?, wallpaper_type: row.get(1)?,
-            wallpaper_value: row.get(2)?, blur: row.get(3)?,
-            opacity: row.get(4)?, brightness: row.get(5)?,
-            updated_at: row.get(6)?,
+    let wallpaper = stmt
+        .query_row(params![chat_id], |row| {
+            Ok(ChatWallpaper {
+                chat_id: row.get(0)?,
+                wallpaper_type: row.get(1)?,
+                wallpaper_value: row.get(2)?,
+                blur: row.get(3)?,
+                opacity: row.get(4)?,
+                brightness: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
         })
-    }).ok();
+        .ok();
     Ok(wallpaper)
 }
 
@@ -1043,11 +1073,13 @@ pub async fn delete_chat_wallpaper(
     chat_id: String,
 ) -> Result<(), String> {
     let conn = manager.conn.lock().map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM chat_wallpapers WHERE chat_id = ?1", params![chat_id])
-        .map_err(|e| format!("[Storage] delete_chat_wallpaper: {}", e))?;
+    conn.execute(
+        "DELETE FROM chat_wallpapers WHERE chat_id = ?1",
+        params![chat_id],
+    )
+    .map_err(|e| format!("[Storage] delete_chat_wallpaper: {}", e))?;
     Ok(())
 }
-
 
 // ═══════════════════════════════════════════════════════════════════
 // Тесты (Phase 1): SQLCipher-миграция legacy БД + connection pool.
@@ -1232,4 +1264,3 @@ pub async fn delete_auth_progress(
         .map_err(|e| format!("[Auth] delete_progress: {e}"))?;
     Ok(())
 }
-
