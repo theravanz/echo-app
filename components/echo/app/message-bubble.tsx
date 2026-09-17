@@ -388,9 +388,11 @@ export const MessageBubble = memo(({
 
     return (
       <div
+        ref={bubbleRef}
+        onContextMenu={handleContextMenu}
         className={cn(
           "flex items-end gap-2 group animate-in fade-in slide-in-from-bottom-3 duration-300",
-          "transition-all duration-300 ease-out relative select-none",
+          "transition-all duration-300 ease-out relative select-none [-webkit-touch-callout:none]",
           isMe ? "flex-row-reverse" : "flex-row",
           isDimmed ? "blur-[4px] opacity-20 pointer-events-none" : "z-50"
         )}
