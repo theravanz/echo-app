@@ -1,9 +1,7 @@
 {
   "identifier": "default",
   "description": "enables the default permissions",
-  "windows": [
-    "main"
-  ],
+  "windows": ["main"],
   "permissions": [
     "core:default",
     "notification:default",
@@ -15,6 +13,25 @@
     "core:event:default",
     "deep-link:default",
     "shell:default",
-    "shell:allow-open"
+    "shell:allow-open",
+    "fs:default",
+    "fs:allow-appcache-read-recursive",
+    "fs:allow-appcache-write-recursive",
+    "fs:allow-download-write-recursive",
+    "opener:default",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        { "path": "$CACHE/**" },
+        { "path": "$DOWNLOAD/**" }
+      ]
+    },
+    {
+      "identifier": "opener:allow-reveal-item-in-dir",
+      "allow": [
+        { "path": "$CACHE/**" },
+        { "path": "$DOWNLOAD/**" }
+      ]
+    }
   ]
 }

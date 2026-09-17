@@ -67,8 +67,8 @@ pub async fn media_encrypt(
     let mut nonce_bytes = [0u8; NONCE_SIZE];
     SaltOsRng.fill_bytes(&mut nonce_bytes);
 
-    let cipher = Aes256Gcm::new_from_slice(&key[..])
-        .map_err(|e| format!("[Media] AES init: {e}"))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(&key[..]).map_err(|e| format!("[Media] AES init: {e}"))?;
 
     let ct = cipher
         .encrypt(AesNonce::from_slice(&nonce_bytes), &plaintext[..])
@@ -106,8 +106,8 @@ pub async fn media_decrypt(
         .decode(&data)
         .map_err(|e| format!("[Media] data decode: {e}"))?;
 
-    let cipher = Aes256Gcm::new_from_slice(&key[..])
-        .map_err(|e| format!("[Media] AES init: {e}"))?;
+    let cipher =
+        Aes256Gcm::new_from_slice(&key[..]).map_err(|e| format!("[Media] AES init: {e}"))?;
 
     let pt = cipher
         .decrypt(AesNonce::from_slice(&nonce_bytes), ct.as_ref())
@@ -160,7 +160,9 @@ mod tests {
 
         // Чужой ключ — GCM-тег не сойдётся, падаем.
         let cipher_b = Aes256Gcm::new_from_slice(&key_b[..]).unwrap();
-        assert!(cipher_b.decrypt(AesNonce::from_slice(&nonce_bytes), ct.as_ref()).is_err());
+        assert!(cipher_b
+            .decrypt(AesNonce::from_slice(&nonce_bytes), ct.as_ref())
+            .is_err());
     }
 }
 

@@ -73,7 +73,11 @@ pub struct NotificationManager {
 }
 
 impl NotificationManager {
-    pub fn new(app_handle: AppHandle<tauri::Wry>, supabase_url: String, supabase_anon_key: String) -> Self {
+    pub fn new(
+        app_handle: AppHandle<tauri::Wry>,
+        supabase_url: String,
+        supabase_anon_key: String,
+    ) -> Self {
         Self {
             state: Mutex::new(NotificationState::new(supabase_url, supabase_anon_key)),
             app_handle,
@@ -83,7 +87,9 @@ impl NotificationManager {
     pub fn update_settings(&self, settings: NotificationSettings) -> Result<(), String> {
         let mut state = self.state.lock().map_err(|e| e.to_string())?;
         state.settings = settings.clone();
-        let _ = self.app_handle.emit("notification-settings-changed", settings);
+        let _ = self
+            .app_handle
+            .emit("notification-settings-changed", settings);
         Ok(())
     }
 
@@ -112,7 +118,10 @@ impl NotificationManager {
     ) -> Result<(), String> {
         use tauri_plugin_notification::NotificationExt;
 
-        let notif = self.app_handle.notification().builder()
+        let notif = self
+            .app_handle
+            .notification()
+            .builder()
             .title(&title)
             .body(&body);
 
@@ -156,16 +165,16 @@ impl NotificationManager {
             let mut last_seen_id: Option<String> = None;
 
             // Filter: only messages where the user is sender or receiver
-            let or_filter = format!(
-                "(receiver_id.eq.{},sender_id.eq.{})",
-                user_id, user_id
-            );
+            let or_filter = format!("(receiver_id.eq.{},sender_id.eq.{})", user_id, user_id);
 
             loop {
                 poll_interval.tick().await;
 
                 let params = [
-                    ("select", "id,sender_id,receiver_id,content,nonce,type,created_at,status"),
+                    (
+                        "select",
+                        "id,sender_id,receiver_id,content,nonce,type,created_at,status",
+                    ),
                     ("order", "created_at.desc"),
                     ("limit", "10"),
                     ("or", &or_filter),

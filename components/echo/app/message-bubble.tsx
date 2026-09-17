@@ -16,6 +16,8 @@ import {
   TbPlayerPauseFilled as Pause,
   TbAlertCircle as TbAlertCircle,
 } from "react-icons/tb";
+import { TbX as X, TbDownload, TbPhoto, TbVideo, TbMusic, TbFile, TbFileText, TbFileZip, TbRefresh } from "react-icons/tb";
+import { parseFileMeta, type UploadStatus } from "@/lib/files";
 
 interface MessageBubbleProps {
   msg: any;
@@ -27,7 +29,11 @@ interface MessageBubbleProps {
   onEdit: (msg: any) => void;
   onContextMenu?: (e: React.MouseEvent, msg: any, isMine: boolean, rect: DOMRect) => void;
   onMentionClick?: (username: string) => void;
-  isDimmed?: boolean; // <-- ЕДИНСТВЕННЫЙ ПРОП
+  isDimmed?: boolean;
+    uploadState?: UploadUiState;
+  onFileOpen?: (msg: any) => void;
+  onFileCancel?: (msg: any) => void;
+  onFileResume?: (msg: any) => void;
 }
 
 // --- Helpers ---
@@ -134,6 +140,92 @@ function formatDuration(seconds: number) {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+export interface UploadUiState { status: UploadStatus; loaded: number; total: number; }
+
+const formatBytes = (n: number) => n < 1024 ? `${n} Б` : n < 1048576 ? `${(n / 1024).toFixed(1)} КБ` : `${(n / 1048576).toFixed(1)} МБ`;
+
+const fileIcon = (mime: string, name: string) => {
+  if (mime.startsWith("image/")) return TbPhoto;
+  if (mime.startsWith("video/")) return TbVideo;
+  if (mime.startsWith("audio/")) return TbMusic;
+  if (/\.pdf$/i.test(name)) return TbFileText;
+  if (/\.(zip|rar|7z|tar|gz)$/i.test(name)) return TbFileZip;
+  return TbFile;
+};
+
+// Кольцо прогресса с кнопкой (TG-стиль)
+function RingButton({ progress, paused, isMe, onClick }: { progress: number; paused: boolean; isMe: boolean; onClick: () => void }) {
+  const R = 13, C = 2 * Math.PI * R;
+  const indeterminate = !paused && progress <= 0; // шифрование/старт — «карусель»
+  return (
+    <div className="relative w-9 h-9 shrink-0">
+      <svg viewBox="0 0 36 36" className="w-9 h-9 -rotate-90">
+        <circle cx="18" cy="18" r={R} fill="none" strokeWidth="3" className="stroke-current opacity-20" />
+        {!indeterminate && (
+          <circle cx="18" cy="18" r={R} fill="none" strokeWidth="3" strokeLinecap="round" className="stroke-current"
+            strokeDasharray={C} strokeDashoffset={C * (1 - Math.min(1, progress))} />
+        )}
+      </svg>
+      {indeterminate && (
+        <svg viewBox="0 0 36 36" className="absolute inset-0 w-9 h-9 -rotate-90 animate-spin">
+          <circle cx="18" cy="18" r={R} fill="none" strokeWidth="3" strokeLinecap="round" className="stroke-current" strokeDasharray={`${C * 0.3} ${C}`} />
+        </svg>
+      )}
+      <button onClick={(e) => { e.stopPropagation(); onClick(); }} className="absolute inset-0 flex items-center justify-center">
+        {paused ? <Play className="w-3.5 h-3.5" /> : <X className="w-4 h-4" />}
+      </button>
+    </div>
+  );
+}
+
+function FileBubble({ msg, isMe, upload, onOpen, onCancel, onResume, onContextMenu, innerRef }: {
+  msg: any; isMe: boolean; upload?: UploadUiState;
+  onOpen?: () => void; onCancel?: () => void; onResume?: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void; innerRef?: React.RefObject<HTMLDivElement | null>;
+}) {
+  const meta = parseFileMeta(msg?.content);
+  if (!meta) return null;
+  const Icon = fileIcon(meta.mime, meta.name);
+  const uploading = upload?.status === "uploading";
+  const paused = upload?.status === "paused";
+  const failed = upload?.status === "error";
+  const progress = upload && upload.total > 0 ? upload.loaded / upload.total : 0;
+  const done = !upload;
+
+  return (
+    <div ref={innerRef} onContextMenu={onContextMenu}
+      onClick={() => { if (failed) onResume?.(); else if (done) onOpen?.(); }}
+      className={cn(
+        "flex items-center gap-3 rounded-2xl px-3 py-2.5 select-none cursor-pointer",
+        "w-[min(300px,calc(100vw-110px))] min-w-[220px]",
+        isMe ? "bg-primary-foreground/95 text-zinc-900" : "bg-zinc-800/90 border border-white/10 text-white backdrop-blur-md",
+        failed && "border-red-500/40"
+      )}>
+      <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center shrink-0", isMe ? "bg-zinc-900/10" : "bg-white/[0.07]")}>
+        <Icon className="w-5 h-5 opacity-80" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-[13.5px] font-semibold truncate">{meta.name}</div>
+        <div className="text-[11px] opacity-70 tabular-nums mt-0.5">
+          {failed ? "Не отправлено — нажмите для повтора"
+            : paused ? `${formatBytes(meta.size)} · пауза`
+            : uploading ? `${formatBytes(meta.size)} · ${Math.round(progress * 100)}%`
+            : formatBytes(meta.size)}
+        </div>
+      </div>
+      {uploading || paused ? (
+        <RingButton progress={progress} paused={paused} isMe={isMe} onClick={paused ? onResume! : onCancel!} />
+      ) : failed ? (
+        <div className="w-9 h-9 rounded-full flex items-center justify-center bg-red-500/15 text-red-500 shrink-0"><TbRefresh className="w-4 h-4" /></div>
+      ) : (
+        <div className={cn("w-9 h-9 rounded-full flex items-center justify-center shrink-0", isMe ? "bg-zinc-900/10" : "bg-white/[0.07]")}>
+          <TbDownload className="w-4 h-4 opacity-60" />
+        </div>
+      )}
+    </div>
+  );
 }
 
 function VoiceBubble({ msg, isMe, recipientId, onContextMenu, innerRef }: {
@@ -288,13 +380,16 @@ function ImageBubble({ msg, onContextMenu, innerRef }: { msg: any; onContextMenu
 // --- Main Component ---
 
 export const MessageBubble = memo(({
-  msg, isMe, showAvatar, activeChat, user, onReply, onEdit, onContextMenu, onMentionClick, isDimmed
+  msg, isMe, showAvatar, activeChat, user, onReply, onEdit, onContextMenu, onMentionClick, isDimmed,
+  uploadState, onFileOpen, onFileCancel, onFileResume
 }: MessageBubbleProps) => {
   const bubbleRef = useRef<HTMLDivElement>(null);
   const isJumbo = isJumboEmoji(msg.content, msg.type);
   const isMedia = msg.type === "sticker" || msg.type === "gif" || msg.type === "image" || msg.type === "video_note";
   const time = new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const touchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const ac = activeChat as any;
+  const otherPartyId: string | undefined = ac?.other_user_id ?? ac?.peer_id ?? ac?.user_id ?? ac?.participant_id;
 
   function handleContextMenu(e: React.MouseEvent) {
     e.preventDefault();
@@ -362,16 +457,32 @@ export const MessageBubble = memo(({
     );
   }
 
+  if (msg.type === "file") {
+    const meta = parseFileMeta(msg?.content);
+    return (
+      <div ref={bubbleRef} onContextMenu={handleContextMenu}
+        onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} onTouchMove={handleTouchMove}
+        className={cn(
+          "flex items-end gap-2 group animate-in fade-in slide-in-from-bottom-3 duration-300 relative select-none [-webkit-touch-callout:none]",
+          isMe ? "flex-row-reverse" : "flex-row",
+          isDimmed ? "blur-[4px] opacity-20 pointer-events-none" : "z-50"
+        )}>
+        <div className={cn("flex flex-col min-w-0 max-w-full", isMe ? "items-end" : "items-start")}>
+          <FileBubble msg={msg} isMe={isMe} upload={uploadState}
+            onOpen={() => onFileOpen?.(msg)} onCancel={() => onFileCancel?.(msg)} onResume={() => onFileResume?.(msg)} />
+        </div>
+      </div>
+    );
+  }
+
   // 1.5. ГОЛОСОВЫЕ СООБЩЕНИЯ (E2EE-аудио в приватном bucket)
   if (msg.type === "voice") {
     const meta = parseVoiceMeta(msg?.content);
-    const recipientId = meta?.to
-      ?? (isMe
-        ? (activeChat?.other_user_id ?? activeChat?.participant_id ?? activeChat?.user_id)
-        : user?.id);
+    // КЛЮЧ = вторая сторона DH: свои → meta.to (шифровали на получателя),
+    // входящие → sender_id (шифровали на нас)
+    const keyUserId = isMe ? (meta?.to ?? otherPartyId ?? msg.sender_id) : msg.sender_id;
 
-    if (!recipientId) {
-      // Не знаем, чьим ключом расшифровывать — честно показываем сломанное
+    if (!keyUserId) {
       return (
         <div className={cn(
           "flex items-end gap-2 group animate-in fade-in slide-in-from-bottom-3 duration-300",
@@ -401,7 +512,7 @@ export const MessageBubble = memo(({
         onTouchMove={handleTouchMove}
       >
         <div className={cn("flex flex-col", isMe ? "items-end" : "items-start")}>
-          <VoiceBubble msg={msg} isMe={isMe} recipientId={recipientId} />
+          <VoiceBubble msg={msg} isMe={isMe} recipientId={keyUserId} />
         </div>
       </div>
     );

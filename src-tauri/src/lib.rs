@@ -1,8 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod crypto;
-mod media;
 mod device;
+mod media;
 mod notification;
 mod qr_auth;
 mod stickers;
@@ -81,13 +81,13 @@ fn init_storage_manager(app: &AppHandle<tauri::Wry>) {
     } else {
         log::error!("[Storage] app_data_dir FAILED");
     }
-    
+
     if let Ok(dir) = app.path().app_local_data_dir() {
         log::info!("[Storage] app_local_data_dir: {:?}", dir);
     } else {
         log::error!("[Storage] app_local_data_dir FAILED");
     }
-    
+
     let manager = StorageManager::new(app);
     app.manage(manager);
     log::info!("[Storage] Manager initialized (rusqlite monopoly)");
@@ -111,6 +111,8 @@ fn init_vault(app: &AppHandle<tauri::Wry>) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_fs::init())
         // tauri-plugin-sql УДАЛЁН — монополия rusqlite
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init())

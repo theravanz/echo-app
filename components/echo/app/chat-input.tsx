@@ -54,11 +54,12 @@ interface ChatInputProps {
   isFullPickerOpen: boolean;
   onToggleFullPicker: () => void;
   onSendVoice?: (blob: Blob, durationSec: number) => void;
+  onSendFile?: (file: File) => void;
 }
 
 export function ChatInput({
   newMessage, setNewMessage, replyingTo, setReplyingTo, editingMessage, setEditingMessage,
-  onSend, selectedChat, user, isMobile, textareaRef, isFullPickerOpen, onToggleFullPicker, onSendVoice,
+  onSend, selectedChat, user, isMobile, textareaRef, isFullPickerOpen, onToggleFullPicker, onSendVoice, onSendFile,
 }: ChatInputProps) {
   const localTextareaRef = useRef<HTMLTextAreaElement>(null);
   const taRef = textareaRef || localTextareaRef;
@@ -177,6 +178,7 @@ export function ChatInput({
   const ring2Ref = useRef<HTMLSpanElement>(null);
   const onSendVoiceRef = useRef(onSendVoice);
   const movedRef = useRef(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { onSendVoiceRef.current = onSendVoice; }, [onSendVoice]);
 
   const buzz = (ms: number) => { try { navigator.vibrate?.(ms); } catch {} };
@@ -547,7 +549,23 @@ export function ChatInput({
                 transition={{ duration: 0.15 }}
                 className="flex items-center gap-0.5"
               >
-                <Button variant="ghost" size="icon" className="w-9 h-9 md:w-10 md:h-10 rounded-xl text-zinc-500 hover:text-primary hover:bg-primary/10 transition-colors">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) onSendFile?.(f);
+                    e.currentTarget.value = ""; // сброс — повторный выбор того же файла тоже сработает
+                  }}
+                />
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => fileInputRef.current?.click()}
+                  title="Прикрепить файл (до 10 МБ)"
+                  className="w-9 h-9 md:w-10 md:h-10 rounded-xl text-zinc-500 hover:text-primary hover:bg-primary/10 transition-colors"
+                >
                   <Paperclip className="w-[18px] h-[18px]" />
                 </Button>
 
