@@ -1,64 +1,87 @@
 # Changelog
 
-## [Unreleased]
-### Добавлено
-- **Голосовые сообщения в `chat-input.tsx`**: hold-to-record (touch + mouse).
-  - `onVoiceBtnDown` — `setPointerCapture`, запоминание точки нажатия; при
-    долгом удержании (>220 мс) — `startVoiceRecording` для **любого**
-    указателя (touch ИЛИ mouse).
-  - `onVoiceBtnMove` — жесты во время записи: свайп вверх → закрепить
-    (`locked`, запись продолжается без удержания), свайп влево/вниз →
-    отмена. Очистка hold-таймера — **только для touch**: микродвижения
-    мыши больше не отбраковывают запись на ПК.
-  - `onVoiceBtnUp` — стоп + отправка (`stopVoiceRecording(true)`), либо
-    стоп по повторному тапу в режиме `locked`.
-  - UI: иконка микрофона ↔ индикатор записи (красная точка + счётчик
-    секунд) ↔ закреплённый микрофон. Использует `lib/voice.ts`
-    (`pickRecorderMime`, `MAX_VOICE_SECONDS`) и `onSendVoice` из
-    `useMessages` → `encryptAndUploadVoice`.
-
-## [0.3.0] - 2026-09-16
-### Shield Media — шифрование и сжатие всего медиа
+## [0.3.0] - 2026-09-18
+### Shield Media, голосовые, файлы и raw-bytes IPC — полный E2EE-контур медиа
 
 #### Добавлено
 - **Клиентское шифрование медиа (Rust `media.rs`)**: медиа шифруется
   AES-256-GCM **до** загрузки в Supabase Storage. Медиа-ключ —
   детерминированный `HKDF-SHA256(ikm = E2EE seed, info = "echo/media")`
-  из уже загруженного в `KeyStore` сида: ключ никогда не покидает Rust,
-  отдельного секрета и нового UX-флоу нет. Команды: `media_encrypt`,
-  `media_decrypt`, `media_key_status`. Unit-тесты: roundtrip + отказ
-  на чужом ключе.
+  из уже загруженного в `KeyStore` сида: ключ никогда не покидает Rust.
+  Команды: `media_encrypt`, `media_decrypt`, `media_key_status`.
+  Unit-тесты: roundtrip + отказ на чужом ключе.
 - **Приватные bucket'ы + RLS** (`0007_media_privacy.sql`):
   `avatars`, `tracks`, `publications`, `stories` → `public = false`.
-  `getPublicUrl` больше не используется: чтение — только для
-  аутентифицированных через короткоживущий signed-URL,
-  запись/удаление — только владельцу
-  (`storage.foldername(name)[1] = auth.uid()`).
-  По прямой ссылке в браузере — только AES-GCM шифротекст.
-- **Фронтенд-слой**: `lib/media.ts` (encrypt/decrypt/compress),
+  Чтение — только аутентифицированным через короткоживущий signed-URL,
+  запись/удаление — только владельцу. По прямой ссылке — только шифротекст.
+- **Фронтенд-слой Shield**: `lib/media.ts` (encrypt/decrypt/compress),
   `hooks/echo/use-secure-media.ts` (`loadSecureMediaUrl` +
-  `useSecureMediaUrl`: signed-URL → скачивание → расшифровка в Rust →
-  кэшированный `blob:` URL), компоненты `secure-image.tsx` /
-  `secure-avatar.tsx` (безопасный рендер, в т.ч. внутри `.map()`,
-  с fallback на legacy-URL/инициалы).
+  `useSecureMediaUrl`), компоненты `secure-image.tsx` / `secure-avatar.tsx`.
+- **Сжатие «как в Telegram»**: canvas-ресайз + WebP Q82
+  (аватар ≤512px, обложки ≤1000px, публикации/истории ≤1440px);
+  в БД — `storage_path` + `nonce` + `mime` вместо публичных URL
+  (`0008_media_columns.sql`).
+- **Голосовые сообщения (E2EE + Shield-хранение)**: hold-to-record
+  (touch + mouse), свайп вверх → закрепление, свайп влево → отмена,
+  живые круги громкости (WebAudio AnalyserNode, без ререндеров).
+  Запись — webm/opus (Chromium) или mp4 (WebKit), mime в мете.
+- **Файловые сообщения (≤10 МБ)**: прогресс-кольцо в TG-стиле
+  (отмена/пауза/повтор), seek-плеер голосовых, drag & drop файлов
+  в окно (desktop): геометрический hit-test, блюр-оверлей ChatArea,
+  подсветка чата + отложенное открытие (600 мс).
+- **Загрузка**: TUS-probe с авто-fallback на POST + ретраи при обрыве
+  сети (~64 с). Кэш в AppCache, открытие системным приложением,
+  reveal в Finder как fallback, «Скачать» в Downloads из контекст-меню.
+- **Raw-bytes IPC для медиа**: `crypto_encrypt_bytes` /
+  `crypto_decrypt_bytes` (raw body: `[32B pub][plain]` → `[24B nonce][ct]`)
+  — desktop/iOS; `crypto_*_bytes_json` (base64) — Android (raw body там
+  невозможен). Общая криптология в `encrypt_inner`/`decrypt_inner` →
+  шифротекст `v: 2` идентичен на всех транспортах
+  (кросс-инвариант зафиксирован тестом).
+- Лимит 10 МБ на трёх уровнях (клиент, бакет, TUS-Upload-Length);
+  удаление медиа из Storage при «удалить у всех».
+
+#### Исправлено
+- **Расшифровка медиа строилась неверным DH-секретом** — ключ определяется
+  второй стороной (`meta.to` для своих, `sender` для входящих), а не
+  sender всегда. Добавлено поле `to` в VoiceMeta/FileMeta.
+- Файловые сообщения проходили текстовый decrypt-пайплайн →
+  «[E2EE Data Error]»/невидимость после перезагрузки.
+- `BaseDirectory.Cache` vs `appCacheDir()` mismatch — файлы «исчезали»
+  после перезапуска.
+- Context menu не работал на voice/file бабблах.
+- Hold-to-record на ПК: очистка hold-таймера при микродвижениях мыши
+  отбраковывала запись — таймер чистится только для touch.
+- Починен тест `device_bound_roundtrip_and_hwid_change` в `crypto.rs`.
 
 #### Изменено
-- **Сжатие изображений «как в Telegram»**: canvas-ресайз + WebP Q82.
-  Аватар ≤512px, обложки ≤1000px, публикации/истории ≤1440px — легко,
-  без заметной потери качества.
-- Загрузка аватара, трека (аудио+обложка), публикаций и историй теперь
-  сжатая + зашифрованная; в БД пишутся `storage_path` + `nonce` + `mime`
-  вместо публичных URL (`0008_media_columns.sql`).
-- Отображение защищённого медиа подключено в: профиль (3 уровня
-  аватара), шапка чата, сайдбар (список + поиск), мини-карточка
-  упоминания, обложка «сейчас играет», сетка публикаций.
-- Legacy-медиа (залитые раньше по публичным ссылкам) продолжают
-  отображаться по прежним ссылкам до перезагрузки.
+- Медиа-конвейер (voice/files) переведён с двойного base64 на сырые
+  байты: −25% IPC payload, −62% пиковая память JS на 7.4 МБ файле.
+  Мета: `v: 2`; legacy-сообщения играются через старый путь.
+- Транспорт IPC выбирается детерминированно по UA (Android → json,
+  остальные → raw). Транспорт не влияет на формат хранения.
+- Отображение защищённого медиа подключено: профиль (3 уровня аватара),
+  шапка чата, сайдбар (список + поиск), мини-карточка упоминания,
+  обложка «сейчас играет», сетка публикаций.
+- Legacy-медиа (залитые по публичным ссылкам) продолжают отображаться
+  по прежним ссылкам.
+
+#### Инварианты (НЕ нарушать)
+- Hold-таймер записи НЕ отменяется движением мыши (ПК сломан дважды).
+- Ключ расшифровки медиа = вторая сторона DH, не sender.
+- `String::from_utf8` запрещён в media-командах (plaintext — произвольные
+  байты).
+- `elementFromPoint` врёт во время нативного drag — только
+  getBoundingClientRect.
+- over-события Tauri v2 НЕ содержат `paths` — гарды на paths убивают их.
+- `BaseDirectory.Cache` ≠ `appCacheDir()` — читать/писать одну директорию.
+- Новый type в `messages_type_check` — только полным списком
+  существующих типов.
 
 #### Прочее
-- Починен устаревший тест `device_bound_roundtrip_and_hwid_change`
-  в `crypto.rs` (сигнатура `device_encrypt/decrypt_seed`).
 - `crypto.rs`: `KEY_SIZE` экспортирован (`pub`) для `media.rs`.
+- Транспорт-пробник (raw IPC) на MockRuntime: 5/5; cargo test 18/18;
+  Node-тест раскладки байтов 8/8.
 
 ## [0.2.9] - 2026-09-16
 ## [Фаза 1] — SQLCipher + версионированные миграции
