@@ -4,9 +4,16 @@ import * as tus from "tus-js-client";
 import { invoke } from "@tauri-apps/api/core";
 import { supabase } from "@/lib/supabase";
 import { base64ToBytes, bytesToBase64 } from "@/lib/media";
+import { decryptBytes, encryptBytes, MEDIA_VERSION_RAW } from "@/lib/crypto";
 import { BaseDirectory, writeFile, mkdir, exists } from "@tauri-apps/plugin-fs";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { appCacheDir, join } from "@tauri-apps/api/path";
+
+/** Диагностические логи (кэш/размеры) — только на время отладки. */
+const DEBUG = false;
+const dbg = (...args: unknown[]) => {
+  if (DEBUG) console.log("[FILE]", ...args);
+};
 
 export const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 МБ
 export const FILES_BUCKET = "files";
@@ -19,6 +26,12 @@ export interface FileMeta {
   size: number;
   to: string;
   kind: "file";
+  /**
+   * Формат хранения. 2 = plaintext это СЫРЫЕ байты файла (NaCL box через
+   * raw-bytes IPC / json-вариант на Android). Отсутствует у старых сообщений
+   * (plaintext был base64-строкой) — они читаются legacy-командой crypto_decrypt.
+   */
+  v?: number;
 }
 
 export type UploadStatus = "uploading" | "paused" | "error";
@@ -52,9 +65,12 @@ export function parseFileMeta(content: unknown): FileMeta | null {
         name: typeof raw.name === "string" ? raw.name : "file",
         size: Number(raw.size) || 0,
         to: raw.to, kind: "file",
+        v: typeof raw.v === "number" && Number.isFinite(raw.v) ? raw.v : undefined,
       };
     }
-  } catch { /* ignore */ }
+  } catch (e) {
+    console.error("[CRYPTO-BYTES] [FILE] parseFileMeta: content не JSON:", e);
+  }
   return null;
 }
 
@@ -233,23 +249,24 @@ export function encryptAndUploadFile(
       const pubkey = await getPublicKey(receiverId);
       if (!pubkey) throw new Error("Публичный ключ получателя не найден");
 
-      const plainB64 = bytesToBase64(await file.arrayBuffer());
-      const enc = await invoke<{ ciphertext: string; nonce: string }>(
-        "crypto_encrypt", { recipientPubkey: pubkey, plaintext: plainB64 },
-      );
+      // v:2 — шифруем СЫРЫЕ байты файла (base64-обёртка убрана).
+      const plain = new Uint8Array(await file.arrayBuffer());
+      const enc = await encryptBytes(pubkey, plain);
       if (cancelled || paused) return;
       nonce = enc.nonce;
 
-      cipher = new Blob([base64ToBytes(enc.ciphertext)], { type: "application/octet-stream" });
+      cipher = new Blob([enc.cipher], { type: "application/octet-stream" });
+      dbg("upload: plain", plain.length, "→ cipher", enc.cipher.length);
       path = `${senderId}/file-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.enc`;
       const { data: { session } } = await supabase.auth.getSession();
       token = session?.access_token ?? "";
 
       await uploadOnce();
       if (cancelled || paused) return;
-      finish({ path, nonce, mime: file.type || "application/octet-stream", name: file.name, size: file.size, to: receiverId, kind: "file" });
+      finish({ path, nonce, mime: file.type || "application/octet-stream", name: file.name, size: file.size, to: receiverId, kind: "file", v: MEDIA_VERSION_RAW });
     } catch (e: any) {
       if (cancelled || paused || e?.paused) return;
+      console.error("[CRYPTO-BYTES] [FILE] upload failed:", e);
       cb.onStatus("error");
       fail(e);
     }
@@ -275,6 +292,7 @@ export function encryptAndUploadFile(
           finish({ path, nonce, mime: file.type || "application/octet-stream", name: file.name, size: file.size, to: receiverId, kind: "file" });
         }).catch((e) => {
           if (cancelled || paused || e?.paused) return;
+          console.error("[CRYPTO-BYTES] [FILE] upload resume failed:", e);
           cb.onStatus("error");
         });
       } else {
@@ -300,9 +318,26 @@ async function downloadFileBytes(meta: FileMeta, keyUserId: string): Promise<Uin
   if (error || !signed?.signedUrl) throw new Error("Не удалось получить ссылку");
   const res = await fetch(signed.signedUrl);
   if (!res.ok) throw new Error(`Скачивание: ${res.status}`);
-  const cipherB64 = bytesToBase64(await res.arrayBuffer());
-  const plainB64 = await invoke<string>("crypto_decrypt", { senderPubkey: pubkey, ciphertext: cipherB64, nonce: meta.nonce });
-  return base64ToBytes(plainB64);
+  const buf = new Uint8Array(await res.arrayBuffer());
+  dbg("download: cipher", buf.length, "| v", meta.v, "| mime", meta.mime);
+
+  try {
+    // v:2 → СЫРЫЕ байты (raw-bytes IPC / json-вариант на Android).
+    // Иначе — legacy-файл: plaintext был base64-строкой.
+    if (meta.v === MEDIA_VERSION_RAW) {
+      return await decryptBytes(pubkey, meta.nonce, buf);
+    }
+    const plainB64 = await invoke<string>("crypto_decrypt", {
+      senderPubkey: pubkey,
+      ciphertext: bytesToBase64(buf),
+      nonce: meta.nonce,
+    });
+    return base64ToBytes(plainB64);
+  } catch (e) {
+    // Не глотаем: вызывающий код (openFileMessage) покажет ошибку пользователю.
+    console.error("[CRYPTO-BYTES] [FILE] decrypt failed (v:", meta.v, "):", e);
+    throw e;
+  }
 }
 
 const CACHE_SUBDIR = "echo-files";
@@ -314,14 +349,14 @@ export async function ensureCachedFile(meta: FileMeta, keyUserId: string): Promi
   const ext = meta.name.includes(".") ? meta.name.slice(meta.name.lastIndexOf(".")) : "";
   const rel = `${CACHE_SUBDIR}/${safeName(meta.name.replace(/\.[^.]+$/, ""))}-${hash(meta.path)}${ext}`;
   const cached = await exists(rel, { baseDir: BaseDirectory.AppCache });
-  console.warn("[FILE-CACHE] exists:", cached, "| rel:", rel);
+  dbg("[FILE-CACHE] exists:", cached, "| rel:", rel);
   if (!cached) {
-    console.warn("[FILE-CACHE] скачиваю...");
+    dbg("[FILE-CACHE] скачиваю...");
     const bytes = await downloadFileBytes(meta, keyUserId);
-    console.warn("[FILE-CACHE] скачано байт:", bytes.length);
+    dbg("[FILE-CACHE] скачано байт:", bytes.length);
     await mkdir(CACHE_SUBDIR, { baseDir: BaseDirectory.AppCache, recursive: true });
     await writeFile(rel, bytes, { baseDir: BaseDirectory.AppCache });
-    console.warn("[FILE-CACHE] записано");
+    dbg("[FILE-CACHE] записано");
   }
   return rel;
 }
