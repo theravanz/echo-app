@@ -4,6 +4,32 @@
 ### Shield Media, голосовые, файлы и raw-bytes IPC — полный E2EE-контур медиа
 
 #### Добавлено
+- **Системное открытие файлов на мобильных** (`src-tauri/src/file_open.rs`):
+  команды `open_file_system(path, mime)` и `open_file_ios(path)`.
+  • **Android** — `FileProvider.getUriForFile()` (content:// URI) + `Intent.createChooser(ACTION_VIEW)`
+    с `FLAG_GRANT_READ_URI_PERMISSION`: юзер выбирает приложение, как в Telegram.
+    authority собирается в рантайме из applicationId (`Context.getPackageName()` + `.fileprovider`) —
+    хардкода нет, смена applicationId в gradle ничего не ломает. mime — честный, из меты файла.
+    Нет вьюера для mime (`queryIntentActivities` пуст или `ActivityNotFoundException`) →
+    `Err("no-app-for-mime")`. Дополнительно: нет файла по пути → `Err("file-not-found")`.
+  • **iOS** — Swift-мост `gen/apple/Sources/app/EchoFileOpener.swift`
+    (`@_cdecl("echo_open_file_ios")`): `QLPreviewController` с одним `QLPreviewItem`,
+    презентация модалкой поверх rootViewController с анимацией (системный предпросмотр).
+    Rust вызывает его через `run_on_main_thread` (UIKit — только main thread) и ждёт код ответа.
+    tauri-plugin-скелет не нужен: Swift-файл компилируется в тот же бинарник.
+  • На не-мобильных таргетах обе команды → `Err("unsupported")`; desktop-путь `openPath` не тронут.
+- `gen/android/.../res/xml/file_paths.xml`: корни `cache-path` (AppCache = `Activity.getCacheDir()`,
+  куда пишет `ensureCachedFile`), `files-path`, `external-cache-path`, `external-files-path`,
+  `external-path` — иначе `getUriForFile()` падает с IllegalArgumentException.
+- `<queries>` (ACTION_VIEW + `mimeType="*/*"`) в `AndroidManifest.xml`: без него на Android 11+
+  `queryIntentActivities()` не видит чужие приложения и проверка «нет вьюера» врала бы.
+- **Мини-плеер аудио-файлов** (`components/echo/app/audio-file-bubble.tsx`): файлы с
+  `meta.mime.startsWith("audio/")` играются прямо в баббле — круглая Play/Pause, ЛИНЕЙНЫЙ
+  прогресс-бар (волна осталась только у голосовых, чтобы их не путать), длительность из
+  `loadedmetadata` («—:—» пока неизвестна), seek кликом по бару, повтор после конца — с начала,
+  спиннер на месте кнопки при загрузке. Ленивая загрузка: сеть/расшифровка только по первому
+  Play (`ensureCachedFile` → `readFile` → `blob:` URL); blob живёт в компоненте и
+  `revokeObjectURL()` на размонтировании (глобального кэша, как `voiceUrlCache`, нет).
 - **Клиентское шифрование медиа (Rust `media.rs`)**: медиа шифруется
   AES-256-GCM **до** загрузки в Supabase Storage. Медиа-ключ —
   детерминированный `HKDF-SHA256(ikm = E2EE seed, info = "echo/media")`
@@ -32,6 +58,13 @@
 - **Загрузка**: TUS-probe с авто-fallback на POST + ретраи при обрыве
   сети (~64 с). Кэш в AppCache, открытие системным приложением,
   reveal в Finder как fallback, «Скачать» в Downloads из контекст-меню.
+- `lib/files.ts` → `openFileMessage`: платформенная ветка (`openPlatform()`):
+  android → `invoke("open_file_system", { path: abs, mime })`, ios → `invoke("open_file_ios", { path: abs })`,
+  desktop → прежний `openPath`. Абсолютный путь логируется в `[OPEN-MOBILE]` ДО вызова;
+  ошибки мобильной ветки → тост «Нет приложения для этого файла» / «Не удалось открыть файл».
+- `message-bubble.tsx`: `FileBubble` ветвится по mime — `audio/*` (и файл уже залит,
+  `!uploadState`) → `AudioFileBubble`, всё остальное (video/*, документы, архивы) → как было.
+  `VoiceBubble`, `ensureCachedFile`, `keyUserFor`, `meta.to` не тронуты (инварианты целы).
 - **Raw-bytes IPC для медиа**: `crypto_encrypt_bytes` /
   `crypto_decrypt_bytes` (raw body: `[32B pub][plain]` → `[24B nonce][ct]`)
   — desktop/iOS; `crypto_*_bytes_json` (base64) — Android (raw body там
@@ -82,6 +115,11 @@
 - `crypto.rs`: `KEY_SIZE` экспортирован (`pub`) для `media.rs`.
 - Транспорт-пробник (raw IPC) на MockRuntime: 5/5; cargo test 18/18;
   Node-тест раскладки байтов 8/8.
+- Проверки релиза: `cargo check` (desktop) и `cargo check --target
+  aarch64-linux-android` — 0 ошибок (из `file_open.rs` предупреждений нет);
+  `npx tsc --noEmit` — чисто. `xcodebuild`/Xcode на Linux-машине недоступен:
+  Swift проверен ревью и подключён через `project.pbxproj`; живой прогон
+  (PNG/PDF/md/mp4 + mp3) — на устройствах (S25, iPhone 13 Pro).
 
 ## [0.2.9] - 2026-09-16
 ## [Фаза 1] — SQLCipher + версионированные миграции

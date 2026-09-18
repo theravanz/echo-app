@@ -142,6 +142,7 @@ dependencies = [
  "hex",
  "hkdf",
  "image",
+ "jni",
  "log",
  "rand 0.8.8",
  "reqwest 0.11.27",
