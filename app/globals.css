@@ -427,4 +427,11 @@
   body.echo-color-override .border-white\/20 {
     border-color: color-mix(in oklch, var(--surface-white) 20%, transparent) !important;
   }
+
+  .drag-target {
+    outline: 2px solid var(--primary);
+    outline-offset: -2px;
+    background: color-mix(in oklab, var(--primary) 12%, transparent);
+    transition: outline-color 0.15s ease, background-color 0.15s ease;
+  }
 }

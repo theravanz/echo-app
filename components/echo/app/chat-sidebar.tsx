@@ -192,7 +192,7 @@ export function ChatSidebar({
           </div>
         )}
         {chats.map(chat => (
-          <button key={chat.id} onClick={() => onSelectChat(chat)}
+          <button key={chat.id} data-dropchat={chat.id} onClick={() => onSelectChat(chat)}
             className={cn("w-full flex items-center gap-4 p-3 md:p-4 rounded-2xl transition-all duration-500 relative group", selectedChat?.id === chat.id ? "bg-primary/10" : "hover:bg-accent/40")}>
             <div className="relative shrink-0">
               <div className="w-14 h-14 rounded-full border-2 border-transparent group-hover:border-primary/20 transition-all flex items-center justify-center text-primary font-bold text-lg overflow-hidden shadow-2xl"
