@@ -42,6 +42,7 @@
     "@supabase/supabase-js": "^2.105.4",
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-fs": "~2.5.2",
+    "@tauri-apps/plugin-log": "~2.9.1",
     "@tauri-apps/plugin-notification": "^2.4.0",
     "@tauri-apps/plugin-opener": "~2.5.5",
     "@tauri-apps/plugin-sql": "^2.4.0",

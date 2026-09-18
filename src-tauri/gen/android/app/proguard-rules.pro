@@ -19,3 +19,10 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+
+# ── Echo: JNI-мост Rust → Kotlin ─────────────────────────────────────
+# Rust (file_open.rs) вызывает MainActivity.echoOpenFileExternally() через
+# JNI по точному имени метода. R8 в release-сборке (isMinifyEnabled = true)
+# без этого правила переименовывает/вырезает метод → java.lang.NoSuchMethodError
+# на UI-потоке и FATAL-краш приложения при тапе на файл.
+-keep class com.theravanz.echo_tauri.MainActivity { *; }

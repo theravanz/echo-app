@@ -236,7 +236,15 @@ pub fn run() {
             stickers::is_mobile,
         ])
         .setup(|app| {
-            if cfg!(debug_assertions) {
+            // Логгер: на десктопе — только в debug-сборке (читается из
+            // терминала), на мобильных — ВСЕГДА, включая release: таргет
+            // Stdout на Android уходит в logcat (android_logger), на iOS — в
+            // os_log (Console.app). Без этого release-сборка на устройстве
+            // немая: не видно ни JNI-сбоев file_open, ни JS-логов моста
+            // [OPEN-MOBILE] из lib/files.ts. Таргет LogDir пишет файловый
+            // дубль в app_log_dir — можно запросить у юзера для отчёта.
+            let is_mobile = cfg!(target_os = "android") || cfg!(target_os = "ios");
+            if cfg!(debug_assertions) || is_mobile {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
                         .level(log::LevelFilter::Info)

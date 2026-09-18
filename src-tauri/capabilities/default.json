@@ -19,6 +19,7 @@
     "fs:allow-appcache-write-recursive",
     "fs:allow-download-write-recursive",
     "opener:default",
+    "log:default",
     {
       "identifier": "opener:allow-open-path",
       "allow": [

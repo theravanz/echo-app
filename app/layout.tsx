@@ -1,16 +1,12 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+// Локальные Geist Sans / Geist Mono (те же шрифты, что в макете) — без обращения к
+// fonts.gstatic.com на билде: офлайн/заблокированная сеть валила `next build`
+// (Turbopack не мог скачать woff2 → Module not found в font CSS).
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+import { LogBridge } from "@/components/echo/app/log-bridge";
+import { Toaster } from "@/components/ui/sonner";
 
 export const viewport = {
   width: "device-width",
@@ -37,10 +33,17 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${GeistSans.variable} ${GeistMono.variable} h-full antialiased`}
       data-scroll-behavior="smooth"
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        {/* Мост console.* → logcat/Console (диагностика на устройстве). */}
+        <LogBridge />
+        {children}
+        {/* Один mounted-тостер на всё приложение: без него все toast() из
+            sonner (ошибки файлов, «Файл больше 10 МБ» и пр.) не показываются. */}
+        <Toaster position="top-center" richColors />
+      </body>
     </html>
   );
 }
