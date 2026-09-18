@@ -6,12 +6,18 @@
 #### Добавлено
 - **Системное открытие файлов на мобильных** (`src-tauri/src/file_open.rs`):
   команды `open_file_system(path, mime)` и `open_file_ios(path)`.
-  • **Android** — `FileProvider.getUriForFile()` (content:// URI) + `Intent.createChooser(ACTION_VIEW)`
-    с `FLAG_GRANT_READ_URI_PERMISSION`: юзер выбирает приложение, как в Telegram.
-    authority собирается в рантайме из applicationId (`Context.getPackageName()` + `.fileprovider`) —
-    хардкода нет, смена applicationId в gradle ничего не ломает. mime — честный, из меты файла.
-    Нет вьюера для mime (`queryIntentActivities` пуст или `ActivityNotFoundException`) →
-    `Err("no-app-for-mime")`. Дополнительно: нет файла по пути → `Err("file-not-found")`.
+  • **Android** — Kotlin-мост `MainActivity.echoOpenFileExternally(path, mime)`:
+    `FileProvider.getUriForFile()` (content://, authority = `${packageName}.fileprovider`)
+    + `Intent.createChooser(ACTION_VIEW)` с `FLAG_GRANT_READ_URI_PERMISSION` —
+    юзер выбирает приложение, как в Telegram. Rust вызывает метод через JNI
+    (`with_webview` → UI-поток) и маппит коды 0/1/2/3 на контракт ошибок
+    (`file-not-found`, `no-app-for-mime`). mime пустой → `application/octet-stream`.
+    Почему не чистый JNI из Rust: wry грузит классы кастомным app-classloader —
+    резолюция androidx-методов (`FileProvider.getUriForFile`) из Rust ловит
+    `NoSuchMethodError`. Kotlin видит androidx напрямую (рядом с FCM-мостом).
+    ⚠ `-keep class com.theravanz.echo_tauri.MainActivity { *; }` в
+    `proguard-rules.pro` ОБЯЗАТЕЛЕН: R8 в release (`isMinifyEnabled = true`)
+    вырезает метод → `NoSuchMethodError` на UI-потоке → FATAL-краш.
   • **iOS** — Swift-мост `gen/apple/Sources/app/EchoFileOpener.swift`
     (`@_cdecl("echo_open_file_ios")`): `QLPreviewController` с одним `QLPreviewItem`,
     презентация модалкой поверх rootViewController с анимацией (системный предпросмотр).
@@ -23,6 +29,23 @@
   `external-path` — иначе `getUriForFile()` падает с IllegalArgumentException.
 - `<queries>` (ACTION_VIEW + `mimeType="*/*"`) в `AndroidManifest.xml`: без него на Android 11+
   `queryIntentActivities()` не видит чужие приложения и проверка «нет вьюера» врала бы.
+- **Мобильная диагностика логов (Rust + JS в release)**:
+  • `tauri-plugin-log` инициализируется на Android/iOS **всегда** (не только
+    debug): Android → Stdout таргет уходит в `android_logger` → `adb logcat`,
+    iOS → os_log → Console.app. Без этого release-сборка немая — JNI-сбои
+    не видно. Capability `log:default` добавлена в `capabilities/default.json`.
+  • `components/echo/app/log-bridge.tsx` (`<LogBridge />` в `app/layout.tsx`):
+    форвардер `console.log/info/warn/error` → `plugin:log|log` — любой
+    console-вывод фронтенда виден в системном логе мобильной сборки
+    (`[webview:console.log]` в logcat). StrictMode-safe (рестор оригиналов).
+- `app/layout.tsx`: смонтирован `<Toaster />` (sonner) — раньше его не было,
+  все `toast()` молча терялись: ошибки открытия файлов не показывались на экране.
+- `lib/files.ts`: пустой mime перед системным открытием →
+  `application/octet-stream` (иначе Android Intent падает на null-mime).
+- **Локальные шрифты**: `next/font/google` (Geist/GeistMono с fonts.gstatic.com)
+  → пакет `geist` (`geist/font/sans`, `geist/font/mono`), те же CSS-переменные
+  `--font-geist-sans/--font-geist-mono`. Сборка больше не падает и не требует
+  сети: Turbopack падал на офлайн-скачивании woff2 (11 ошибок module-not-found).
 - **Мини-плеер аудио-файлов** (`components/echo/app/audio-file-bubble.tsx`): файлы с
   `meta.mime.startsWith("audio/")` играются прямо в баббле — круглая Play/Pause, ЛИНЕЙНЫЙ
   прогресс-бар (волна осталась только у голосовых, чтобы их не путать), длительность из
@@ -75,6 +98,16 @@
   удаление медиа из Storage при «удалить у всех».
 
 #### Исправлено
+- **Краш приложения при тапе на файл (Android release)**: R8/minify вырезал
+  Kotlin-метод `echoOpenFileExternally` → `NoSuchMethodError` из JNI на
+  UI-потоке → FATAL. Лечится keep-правилом в `proguard-rules.pro`
+  (см. раздел «Добавлено»); JNI-диагностика дополняет ошибку текстом
+  Java-исключения — важен порядок: `exception_occurred()` → `exception_clear()`
+  → только потом `toString()` (с pending-exception JNI-вызовы тихо фейлятся
+  и текст теряется).
+- **Немые ошибки открытия файлов**: `<Toaster />` не был смонтирован —
+  тосты «Не удалось открыть файл» не показывались; Rust-логи не писались
+  в logcat в release-сборке (плагин логов инициализировался только в debug).
 - **Расшифровка медиа строилась неверным DH-секретом** — ключ определяется
   второй стороной (`meta.to` для своих, `sender` для входящих), а не
   sender всегда. Добавлено поле `to` в VoiceMeta/FileMeta.
@@ -108,6 +141,12 @@
   getBoundingClientRect.
 - over-события Tauri v2 НЕ содержат `paths` — гарды на paths убивают их.
 - `BaseDirectory.Cache` ≠ `appCacheDir()` — читать/писать одну директорию.
+- JNI-вызовы Android: метод Kotlin-моста (`echoOpenFileExternally`) ищется по
+  точному имени — proguard keep для `MainActivity` нельзя снимать; при
+  чтении текста Java-исключения сначала `exception_clear()`, потом вызовы
+  методов Throwable (иначе пусто).
+- `ImageBubble` НЕ имеет onClick — тап по картинке системное открытие не
+  вызывает (только `FileBubble`, кроме `audio/*` — там мини-плеер).
 - Новый type в `messages_type_check` — только полным списком
   существующих типов.
 
