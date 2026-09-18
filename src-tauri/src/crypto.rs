@@ -506,6 +506,219 @@ pub async fn crypto_decrypt(
     String::from_utf8(pt).map_err(|e| format!("[crypto] UTF-8: {}", e))
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// v:2 raw-bytes медиа (голосовые/файлы): NaCL box над СЫРЫМИ байтами
+// ═══════════════════════════════════════════════════════════════════
+// Формат хранения v:2 = plaintext это сырые байты медиа (НЕ base64-строка).
+// Транспорт выбирается по платформе, криптология — ОДНА (encrypt_inner/
+// decrypt_inner), поэтому шифротекст идентичен на всех платформах:
+//   • desktop/iOS — raw IPC: тело запроса/ответа — сырые байты
+//     (tauri::ipc::Request / tauri::ipc::Response);
+//   • Android    — JSON+base64: raw-тело запроса там невозможно
+//     (tauri всегда отдаёт InvokeBody::Json, см. docs InvokeBody).
+// Старые медиа (base64-plaintext) читаются legacy-командами crypto_decrypt.
+
+/// Размер nonce NaCL box (XSalsa20-Poly1305).
+pub const NONCE_SIZE: usize = 24;
+
+/// Разобрать raw-тело `crypto_encrypt_bytes`: `[32B recipient_pubkey][plaintext...]`.
+fn parse_encrypt_body(body: &[u8]) -> Result<([u8; KEY_SIZE], &[u8]), String> {
+    if body.len() < KEY_SIZE {
+        return Err(format!(
+            "[crypto] encrypt body must be [{KEY_SIZE}B pubkey][plaintext], got {} bytes",
+            body.len()
+        ));
+    }
+    let (pub_bytes, plain) = body.split_at(KEY_SIZE);
+    let mut pub32 = [0u8; KEY_SIZE];
+    pub32.copy_from_slice(pub_bytes);
+    Ok((pub32, plain))
+}
+
+/// Разобрать raw-тело `crypto_decrypt_bytes`: `[32B sender_pubkey][24B nonce][ciphertext]`.
+fn parse_decrypt_body(body: &[u8]) -> Result<([u8; KEY_SIZE], [u8; NONCE_SIZE], &[u8]), String> {
+    const HEAD: usize = KEY_SIZE + NONCE_SIZE;
+    if body.len() < HEAD {
+        return Err(format!(
+            "[crypto] decrypt body must be [{KEY_SIZE}B pubkey][{NONCE_SIZE}B nonce][ciphertext], got {} bytes",
+            body.len()
+        ));
+    }
+    let (pub_bytes, rest) = body.split_at(KEY_SIZE);
+    let (nonce_bytes, ct) = rest.split_at(NONCE_SIZE);
+    let mut pub32 = [0u8; KEY_SIZE];
+    pub32.copy_from_slice(pub_bytes);
+    let mut nonce24 = [0u8; NONCE_SIZE];
+    nonce24.copy_from_slice(nonce_bytes);
+    Ok((pub32, nonce24, ct))
+}
+
+/// base64 nonce → ровно 24 байта (формат ошибки как у `crypto_decrypt`).
+fn b64_to_nonce(s: &str) -> Result<[u8; NONCE_SIZE], String> {
+    let v = BASE64
+        .decode(s)
+        .map_err(|e| format!("[crypto] nonce decode: {}", e))?;
+    if v.len() != NONCE_SIZE {
+        return Err(format!(
+            "[crypto] nonce must be {NONCE_SIZE} bytes, got {}",
+            v.len()
+        ));
+    }
+    let mut out = [0u8; NONCE_SIZE];
+    out.copy_from_slice(&v);
+    Ok(out)
+}
+
+/// Общая криптология raw- и json-вариантов: NaCL box на публичный ключ.
+/// nonce инжектируется — тесты доказывают платформо-независимость v:2.
+fn encrypt_inner_with_nonce(
+    store: &KeyStore,
+    their_pub: [u8; KEY_SIZE],
+    nonce_bytes: [u8; NONCE_SIZE],
+    plain: &[u8],
+) -> Result<Vec<u8>, String> {
+    let our_scalar = store.private_scalar()?;
+    let salsa = SalsaBox::new(
+        &BoxPublicKey::from(their_pub),
+        &BoxSecretKey::from(our_scalar),
+    );
+    let nonce = crypto_box::aead::Nonce::<SalsaBox>::from_slice(&nonce_bytes);
+    salsa
+        .encrypt(nonce, plain)
+        .map_err(|e| format!("[crypto] encrypt: {}", e))
+}
+
+/// Зашифровать СЫРЫЕ байты, сгенерировав nonce через OsRng (как `crypto_encrypt`).
+fn encrypt_inner(
+    store: &KeyStore,
+    their_pub: [u8; KEY_SIZE],
+    plain: &[u8],
+) -> Result<([u8; NONCE_SIZE], Vec<u8>), String> {
+    let mut rng = OsRng;
+    let nonce = SalsaBox::generate_nonce(&mut rng);
+    let mut nonce_bytes = [0u8; NONCE_SIZE];
+    nonce_bytes.copy_from_slice(nonce.as_slice());
+    let ct = encrypt_inner_with_nonce(store, their_pub, nonce_bytes, plain)?;
+    Ok((nonce_bytes, ct))
+}
+
+/// Расшифровать СЫРЫЕ байты. Плейнтекст — `Zeroizing` (зануляется при drop).
+/// БЕЗ `String::from_utf8`: медиа — произвольные байты, не текст.
+fn decrypt_inner(
+    store: &KeyStore,
+    sender_pub: [u8; KEY_SIZE],
+    nonce_bytes: [u8; NONCE_SIZE],
+    ct: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, String> {
+    let our_scalar = store.private_scalar()?;
+    let salsa = SalsaBox::new(
+        &BoxPublicKey::from(sender_pub),
+        &BoxSecretKey::from(our_scalar),
+    );
+    let nonce = crypto_box::aead::Nonce::<SalsaBox>::from_slice(&nonce_bytes);
+    let pt = salsa
+        .decrypt(nonce, ct)
+        .map_err(|e| format!("[crypto] decrypt FAILED: {}", e))?;
+    Ok(Zeroizing::new(pt))
+}
+
+/// Зашифровать СЫРЫЕ байты медиа (v:2) через raw IPC.
+/// Тело: `[32B recipient_pubkey][plaintext]`; ответ: `[24B nonce][ciphertext]`.
+/// Платформы без raw IPC (Android) используют `crypto_encrypt_bytes_json`.
+#[tauri::command]
+pub async fn crypto_encrypt_bytes(
+    app: tauri::AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> Result<tauri::ipc::Response, String> {
+    let body = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes.as_slice(),
+        tauri::ipc::InvokeBody::Json(_) => {
+            return Err(
+                "[crypto] crypto_encrypt_bytes requires a raw bytes body (use crypto_encrypt_bytes_json on Android)"
+                    .to_string(),
+            )
+        }
+    };
+
+    let store = app.state::<KeyStore>();
+    let (their_pub, plain) = parse_encrypt_body(body)?;
+    let (nonce_bytes, ct) = encrypt_inner(&store, their_pub, plain)?;
+
+    let mut out = Vec::with_capacity(NONCE_SIZE + ct.len());
+    out.extend_from_slice(&nonce_bytes);
+    out.extend_from_slice(&ct);
+    Ok(tauri::ipc::Response::new(out))
+}
+
+/// Расшифровать СЫРЫЕ байты медиа (v:2) через raw IPC.
+/// Тело: `[32B sender_pubkey][24B nonce][ciphertext]`; ответ: plaintext (сырые байты).
+#[tauri::command]
+pub async fn crypto_decrypt_bytes(
+    app: tauri::AppHandle,
+    request: tauri::ipc::Request<'_>,
+) -> Result<tauri::ipc::Response, String> {
+    let body = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes.as_slice(),
+        tauri::ipc::InvokeBody::Json(_) => {
+            return Err(
+                "[crypto] crypto_decrypt_bytes requires a raw bytes body (use crypto_decrypt_bytes_json on Android)"
+                    .to_string(),
+            )
+        }
+    };
+
+    let store = app.state::<KeyStore>();
+    let (sender_pub, nonce_bytes, ct) = parse_decrypt_body(body)?;
+    let pt = decrypt_inner(&store, sender_pub, nonce_bytes, ct)?;
+    Ok(tauri::ipc::Response::new(pt.to_vec()))
+}
+
+/// JSON+base64 вариант `crypto_encrypt_bytes` (Android: raw-тело невозможно).
+/// Криптология идентична raw-варианту — общий `encrypt_inner`, поэтому v:2
+/// шифротекст совпадает байт-в-байт при одинаковом nonce.
+#[tauri::command]
+pub async fn crypto_encrypt_bytes_json(
+    app: tauri::AppHandle,
+    recipient_pubkey: String,
+    plaintext: String,
+) -> Result<EncryptResult, String> {
+    let store = app.state::<KeyStore>();
+    let their_pub = b64_to_32(&recipient_pubkey)?;
+    let plain = Zeroizing::new(
+        BASE64
+            .decode(&plaintext)
+            .map_err(|e| format!("[crypto] plaintext decode: {}", e))?,
+    );
+
+    let (nonce_bytes, ct) = encrypt_inner(&store, their_pub, &plain)?;
+    Ok(EncryptResult {
+        ciphertext: BASE64.encode(&ct),
+        nonce: BASE64.encode(nonce_bytes),
+    })
+}
+
+/// JSON+base64 вариант `crypto_decrypt_bytes` (Android).
+/// Возвращает base64 СЫРЫХ байт — `String::from_utf8` здесь запрещён.
+#[tauri::command]
+pub async fn crypto_decrypt_bytes_json(
+    app: tauri::AppHandle,
+    sender_pubkey: String,
+    nonce: String,
+    ciphertext: String,
+) -> Result<String, String> {
+    let store = app.state::<KeyStore>();
+    let sender_pub = b64_to_32(&sender_pubkey)?;
+    let nonce_bytes = b64_to_nonce(&nonce)?;
+    let ct = Zeroizing::new(
+        BASE64
+            .decode(&ciphertext)
+            .map_err(|e| format!("[crypto] ciphertext decode: {}", e))?,
+    );
+
+    let pt = decrypt_inner(&store, sender_pub, nonce_bytes, &ct)?;
+    Ok(BASE64.encode(&pt))
+}
+
 /// Zero-ить E2EE-ключ в памяти (logout).
 #[tauri::command]
 pub async fn crypto_clear(app: tauri::AppHandle) -> Result<(), String> {
@@ -745,5 +958,202 @@ mod tests {
                 .is_err(),
             "must fail with wrong device key"
         );
+    }
+    // ─── v:2 raw-bytes медиа: raw/json транспорты, инварианты, legacy ───
+
+    /// Два пира с детерминированными ключами + их публичные ключи (32B).
+    fn two_peers() -> (KeyStore, KeyStore, [u8; KEY_SIZE], [u8; KEY_SIZE]) {
+        let ks_a = KeyStore::new();
+        let ks_b = KeyStore::new();
+        let mut seed_a = [0x11u8; KEY_SIZE];
+        let mut seed_b = [0x22u8; KEY_SIZE];
+        seed_a[0] ^= 0x5A;
+        seed_b[0] ^= 0xA5;
+        ks_a.load_private_key(seed_a).unwrap();
+        ks_b.load_private_key(seed_b).unwrap();
+        let pub_a = b64_to_32(&ks_a.public_key_b64().unwrap()).unwrap();
+        let pub_b = b64_to_32(&ks_b.public_key_b64().unwrap()).unwrap();
+        (ks_a, ks_b, pub_a, pub_b)
+    }
+
+    /// Псевдослучайные байты (детерминированно, без внешних крейтов).
+    fn random_bytes(len: usize) -> Vec<u8> {
+        let mut x: u64 = 0x2545_F491_4F6C_DD1D;
+        (0..len)
+            .map(|_| {
+                x = x
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                (x >> 33) as u8
+            })
+            .collect()
+    }
+
+    /// raw-транспорт 10 МБ: тело `[32B pub][plain]` → ответ `[24B nonce][ct]` → назад.
+    #[test]
+    fn bytes_raw_roundtrip_10mb() {
+        let (ks_a, ks_b, pub_a, pub_b) = two_peers();
+        let plain = random_bytes(10 * 1024 * 1024);
+
+        // JS собирает raw-тело: [recipient_pubkey][plaintext]
+        let mut body = Vec::with_capacity(KEY_SIZE + plain.len());
+        body.extend_from_slice(&pub_b);
+        body.extend_from_slice(&plain);
+
+        let (their_pub, parsed_plain) = parse_encrypt_body(&body).unwrap();
+        assert_eq!(their_pub, pub_b);
+        assert_eq!(parsed_plain, &plain[..]);
+
+        let (nonce, ct) = encrypt_inner(&ks_a, their_pub, parsed_plain).unwrap();
+        assert_eq!(ct.len(), plain.len() + 16, "box добавляет 16B Poly1305-тега");
+
+        // Rust отвечает raw-телом: [nonce][ciphertext]
+        let resp = {
+            let mut r = Vec::with_capacity(NONCE_SIZE + ct.len());
+            r.extend_from_slice(&nonce);
+            r.extend_from_slice(&ct);
+            r
+        };
+        // JS режет ответ как [24B nonce][ct]: nonce → мета (base64), ct → Storage.
+        assert_eq!(&resp[..NONCE_SIZE], &nonce[..]);
+        let cipher_from_response = &resp[NONCE_SIZE..];
+        assert_eq!(cipher_from_response, &ct[..]);
+        // Storage-объект: ровно ciphertext (plaintext + 16B тега), без заголовков.
+        assert_eq!(cipher_from_response.len(), plain.len() + 16);
+
+        // JS собирает тело decrypt: [sender_pubkey][nonce][ciphertext]
+        let mut dec_body = Vec::with_capacity(KEY_SIZE + NONCE_SIZE + cipher_from_response.len());
+        dec_body.extend_from_slice(&pub_a);
+        dec_body.extend_from_slice(&nonce);
+        dec_body.extend_from_slice(cipher_from_response);
+
+        let (sender_pub, nonce24, ct_parsed) = parse_decrypt_body(&dec_body).unwrap();
+        assert_eq!(sender_pub, pub_a);
+        assert_eq!(nonce24, nonce);
+        let pt = decrypt_inner(&ks_b, sender_pub, nonce24, ct_parsed).unwrap();
+        assert_eq!(pt.as_slice(), &plain[..]);
+    }
+
+    /// json-транспорт (Android) 10 МБ: та же криптология, base64 на входе/выходе.
+    #[test]
+    fn bytes_json_roundtrip_10mb() {
+        let (ks_a, ks_b, pub_a, pub_b) = two_peers();
+        let plain = random_bytes(10 * 1024 * 1024);
+
+        // Android-команда: base64 → decode → encrypt_inner
+        let decoded = BASE64.decode(&BASE64.encode(&plain)).unwrap();
+        let (nonce, ct) = encrypt_inner(&ks_a, pub_b, &decoded).unwrap();
+
+        // Ответ — base64 СЫРЫХ байт (никакого from_utf8)
+        let ct_back = BASE64.decode(&BASE64.encode(&ct)).unwrap();
+        let nonce_back = b64_to_nonce(&BASE64.encode(nonce)).unwrap();
+
+        let pt = decrypt_inner(&ks_b, pub_a, nonce_back, &ct_back).unwrap();
+        assert_eq!(pt.as_slice(), &plain[..]);
+    }
+
+    /// КРОСС-инвариант: raw- и json-транспорты дают ОДИН шифротекст при одном
+    /// nonce — доказательство платформо-независимости v:2.
+    #[test]
+    fn raw_and_json_transports_produce_identical_ciphertext() {
+        let (ks_a, _ks_b, _pub_a, pub_b) = two_peers();
+        let plain = random_bytes(256 * 1024);
+        let nonce = [0x5Au8; NONCE_SIZE];
+
+        // raw: plaintext идёт байтами; json: plaintext идёт base64-строкой.
+        let ct_raw = encrypt_inner_with_nonce(&ks_a, pub_b, nonce, &plain).unwrap();
+        let decoded = BASE64.decode(&BASE64.encode(&plain)).unwrap();
+        let ct_json = encrypt_inner_with_nonce(&ks_a, pub_b, nonce, &decoded).unwrap();
+
+        assert_eq!(ct_raw, ct_json);
+        assert_eq!(BASE64.encode(&ct_raw), BASE64.encode(&ct_json));
+    }
+
+    /// Чужой ключ → aead::Error (тег не сходится), обе стороны DH.
+    #[test]
+    fn bytes_decrypt_with_wrong_key_fails() {
+        let (ks_a, _ks_b, pub_a, pub_b) = two_peers();
+        let (nonce, ct) = encrypt_inner(&ks_a, pub_b, b"voice payload").unwrap();
+
+        let ks_c = KeyStore::new();
+        let mut seed_c = [0x77u8; KEY_SIZE];
+        seed_c[3] ^= 0x01;
+        ks_c.load_private_key(seed_c).unwrap();
+        let pub_c = b64_to_32(&ks_c.public_key_b64().unwrap()).unwrap();
+
+        // Чужой приватный ключ + свой pubkey.
+        let err = decrypt_inner(&ks_c, pub_c, nonce, &ct).unwrap_err();
+        assert!(err.contains("decrypt FAILED"), "unexpected: {err}");
+        // Верный pubkey отправителя, но чужой приватный ключ.
+        let err = decrypt_inner(&ks_c, pub_a, nonce, &ct).unwrap_err();
+        assert!(err.contains("decrypt FAILED"), "unexpected: {err}");
+    }
+
+    /// R4a: legacy-медиа шифровалось из base64-СТРОКИ. Новый raw-путь
+    /// расшифрует её «успешно», но вернёт ASCII base64 вместо аудио — именно
+    /// поэтому расшифровка ветвится по meta.v (v:2 vs legacy).
+    #[test]
+    fn legacy_base64_plaintext_yields_ascii_not_media_r4a() {
+        let (ks_a, ks_b, pub_a, pub_b) = two_peers();
+        let audio = random_bytes(64 * 1024);
+        let audio_b64 = BASE64.encode(&audio);
+
+        // Старый конвейер: plaintext = base64-строка аудио.
+        let (nonce, ct) = encrypt_inner(&ks_a, pub_b, audio_b64.as_bytes()).unwrap();
+
+        let pt = decrypt_inner(&ks_b, pub_a, nonce, &ct).unwrap();
+        assert_eq!(pt.as_slice(), audio_b64.as_bytes(), "вернулась base64-строка");
+        assert_ne!(pt.as_slice(), &audio[..], "это НЕ аудио — плеер получит мусор");
+        // Валидный UTF-8: aead отрабатывает без ошибки — защищает только v:2.
+        assert!(String::from_utf8(pt.to_vec()).is_ok());
+    }
+
+    /// R4b: обратное — новый БИНАРНЫЙ шифротекст старым `crypto_decrypt`
+    /// расшифровывается, но падает на `String::from_utf8`: старые билды
+    /// получают явный clean failure, а не тихую порчу.
+    #[test]
+    fn new_binary_ciphertext_breaks_legacy_from_utf8_r4b() {
+        let (ks_a, ks_b, pub_a, pub_b) = two_peers();
+        // Гарантированно невалидный UTF-8 плейнтекст (как реальное аудио).
+        let audio = vec![0xFFu8, 0xFE, 0xFD, 0x80, 0x00, 0xC0];
+        let (nonce, ct) = encrypt_inner(&ks_a, pub_b, &audio).unwrap();
+
+        let pt = decrypt_inner(&ks_b, pub_a, nonce, &ct).unwrap();
+        assert_eq!(pt.as_slice(), &audio[..], "новый путь отдаёт сырые байты");
+
+        let legacy = String::from_utf8(pt.to_vec());
+        assert!(legacy.is_err(), "legacy from_utf8 должен падать");
+        let msg = format!("[crypto] UTF-8: {}", legacy.unwrap_err());
+        assert!(msg.starts_with("[crypto] UTF-8:"));
+    }
+
+    /// Валидация raw-тел: короткое тело не читается как pubkey+payload.
+    #[test]
+    fn raw_body_layout_validation() {
+        assert!(parse_encrypt_body(&[]).is_err());
+        assert!(parse_encrypt_body(&[0u8; KEY_SIZE - 1]).is_err());
+        // Ровно pubkey → пустой plaintext (валидный box из одного тега).
+        let (pub32, plain) = parse_encrypt_body(&[7u8; KEY_SIZE]).unwrap();
+        assert_eq!(pub32, [7u8; KEY_SIZE]);
+        assert!(plain.is_empty());
+
+        assert!(parse_decrypt_body(&[0u8; KEY_SIZE + NONCE_SIZE - 1]).is_err());
+        let mut body = vec![9u8; KEY_SIZE];
+        body.extend_from_slice(&[3u8; NONCE_SIZE]);
+        body.extend_from_slice(b"ct");
+        let (pub32, nonce24, ct) = parse_decrypt_body(&body).unwrap();
+        assert_eq!(pub32, [9u8; KEY_SIZE]);
+        assert_eq!(nonce24, [3u8; NONCE_SIZE]);
+        assert_eq!(ct, b"ct");
+    }
+
+    /// nonce из меты: base64 ровно 24 байта, иначе понятная ошибка.
+    #[test]
+    fn nonce_b64_validation() {
+        let n = b64_to_nonce(&BASE64.encode([1u8; NONCE_SIZE])).unwrap();
+        assert_eq!(n, [1u8; NONCE_SIZE]);
+        let err = b64_to_nonce(&BASE64.encode([1u8; NONCE_SIZE - 1])).unwrap_err();
+        assert!(err.contains("nonce must be 24 bytes"), "unexpected: {err}");
+        assert!(b64_to_nonce("не-base64!").is_err());
     }
 }

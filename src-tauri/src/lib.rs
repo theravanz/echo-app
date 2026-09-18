@@ -153,6 +153,11 @@ pub fn run() {
             crypto::crypto_status,
             crypto::crypto_encrypt,
             crypto::crypto_decrypt,
+            // v:2 raw-bytes медиа (голосовые/файлы): raw IPC + JSON/base64 (Android)
+            crypto::crypto_encrypt_bytes,
+            crypto::crypto_decrypt_bytes,
+            crypto::crypto_encrypt_bytes_json,
+            crypto::crypto_decrypt_bytes_json,
             crypto::crypto_sign,
             crypto::crypto_verify,
             crypto::crypto_clear,
