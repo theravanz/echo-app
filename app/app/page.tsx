@@ -882,6 +882,7 @@ useEffect(() => {
           fetchMessages={fetchMessages}
           handleSendMessage={handleSendMessage}
           handleSendVoice={handleSendVoice}
+          onOpenChat={(id) => setSelectedChat(chats.find(c => c.id === id)!)}
         />
 
       {/* --- Settings Modal --- */}

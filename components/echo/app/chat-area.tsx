@@ -29,6 +29,9 @@ import {
   TbLock as Lock,
 } from "react-icons/tb";
 import type { UserProfile, Chat, Message, NetworkMode, AppTab } from "@/hooks/echo/types";
+import { deleteMessageMedia } from "@/lib/files";
+import { TbFileUpload } from "react-icons/tb";
+import { useFileDragDrop } from "@/hooks/echo/use-file-dragdrop";
 
 
 interface ChatAreaProps {
@@ -56,11 +59,12 @@ interface ChatAreaProps {
   handleSendVoice: (chat: Chat, user: UserProfile, blob: Blob, durationSec: number) => void;
   isRightPanelOpen: boolean;
   setIsRightPanelOpen: (open: boolean) => void;
+  onOpenChat?: (chatId: string) => void;
 }
 
 export function ChatArea({
   user, selectedChat, isMobile, activeMode, activeTab, onlineUsers, chats, onBack, onCall, onMentionClick,
-  messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage, handleSendVoice, isRightPanelOpen, setIsRightPanelOpen
+  messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage, handleSendVoice, isRightPanelOpen, setIsRightPanelOpen, onOpenChat
 }: ChatAreaProps) {
   const [bgPickerOpen, setBgPickerOpen] = useState(false);
   const [isMediaPickerOpen, setIsMediaPickerOpen] = useState(false);
@@ -85,6 +89,14 @@ export function ChatArea({
     if (msg) setReplyingTo(null);
     setEditingMessage(msg);
   };
+  
+
+  const drag = useFileDragDrop({
+    enabled: !isMobile && !!user,
+    selectedChatId: selectedChat?.id ?? null,
+    onSendFiles: (files, chatId) => { for (const f of files) onSendFile(f, chatId); },
+    onOpenChat: (id) => onOpenChat?.(id),
+  });
 
   // ─── ФАЙЛЫ: upload-стейты + обработчики ───
   const [uploadStates, setUploadStates] = useState<Map<string, UploadUiState>>(new Map());
@@ -96,70 +108,80 @@ export function ChatArea({
     ?? (selectedChat as any)?.participant_id
     ?? selectedChat?.id;
 
-  const onSendFile = (file: File) => {
-    if (!selectedChat || !user) return;
-    if (file.size > MAX_FILE_BYTES) {
-      toast.error(`Файл больше 10 МБ (${(file.size / 1048576).toFixed(1)} МБ)`);
-      return;
-    }
-    const localId = `file-local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
-    // Оптимистичное сообщение: в content кладём мету с пустыми path/nonce —
-    // FileBubble сразу покажет имя и размер, а кольцо придёт через uploadStates
-    const optimistic: Message = {
-      id: localId,
-      sender_id: user.id,
-      receiver_id: selectedChat.id,
-      type: "file",
-      content: JSON.stringify({
-        path: "", nonce: "",
-        mime: file.type || "application/octet-stream",
-        name: file.name, size: file.size,
-        to: otherPartyId, kind: "file",
-      }),
-      created_at: new Date().toISOString(),
-      status: "sending",
-    } as Message;
-    setMessages(prev => [...prev, optimistic]);
-
-    const handle = encryptAndUploadFile(user.id, otherPartyId, file, {
-      onProgress: (loaded, total) =>
-        setUploadStates(prev => new Map(prev).set(localId, { status: "uploading", loaded, total })),
-      onStatus: (s) =>
-        setUploadStates(prev => {
-          const n = new Map(prev);
-          const cur = n.get(localId) ?? { status: "uploading" as const, loaded: 0, total: 0 };
-          n.set(localId, { ...cur, status: s });
-          return n;
-        }),
-    });
-    fileHandlesRef.current.set(localId, handle);
-
-    handle.metaPromise.then(async (meta) => {
-      const { data: inserted, error } = await supabase.from("messages").insert({
-        sender_id: user.id,
-        receiver_id: selectedChat.id,
-        type: "file",
-        content: JSON.stringify(meta),
-        status: "sent",
-      }).select().single();
-      if (error) throw error;
-
-      setMessages(prev => prev.map(m => m.id === localId ? (inserted as Message) : m));
-      fileHandlesRef.current.delete(localId);
-      setUploadStates(prev => { const n = new Map(prev); n.delete(localId); return n; });
-    }).catch((err) => {
-      fileHandlesRef.current.delete(localId);
-      if (err?.cancelled) {
-        // Пользователь нажал крестик — убираем баббл целиком
-        setMessages(prev => prev.filter(m => m.id !== localId));
-      } else {
-        console.error("[FILE] upload failed:", err);
-        setUploadStates(prev => new Map(prev).set(localId, { status: "error", loaded: 0, total: 0 }));
-        toast.error("Не удалось отправить файл");
+    const onSendFile = (file: File, targetChatId?: string) => {
+      if (!user) return;
+      const receiverId = targetChatId ?? otherPartyId ?? selectedChat?.id;
+      if (!receiverId) return;
+      if (file.size > MAX_FILE_BYTES) {
+        toast.error(`Файл больше 10 МБ (${(file.size / 1048576).toFixed(1)} МБ)`);
+        return;
       }
-    });
-  };
+
+      // Оптимистичный UI только если файл летит в ОТКРЫТЫЙ чат.
+      // Дроп на чат из списка → тихо грузим, баббл появится у получателя/после открытия.
+      const inView = receiverId === selectedChat?.id;
+      const localId = `file-local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+      if (inView) {
+        const optimistic: Message = {
+          id: localId,
+          sender_id: user.id,
+          receiver_id: receiverId,
+          type: "file",
+          content: JSON.stringify({
+            path: "", nonce: "",
+            mime: file.type || "application/octet-stream",
+            name: file.name, size: file.size,
+            to: receiverId, kind: "file",
+          }),
+          created_at: new Date().toISOString(),
+          status: "sending",
+        } as Message;
+        setMessages(prev => [...prev, optimistic]);
+      }
+
+      const handle = encryptAndUploadFile(user.id, receiverId, file, {
+        onProgress: (loaded, total) => {
+          if (inView) setUploadStates(prev => new Map(prev).set(localId, { status: "uploading", loaded, total }));
+        },
+        onStatus: (s) => {
+          if (!inView) return;
+          setUploadStates(prev => {
+            const n = new Map(prev);
+            const cur = n.get(localId) ?? { status: "uploading" as const, loaded: 0, total: 0 };
+            n.set(localId, { ...cur, status: s });
+            return n;
+          });
+        },
+      });
+      fileHandlesRef.current.set(localId, handle);
+
+      handle.metaPromise.then(async (meta) => {
+        const { data: inserted, error } = await supabase.from("messages").insert({
+          sender_id: user.id,
+          receiver_id: receiverId,
+          type: "file",
+          content: JSON.stringify(meta),
+          status: "sent",
+        }).select().single();
+        if (error) throw error;
+
+        if (inView) {
+          setMessages(prev => prev.map(m => m.id === localId ? (inserted as Message) : m));
+          setUploadStates(prev => { const n = new Map(prev); n.delete(localId); return n; });
+        }
+        fileHandlesRef.current.delete(localId);
+      }).catch((err) => {
+        fileHandlesRef.current.delete(localId);
+        if (err?.cancelled) {
+          if (inView) setMessages(prev => prev.filter(m => m.id !== localId));
+        } else {
+          console.error("[FILE] upload failed:", err);
+          if (inView) setUploadStates(prev => new Map(prev).set(localId, { status: "error", loaded: 0, total: 0 }));
+          toast.error("Не удалось отправить файл");
+        }
+      });
+    };
 
   const handleFileCancel = (msg: any) => {
     fileHandlesRef.current.get(msg?.id)?.cancel();
@@ -241,7 +263,7 @@ export function ChatArea({
           }}
         />
 
-        <div className="flex-1 min-h-0 relative overflow-hidden">
+        <div data-chatarea className="flex-1 min-h-0 relative overflow-hidden">
           <ChatWallpaper preset={chatWallpaper.preset} accentColor={accentColor} photoUrl={chatWallpaper.photoUrl} />
           <div
             className={cn("relative z-[1] h-full px-3 md:px-12 py-3 md:py-8 overflow-y-auto overscroll-contain scrollbar-hide", contextMenu ? "chat-dimmed" : "")}
@@ -323,6 +345,36 @@ export function ChatArea({
             onToggleFullPicker={() => setIsMediaPickerOpen(prev => !prev)}
           />
         )}
+
+          <AnimatePresence>
+            {drag.active && drag.overChatArea && (
+              <motion.div
+                key="dropzone"
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                transition={{ duration: 0.18 }}
+                className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none"
+              >
+                <div className="absolute inset-0 backdrop-blur-xl bg-black/40" />
+                <motion.div
+                  initial={{ scale: 0.92, y: 12 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95 }}
+                  transition={{ type: "spring", stiffness: 380, damping: 26 }}
+                  className="relative z-10 flex flex-col items-center gap-5"
+                >
+                  <motion.div
+                    animate={{ scale: [1, 1.06, 1] }}
+                    transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+                    className="w-24 h-24 rounded-[28px] border-2 border-dashed border-primary/70 bg-primary/10 flex items-center justify-center shadow-2xl shadow-primary/20"
+                  >
+                    <TbFileUpload className="w-10 h-10 text-primary" />
+                  </motion.div>
+                  <div className="px-6 py-3 rounded-2xl bg-zinc-900/80 backdrop-blur-xl border border-white/10 text-sm font-medium text-zinc-200">
+                    Перетащите файлы, чтобы отправить их здесь
+                  </div>
+                  <div className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">до 10 МБ · E2EE</div>
+                </motion.div>
+              </motion.div>
+            )}
+          </AnimatePresence>
       </main>
 
       {/* Profile View Panel & MediaPicker Panel (Right) */}
@@ -417,13 +469,15 @@ export function ChatArea({
               setMessages(prev => prev.filter(m => m.id !== msg.id));
               toast.success("Удалено у вас");
             } else {
+            // Сначала снести медиа из Storage, потом строку
+              await deleteMessageMedia(msg);
               await supabase.from("messages").delete().eq("id", msg.id);
               setMessages(prev => prev.filter(m => m.id !== msg.id));
               toast.success("Удалено у всех");
             }
           } catch (err) {
-            console.error("Delete error:", err);
-            toast.error("Ошибка удаления сообщения");
+          console.error("Delete error:", err);
+          toast.error("Ошибка удаления сообщения");
           }
         }}
         onReact={(msg, emoji) => toast.success(`Реакция ${emoji} добавлена`)}

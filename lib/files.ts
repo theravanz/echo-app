@@ -23,6 +23,24 @@ export interface FileMeta {
 
 export type UploadStatus = "uploading" | "paused" | "error";
 
+import { parseVoiceMeta } from "@/lib/voice";
+
+/** Удалить медиа-объект сообщения из Storage (voice/file). Текст — no-op. */
+export async function deleteMessageMedia(msg: any): Promise<void> {
+  try {
+    if (msg?.type === "voice") {
+      const meta = parseVoiceMeta(msg?.content);
+      if (meta?.path) await supabase.storage.from("voice").remove([meta.path]);
+    } else if (msg?.type === "file") {
+      const meta = parseFileMeta(msg?.content);
+      if (meta?.path) await supabase.storage.from("files").remove([meta.path]);
+    }
+  } catch (e) {
+    // Медиа-сирота не должна блокировать удаление сообщения — залогируем
+    console.warn("[DELETE] media cleanup failed:", e);
+  }
+}
+
 export function parseFileMeta(content: unknown): FileMeta | null {
   if (typeof content !== "string" || !content.startsWith("{")) return null;
   try {

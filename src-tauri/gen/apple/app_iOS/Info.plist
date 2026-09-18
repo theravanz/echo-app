@@ -7,9 +7,9 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Нам нужен доступ к локальной сети для работы сервера разработки Tauri.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Нужен доступ к камере для сканирования QR-кода при входе (экраны настроек и логина).</string>
+	<string>Echo использует камеру для съёмки фото и видео</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Нужен доступ к микрофону для звонков и голосовых сообщений.</string>
+	<string>Echo использует микрофон для записи голосовых сообщений</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
@@ -26,9 +26,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2.7</string>
+	<string>0.3.0</string>
 	<key>CFBundleVersion</key>
-	<string>0.2.7</string>
+	<string>0.3.0</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

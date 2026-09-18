@@ -32,6 +32,10 @@
         { "path": "$CACHE/**" },
         { "path": "$DOWNLOAD/**" }
       ]
+    },
+    {
+      "identifier": "fs:allow-read-file",
+      "allow": [{ "path": "**" }]
     }
   ]
 }
