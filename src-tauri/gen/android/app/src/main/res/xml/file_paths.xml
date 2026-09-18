@@ -1,5 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Корни, которые FileProvider отдаёт по content:// URI (AndroidManifest.xml →
+  android:authorities="${applicationId}.fileprovider").
+
+  ВАЖНО (сверено с tauri 2.11.5, src/path/android.rs → PathPlugin.kt):
+    • appCacheDir() на Android = Activity.getCacheDir()  → <cache-path>
+      (именно сюда пишет ensureCachedFile: AppCache/echo-files/…)
+    • файлы приложения = getFilesDir()                    → <files-path>
+    • внешний кэш = getExternalCacheDir()                → <external-cache-path>
+  Без подходящего корня FileProvider.getUriForFile() бросает
+  IllegalArgumentException("Failed to find configured root that contains …").
+-->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-  <external-path name="my_images" path="." />
-  <cache-path name="my_cache_images" path="." />
+  <!-- AppCache: сюда скачиваются и расшифровываются файлы из чата -->
+  <cache-path name="app_cache" path="." />
+  <!-- Внутренние файлы приложения -->
+  <files-path name="app_files" path="." />
+  <!-- Внешний кэш/файлы (на случай выноса кэша на SD) -->
+  <external-cache-path name="app_external_cache" path="." />
+  <external-files-path name="app_external_files" path="." />
+  <external-path name="app_external" path="." />
 </paths>
+

@@ -2,6 +2,9 @@
 
 mod crypto;
 mod device;
+// Системное открытие файлов на мобильных (Android FileProvider + chooser,
+// iOS QuickLook). На десктопе команды есть, но возвращают "unsupported".
+mod file_open;
 mod media;
 mod notification;
 mod qr_auth;
@@ -9,6 +12,7 @@ mod stickers;
 mod storage;
 mod vault;
 
+use file_open::{open_file_ios, open_file_system};
 use notification::NotificationManager;
 use storage::StorageManager;
 use tauri::{AppHandle, Emitter, Listener, Manager};
@@ -34,16 +38,28 @@ fn handle_notification_click(app: tauri::AppHandle, chat_id: String) {
     target_os = "openbsd"
 ))]
 fn enable_media_stream(app: &AppHandle<tauri::Wry>) {
-    use webkit2gtk::{SettingsExt, WebViewExt};
+    use webkit2gtk::{PermissionRequestExt, SettingsExt, WebViewExt};
 
     if let Some(window) = app.get_webview_window("main") {
-        let _ = window.with_webview(|webview| {
-            if let Some(settings) = webview.inner().settings() {
+        let _ = window.with_webview(move |webview| {
+            let wk = webview.inner();
+
+            // Барьер 1: включить MediaStream API
+            if let Some(settings) = wk.settings() {
                 settings.set_enable_media_stream(true);
                 log::info!("[Media] WebKitGTK media_stream enabled");
-            } else {
-                log::warn!("[Media] WebKitGTK settings() returned None");
             }
+
+            // Барьер 2: отвечать на permission request. Без хендлера
+            // WebKitGTK авто-DENY на getUserMedia → NotAllowedError
+            // (без диалога, молча). Граним всё: мессенджер запрашивает
+            // только медиа, системных диалогов не нужно — работает
+            // одинаково на GNOME, hyprland и любом WM.
+            wk.connect_permission_request(|_, request| {
+                request.allow();
+                log::info!("[Media] permission request auto-granted");
+                true // true = сигнал обработан, дальше не гоним
+            });
         });
     } else {
         log::warn!("[Media] main webview window not found");
@@ -165,6 +181,10 @@ pub fn run() {
             crypto::crypto_restore_key,
             crypto::crypto_qr_ephemeral_keypair,
             crypto::crypto_qr_decrypt,
+            // Открытие файлов системным механизмом (мобильные):
+            // Android → FileProvider + ACTION_VIEW chooser, iOS → QuickLook
+            open_file_system,
+            open_file_ios,
             // Media encryption commands (Shield Media: AES-256-GCM)
             media::media_encrypt,
             media::media_decrypt,

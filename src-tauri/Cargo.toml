@@ -74,3 +74,7 @@ webkit2gtk = "2.0"
 # его через openssl-sys. Десктоп/iOS остаются на системном OpenSSL/CommonCrypto.
 [target.'cfg(target_os = "android")'.dependencies]
 rusqlite = { version = "0.31", features = ["bundled-sqlcipher-vendored-openssl"] }
+# JNI для системного открытия файлов: FileProvider.getUriForFile + ACTION_VIEW
+# (file_open.rs). Версия совпадает с wry 0.55 → типы JNIEnv/JniHandle общие,
+# лишней копии jni в графе зависимостей не появляется.
+jni = "0.21"

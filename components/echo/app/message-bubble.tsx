@@ -17,7 +17,8 @@ import {
   TbAlertCircle as TbAlertCircle,
 } from "react-icons/tb";
 import { TbX as X, TbDownload, TbPhoto, TbVideo, TbMusic, TbFile, TbFileText, TbFileZip, TbRefresh } from "react-icons/tb";
-import { parseFileMeta, type UploadStatus } from "@/lib/files";
+import { parseFileMeta, keyUserFor, type UploadStatus } from "@/lib/files";
+import { AudioFileBubble } from "./audio-file-bubble";
 
 interface MessageBubbleProps {
   msg: any;
@@ -459,6 +460,15 @@ export const MessageBubble = memo(({
 
   if (msg.type === "file") {
     const meta = parseFileMeta(msg?.content);
+    // Аудио-ФАЙЛЫ (mime audio/*, честный mime из File.type при отправке)
+    // получают встроенный мини-плеер — как mp3 в Telegram. Видео остаётся
+    // обычным файл-бабблом с системным открытием.
+    // Пока файл ещё льётся (uploadState) или path пуст — показываем обычный
+    // FileBubble с кольцом прогресса: играть нечего.
+    const isAudio = Boolean(meta?.mime?.startsWith("audio/") && meta?.path);
+    // Ключ = вторая сторона DH (как в handleFileOpen у chat-area):
+    // свои → meta.to, входящие → sender_id.
+    const fileKeyUserId = keyUserFor(msg, meta?.to, user?.id);
     return (
       <div ref={bubbleRef} onContextMenu={handleContextMenu}
         onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd} onTouchMove={handleTouchMove}
@@ -468,8 +478,12 @@ export const MessageBubble = memo(({
           isDimmed ? "blur-[4px] opacity-20 pointer-events-none" : "z-50"
         )}>
         <div className={cn("flex flex-col min-w-0 max-w-full", isMe ? "items-end" : "items-start")}>
-          <FileBubble msg={msg} isMe={isMe} upload={uploadState}
-            onOpen={() => onFileOpen?.(msg)} onCancel={() => onFileCancel?.(msg)} onResume={() => onFileResume?.(msg)} />
+          {isAudio && meta && !uploadState ? (
+            <AudioFileBubble meta={meta} isMe={isMe} keyUserId={fileKeyUserId} />
+          ) : (
+            <FileBubble msg={msg} isMe={isMe} upload={uploadState}
+              onOpen={() => onFileOpen?.(msg)} onCancel={() => onFileCancel?.(msg)} onResume={() => onFileResume?.(msg)} />
+          )}
         </div>
       </div>
     );

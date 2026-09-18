@@ -28,6 +28,17 @@
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
+    <!-- Package visibility (Android 11+): без этого queryIntentActivities()
+         не видит чужие вьюеры и мы ошибочно решили бы, что приложения для
+         mime нет (см. file_open.rs → has_viewer). startActivity() работает
+         и без <queries>, но проверка «нет приложения» — нет. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="*/*" />
+        </intent>
+    </queries>
+
     <application
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"

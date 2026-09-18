@@ -2,6 +2,7 @@
 
 import * as tus from "tus-js-client";
 import { invoke } from "@tauri-apps/api/core";
+import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { base64ToBytes, bytesToBase64 } from "@/lib/media";
 import { decryptBytes, encryptBytes, MEDIA_VERSION_RAW } from "@/lib/crypto";
@@ -361,11 +362,63 @@ export async function ensureCachedFile(meta: FileMeta, keyUserId: string): Promi
   return rel;
 }
 
+export type OpenPlatform = "android" | "ios" | "desktop";
+
+/**
+ * Платформа рантайма для выбора механизма системного открытия файла.
+ *
+ * Определяем по UA (как `pickTransport` в lib/crypto.ts): в Tauri UA не
+ * меняется в рантайме. `@tauri-apps/plugin-os` в проекте нет, а
+ * lib/device-info.ts тянет гео-запросы по IP — для выбора механизма это лишнее.
+ * Нюанс: iPadOS 13+ в WKWebView отдаёт UA как у macOS ("Macintosh"), поэтому
+ * тач-«мак» (maxTouchPoints > 1) считаем iOS.
+ */
+export function openPlatform(): OpenPlatform {
+  if (typeof navigator === "undefined") return "desktop";
+  const ua = navigator.userAgent || "";
+  if (ua.includes("Android")) return "android";
+  if (/iPhone|iPad|iPod/i.test(ua) || (ua.includes("Macintosh") && (navigator.maxTouchPoints ?? 0) > 1)) {
+    return "ios";
+  }
+  return "desktop";
+}
+
 /** Открыть системным приложением (клик по файлу в чате). */
 export async function openFileMessage(meta: FileMeta, keyUserId: string): Promise<void> {
   const rel = await ensureCachedFile(meta, keyUserId);
   const dir = await appCacheDir();
-  await openPath(await join(dir, rel));
+  // Абсолютный путь: на мобильных его же отдаём в Rust-команду открытия.
+  const abs = await join(dir, rel);
+
+  const target = openPlatform();
+  if (target === "desktop") {
+    // Десктоп не трогаем: openPath работает с file:// напрямую.
+    await openPath(abs);
+    return;
+  }
+
+  // Логируем ДО вызова: если JNI/Swift отвалится, в логе останется путь,
+  // который не покрыт file_paths.xml (Android) или не существует (iOS).
+  console.log(`[OPEN-MOBILE] open (${target})`, {
+    path: abs, mime: meta.mime, name: meta.name, size: meta.size,
+  });
+  try {
+    if (target === "android") {
+      // content:// URI через FileProvider + системный chooser (Rust/Android).
+      await invoke("open_file_system", { path: abs, mime: meta.mime || "application/octet-stream" });
+    } else {
+      // QLPreviewController модалкой поверх приложения (Rust → Swift).
+      await invoke("open_file_ios", { path: abs });
+    }
+  } catch (e) {
+    // Ошибку не глотаем: сначала лог с полным контекстом, потом тост юзеру.
+    // Тост здесь, а не в chat-area — чтобы не было двойного тоста (мобильная
+    // ветка завершается return).
+    const raw = e instanceof Error ? e.message : String(e);
+    console.error("[OPEN-MOBILE] open failed:", target, "|", raw, "|", { path: abs, mime: meta.mime });
+    toast.error(raw.includes("no-app-for-mime") ? "Нет приложения для этого файла" : "Не удалось открыть файл");
+    return;
+  }
 }
 
 /** Сохранить в Загрузки (десктоп). Возвращает имя файла. */
