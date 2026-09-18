@@ -33,8 +33,10 @@ private enum EchoFileOpenResult: Int32 {
 
 /// Один элемент предпросмотра: путь к файлу + отображаемое имя.
 private final class EchoPreviewItem: NSObject, QLPreviewItem {
-    let previewItemURL: URL
-    let previewItemTitle: String?
+    // QLPreviewItem объявляет previewItemURL как nullable — Swift-конформанс
+    // обязан быть опциональным (URL?), иначе ошибка optionality-несовпадения.
+    var previewItemURL: URL?
+    var previewItemTitle: String?
 
     init(url: URL, title: String?) {
         self.previewItemURL = url
