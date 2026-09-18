@@ -155,6 +155,42 @@ class MainActivity : TauriActivity() {
         Log.d("EchoNative", "Dispatched echo-native-incoming-call")
     }
 
+    /**
+     * Системное открытие файла из приватного кэша (ACTION_VIEW + FileProvider).
+     * Вызывается из Rust (file_open.rs) через JNI: весь intent-код живёт здесь,
+     * потому что JNI-резолюция методов androidx-классов из Rust ненадёжна
+     * (NoSuchMethodError из-за кастомного app-classloader wry).
+     * Коды возврата (маппятся в Rust на контракт ошибок):
+     *   0 — ок; 1 — файла нет; 2 — нет приложения для mime; 3 — прочий сбой
+     *   (detail в Log.e("EchoNative") — реальная причина).
+     */
+    fun echoOpenFileExternally(path: String, mime: String): Int {
+        val file = java.io.File(path)
+        if (!file.exists()) return 1
+        return try {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                this,
+                "$packageName.fileprovider",
+                file
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mime)
+                addFlags(
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        Intent.FLAG_ACTIVITY_NEW_TASK
+                )
+            }
+            if (intent.resolveActivity(packageManager) == null) return 2
+            startActivity(Intent.createChooser(intent, null))
+            0
+        } catch (e: android.content.ActivityNotFoundException) {
+            2
+        } catch (e: Exception) {
+            Log.e("EchoNative", "echoOpenFileExternally failed", e)
+            3
+        }
+    }
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)

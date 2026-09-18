@@ -396,16 +396,19 @@ export async function openFileMessage(meta: FileMeta, keyUserId: string): Promis
     await openPath(abs);
     return;
   }
+  // Пустой mime → octet-stream ДО системного вызова: иначе вьюверы фильтруются
+  // по пустому типу (Android intent-mime-match), и честный файл не открывается.
+  const mime = meta.mime || "application/octet-stream";
 
   // Логируем ДО вызова: если JNI/Swift отвалится, в логе останется путь,
   // который не покрыт file_paths.xml (Android) или не существует (iOS).
   console.log(`[OPEN-MOBILE] open (${target})`, {
-    path: abs, mime: meta.mime, name: meta.name, size: meta.size,
+    path: abs, mime: mime, name: meta.name, size: meta.size,
   });
   try {
     if (target === "android") {
       // content:// URI через FileProvider + системный chooser (Rust/Android).
-      await invoke("open_file_system", { path: abs, mime: meta.mime || "application/octet-stream" });
+      await invoke("open_file_system", { path: abs, mime });
     } else {
       // QLPreviewController модалкой поверх приложения (Rust → Swift).
       await invoke("open_file_ios", { path: abs });
@@ -415,7 +418,7 @@ export async function openFileMessage(meta: FileMeta, keyUserId: string): Promis
     // Тост здесь, а не в chat-area — чтобы не было двойного тоста (мобильная
     // ветка завершается return).
     const raw = e instanceof Error ? e.message : String(e);
-    console.error("[OPEN-MOBILE] open failed:", target, "|", raw, "|", { path: abs, mime: meta.mime });
+    console.error("[OPEN-MOBILE] open failed:", target, "|", raw, "|", { path: abs, mime: mime });
     toast.error(raw.includes("no-app-for-mime") ? "Нет приложения для этого файла" : "Не удалось открыть файл");
     return;
   }

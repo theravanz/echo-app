@@ -94,10 +94,10 @@ importers:
         version: 1.1.6(@types/react-dom@19.2.3(@types/react@19.2.17))(@types/react@19.2.17)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
       '@react-three/drei':
         specifier: ^10.7.7
-        version: 10.7.7(@react-three/fiber@9.5.0(@types/react@19.2.17)(expo-asset@57.0.17(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3))(expo-file-system@57.0.7(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3)))(expo-gl@57.0.2(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3))(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(three@0.183.2))(@types/react@19.2.17)(@types/three@0.184.1)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(three@0.183.2)
+        version: 10.7.7(@react-three/fiber@9.5.0(@types/react@19.2.17)(expo-asset@58.0.3(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3))(expo-file-system@57.0.7(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3)))(expo-gl@57.0.2(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3))(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(three@0.183.2))(@types/react@19.2.17)(@types/three@0.184.1)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(three@0.183.2)
       '@react-three/fiber':
         specifier: 9.5.0
-        version: 9.5.0(@types/react@19.2.17)(expo-asset@57.0.17(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3))(expo-file-system@57.0.7(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3)))(expo-gl@57.0.2(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3))(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(three@0.183.2)
+        version: 9.5.0(@types/react@19.2.17)(expo-asset@58.0.3(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3))(expo-file-system@57.0.7(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3)))(expo-gl@57.0.2(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3))(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(three@0.183.2)
       '@supabase/supabase-js':
         specifier: ^2.105.4
         version: 2.108.1
@@ -107,6 +107,9 @@ importers:
       '@tauri-apps/plugin-fs':
         specifier: ~2.5.2
         version: 2.5.2
+      '@tauri-apps/plugin-log':
+        specifier: ~2.9.1
+        version: 2.9.1
       '@tauri-apps/plugin-notification':
         specifier: ^2.4.0
         version: 2.4.0
@@ -145,7 +148,7 @@ importers:
         version: 57.0.23(@babel/core@7.29.7)(@expo/dom-webview@57.0.1)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3)
       expo-asset:
         specifier: latest
-        version: 57.0.17(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3)
+        version: 58.0.3(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3)
       expo-file-system:
         specifier: latest
         version: 57.0.7(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))
@@ -685,6 +688,10 @@ packages:
     resolution: {integrity: sha512-M1NXeZCA1mkMkYOyIe7PlyRX0/jqFtMoJgyblnlq/vpCRfmueFT7RnGSQG8uEFDF5WHOFGijAQ3fogPh3/n5Ng==}
     engines: {node: '>=20.12.0'}
 
+  '@expo/env@2.5.0':
+    resolution: {integrity: sha512-WbMV1OKgCmGp/7qVeUFmiPMRBaj+oLLJw7Zl8xTxt6XM3jP2WCvJf2rq5Trps0h89SROc0zilnE1b/ssv6HsqA==}
+    engines: {node: '>=20.12.0'}
+
   '@expo/expo-modules-macros-plugin@0.6.1':
     resolution: {integrity: sha512-cpsLZE4rqkc1Y3eZTkxB98jrqY1YXgetmtxFt8q89jBRmk3quRuk1BZo+VcnCSObZardjg99r1k5xijEMONFGA==}
 
@@ -694,6 +701,9 @@ packages:
 
   '@expo/image-utils@0.11.5':
     resolution: {integrity: sha512-KPQBTpmpAfy/Vu9y4wPW808/qtZxjYmyJg8cm2QCPAupp+qEWA3b5zmk0ulOwQ9OgeHxuCPgUqWgkwHFo7UsrQ==}
+
+  '@expo/image-utils@0.12.0':
+    resolution: {integrity: sha512-Cmvw/R8AnkwlrXlxYXKk/wxs80VV57d7KK5jIu1H8vTuhG0txyMobwnUtEtB9p5OsznnRbiSEP77OjRAYsDV3w==}
 
   '@expo/inline-modules@0.1.7':
     resolution: {integrity: sha512-Bz/khd1gIJqDkje7t5ejD5e9jFbm4xEJzWSwRKadRo6gruepbw1xJ3Eb+e58OS8fY1ZNQYjzZbspnuph67sN0g==}
@@ -741,6 +751,14 @@ packages:
 
   '@expo/require-utils@57.0.5':
     resolution: {integrity: sha512-kTAXj9lDFEIPMsbAOGCGbjBbMF0oi7CqkYM79KOX0DDD9wSwXmlKL1z2h8OwsrBf7mbOo2DjlRvZu4BEjrIxGw==}
+    peerDependencies:
+      typescript: ^5.0.0 || ^5.0.0-0 || ^6.0.0 || ^7.0.0
+    peerDependenciesMeta:
+      typescript:
+        optional: true
+
+  '@expo/require-utils@58.0.1':
+    resolution: {integrity: sha512-/K1MYmlRVWEdIlMj9Af/hMVjQ6wZjxkthG5ymUrivmI8QC1fzfaKF55Pm2cQHNNTAtJhFBbmi87WLjoN4Vpzuw==}
     peerDependencies:
       typescript: ^5.0.0 || ^5.0.0-0 || ^6.0.0 || ^7.0.0
     peerDependenciesMeta:
@@ -2287,6 +2305,9 @@ packages:
   '@tauri-apps/plugin-fs@2.5.2':
     resolution: {integrity: sha512-XXvMSnFiob+G1H+YHCDf+bzWVumseQuEIhzpbOJzevUfL4k0U+sTApZWJHpoLiamggnVPJm5dJ5sDsniRyWxlg==}
 
+  '@tauri-apps/plugin-log@2.9.1':
+    resolution: {integrity: sha512-8dYNEQOgZcIEqeFtHAsOIGLoptm+j94270Jf2MrGS/zbsYNd4C8DKyOdeYggAyE3ugwr12mTefIfC8lVVEhdlg==}
+
   '@tauri-apps/plugin-notification@2.4.0':
     resolution: {integrity: sha512-xlJXMcUoKOjNupzDue5wrEsa1wytf+l/2gCAPhafHyP683Y3N7J/8clUWLZ3vpnwkpT2C1zcLMMQFjjecIG2xg==}
 
@@ -2932,8 +2953,21 @@ packages:
       react: '*'
       react-native: '*'
 
+  expo-asset@58.0.3:
+    resolution: {integrity: sha512-pZcvdhqzCs23hUjivmRDGPD4+pE5NNBtxy9NREfv8MRJcYPJ/Sk//KsYay3eyFJ7NNDyP87gNbUPrUPpFtQJxg==}
+    peerDependencies:
+      expo: '*'
+      react: '*'
+      react-native: '*'
+
   expo-constants@57.0.18:
     resolution: {integrity: sha512-cLDwDOniPfuCZPHNY++cAY2ZkK97u5aobbBvilPK2LLmaWxR4ZpD31LWUIzUDLrwMPxLjmh1uURnbeYEf0Mivw==}
+    peerDependencies:
+      expo: '*'
+      react-native: '*'
+
+  expo-constants@58.0.3:
+    resolution: {integrity: sha512-wY5bq+3aaY8jXBs288EceS5pfWg27L2AI/TigGW7Fc9vP1P1OQL2WUhmNDLh1p0fibf/BvdcjFTRLTSq+ly4ZQ==}
     peerDependencies:
       expo: '*'
       react-native: '*'
@@ -5248,6 +5282,14 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@expo/env@2.5.0':
+    dependencies:
+      chalk: 4.1.2
+      debug: 4.4.3
+      getenv: 2.0.0
+    transitivePeerDependencies:
+      - supports-color
+
   '@expo/expo-modules-macros-plugin@0.6.1': {}
 
   '@expo/fingerprint@0.20.13':
@@ -5269,6 +5311,19 @@ snapshots:
   '@expo/image-utils@0.11.5(typescript@5.9.3)':
     dependencies:
       '@expo/require-utils': 57.0.5(typescript@5.9.3)
+      '@expo/spawn-async': 1.8.0
+      chalk: 4.1.2
+      getenv: 2.0.0
+      jimp-compact: 0.16.1
+      parse-png: 2.1.0
+      semver: 7.8.5
+    transitivePeerDependencies:
+      - supports-color
+      - typescript
+
+  '@expo/image-utils@0.12.0(typescript@5.9.3)':
+    dependencies:
+      '@expo/require-utils': 58.0.1(typescript@5.9.3)
       '@expo/spawn-async': 1.8.0
       chalk: 4.1.2
       getenv: 2.0.0
@@ -5409,6 +5464,16 @@ snapshots:
       - typescript
 
   '@expo/require-utils@57.0.5(typescript@5.9.3)':
+    dependencies:
+      '@babel/code-frame': 7.29.7
+      '@babel/core': 7.29.7
+      '@babel/plugin-transform-modules-commonjs': 7.29.7(@babel/core@7.29.7)
+    optionalDependencies:
+      typescript: 5.9.3
+    transitivePeerDependencies:
+      - supports-color
+
+  '@expo/require-utils@58.0.1(typescript@5.9.3)':
     dependencies:
       '@babel/code-frame': 7.29.7
       '@babel/core': 7.29.7
@@ -6805,12 +6870,12 @@ snapshots:
     optionalDependencies:
       '@types/react': 19.2.17
 
-  '@react-three/drei@10.7.7(@react-three/fiber@9.5.0(@types/react@19.2.17)(expo-asset@57.0.17(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3))(expo-file-system@57.0.7(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3)))(expo-gl@57.0.2(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3))(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(three@0.183.2))(@types/react@19.2.17)(@types/three@0.184.1)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(three@0.183.2)':
+  '@react-three/drei@10.7.7(@react-three/fiber@9.5.0(@types/react@19.2.17)(expo-asset@58.0.3(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3))(expo-file-system@57.0.7(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3)))(expo-gl@57.0.2(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3))(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(three@0.183.2))(@types/react@19.2.17)(@types/three@0.184.1)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)(three@0.183.2)':
     dependencies:
       '@babel/runtime': 7.29.7
       '@mediapipe/tasks-vision': 0.10.17
       '@monogrid/gainmap-js': 3.4.0(three@0.183.2)
-      '@react-three/fiber': 9.5.0(@types/react@19.2.17)(expo-asset@57.0.17(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3))(expo-file-system@57.0.7(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3)))(expo-gl@57.0.2(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3))(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(three@0.183.2)
+      '@react-three/fiber': 9.5.0(@types/react@19.2.17)(expo-asset@58.0.3(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3))(expo-file-system@57.0.7(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3)))(expo-gl@57.0.2(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3))(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(three@0.183.2)
       '@use-gesture/react': 10.3.1(react@19.2.3)
       camera-controls: 3.1.2(three@0.183.2)
       cross-env: 7.0.3
@@ -6838,7 +6903,7 @@ snapshots:
       - '@types/three'
       - immer
 
-  '@react-three/fiber@9.5.0(@types/react@19.2.17)(expo-asset@57.0.17(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3))(expo-file-system@57.0.7(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3)))(expo-gl@57.0.2(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3))(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(three@0.183.2)':
+  '@react-three/fiber@9.5.0(@types/react@19.2.17)(expo-asset@58.0.3(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3))(expo-file-system@57.0.7(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3)))(expo-gl@57.0.2(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3))(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(three@0.183.2)':
     dependencies:
       '@babel/runtime': 7.29.7
       '@types/webxr': 0.5.24
@@ -6854,7 +6919,7 @@ snapshots:
       zustand: 5.0.14(@types/react@19.2.17)(react@19.2.3)(use-sync-external-store@1.6.0(react@19.2.3))
     optionalDependencies:
       expo: 57.0.23(@babel/core@7.29.7)(@expo/dom-webview@57.0.1)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3)
-      expo-asset: 57.0.17(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3)
+      expo-asset: 58.0.3(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3)
       expo-file-system: 57.0.7(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))
       expo-gl: 57.0.2(expo@57.0.23)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)
       react-dom: 19.2.3(react@19.2.3)
@@ -7020,6 +7085,10 @@ snapshots:
       '@tauri-apps/cli-win32-x64-msvc': 2.11.4
 
   '@tauri-apps/plugin-fs@2.5.2':
+    dependencies:
+      '@tauri-apps/api': 2.11.1
+
+  '@tauri-apps/plugin-log@2.9.1':
     dependencies:
       '@tauri-apps/api': 2.11.1
 
@@ -7660,9 +7729,28 @@ snapshots:
       - supports-color
       - typescript
 
+  expo-asset@58.0.3(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3):
+    dependencies:
+      '@expo/image-utils': 0.12.0(typescript@5.9.3)
+      expo: 57.0.23(@babel/core@7.29.7)(@expo/dom-webview@57.0.1)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3)
+      expo-constants: 58.0.3(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))
+      react: 19.2.3
+      react-native: 0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3)
+    transitivePeerDependencies:
+      - supports-color
+      - typescript
+
   expo-constants@57.0.18(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3)):
     dependencies:
       '@expo/env': 2.4.3
+      expo: 57.0.23(@babel/core@7.29.7)(@expo/dom-webview@57.0.1)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3)
+      react-native: 0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3)
+    transitivePeerDependencies:
+      - supports-color
+
+  expo-constants@58.0.3(expo@57.0.23)(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3)):
+    dependencies:
+      '@expo/env': 2.5.0
       expo: 57.0.23(@babel/core@7.29.7)(@expo/dom-webview@57.0.1)(react-dom@19.2.3(react@19.2.3))(react-native@0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3))(react@19.2.3)(typescript@5.9.3)
       react-native: 0.87.1(@babel/core@7.29.7)(@types/react@19.2.17)(react@19.2.3)
     transitivePeerDependencies:
