@@ -32,6 +32,7 @@ import type { UserProfile, Chat, Message, NetworkMode, AppTab } from "@/hooks/ec
 import { deleteMessageMedia } from "@/lib/files";
 import { TbFileUpload } from "react-icons/tb";
 import { useFileDragDrop } from "@/hooks/echo/use-file-dragdrop";
+import { registerNavLayer } from "@/lib/back-nav";
 
 
 interface ChatAreaProps {
@@ -89,7 +90,40 @@ export function ChatArea({
     if (msg) setReplyingTo(null);
     setEditingMessage(msg);
   };
-  
+
+  // ─── BACK-NAV: внутренние слои ChatArea в едином back-стеке ───
+  // Приоритеты: contextMenu (100) → bgPicker (90) → mediaPicker (80).
+  // rightPanel/editing/replying/чат регистрируются в app/page.tsx.
+  useEffect(() => {
+    if (!contextMenu) return;
+    return registerNavLayer({
+      id: "chat-context-menu",
+      priority: 100,
+      isOpen: () => true,
+      close: () => setContextMenu(null),
+    });
+  }, [contextMenu]);
+
+  useEffect(() => {
+    if (!bgPickerOpen) return;
+    return registerNavLayer({
+      id: "chat-bg-picker",
+      priority: 90,
+      isOpen: () => true,
+      close: () => setBgPickerOpen(false),
+    });
+  }, [bgPickerOpen]);
+
+  useEffect(() => {
+    if (!isMediaPickerOpen) return;
+    return registerNavLayer({
+      id: "chat-media-picker",
+      priority: 80,
+      isOpen: () => true,
+      close: () => setIsMediaPickerOpen(false),
+    });
+  }, [isMediaPickerOpen]);
+
 
   const drag = useFileDragDrop({
     enabled: !isMobile && !!user,

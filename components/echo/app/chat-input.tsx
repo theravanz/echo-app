@@ -30,6 +30,7 @@ import {
 
 import { toast } from "sonner";
 import { pickRecorderMime, MAX_VOICE_SECONDS } from "@/lib/voice";
+import { setVoiceRecordingActive } from "@/lib/back-nav";
 
 const HOLD_MS = 220;           // удержание до старта записи
 const LOCK_THRESHOLD = 70;     // свайп вверх для закрепления
@@ -456,7 +457,14 @@ export function ChatInput({
     if (rec !== "idle" && recSec >= MAX_VOICE_SECONDS) stopVoiceRecording(true);
   }, [rec, recSec]);
 
-  // Esc — отменить запись (десктоп).
+  // Esc — отменить запись (десктоп). Пока rec !== "idle", навигационный
+  // Esc (back-nav manager) не срабатывает — координация через глобальный
+  // флаг в lib/back-nav.
+  useEffect(() => {
+    setVoiceRecordingActive(rec !== "idle");
+    return () => setVoiceRecordingActive(false);
+  }, [rec]);
+
   useEffect(() => {
     if (rec === "idle") return;
     const onKey = (e: KeyboardEvent) => {
