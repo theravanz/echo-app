@@ -6,6 +6,9 @@ mod device;
 // iOS QuickLook). На десктопе команды есть, но возвращают "unsupported".
 mod file_open;
 mod media;
+// Настоящий выход приложения (Android back при пустом back-стеке):
+// finishAndRemoveTask через JNI — не kill процесса (см. app_exit.rs).
+mod app_exit;
 mod notification;
 mod qr_auth;
 mod stickers;
@@ -184,6 +187,8 @@ pub fn run() {
             // Открытие файлов системным механизмом (мобильные):
             // Android → FileProvider + ACTION_VIEW chooser, iOS → QuickLook
             open_file_system,
+            // Back-навигация: настоящий выход при пустом back-стеке (Android)
+            app_exit::exit_app,
             open_file_ios,
             // Media encryption commands (Shield Media: AES-256-GCM)
             media::media_encrypt,

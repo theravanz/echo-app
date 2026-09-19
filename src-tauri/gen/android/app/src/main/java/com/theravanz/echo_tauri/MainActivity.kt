@@ -191,6 +191,34 @@ class MainActivity : TauriActivity() {
         }
     }
 
+    /**
+     * Системная back-навигация Android: кнопка/жест НЕ закрывает приложение
+     * напрямую. Событие уходит в webview как CustomEvent 'echo-native-back',
+     * где единый back-стек (lib/back-nav.ts) решает: закрыть верхний слой UI
+     * (модалка → панель → открытый чат) или выполнить настоящий выход
+     * (invoke('exit_app') → finishAndRemoveTask через JNI, НЕ kill процесса).
+     *
+     * super.onBackPressed() НЕ вызываем: иначе Activity финишится до того,
+     * как JS успеет ответить. Если webview ещё не создан — дефолтное поведение.
+     * predictive back (Android 13+) остаётся на onBackPressed-пути, т.к.
+     * android:enableOnBackInvokedCallback в манифесте не включён.
+     */
+    override fun onBackPressed() {
+        val wv = webView
+        if (wv == null) {
+            super.onBackPressed()
+            return
+        }
+        val script =
+            "(() => { try { " +
+            "window.dispatchEvent(new CustomEvent('echo-native-back')); " +
+            "} catch(e) { console.error('[BACK-NAV] native dispatch failed', e); } })();"
+        wv.post {
+            wv.evaluateJavascript(script, null)
+        }
+        Log.d(TAG, "System back dispatched to webview (echo-native-back)")
+    }
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = getSystemService(NotificationManager::class.java)

@@ -99,7 +99,10 @@ import { serializeCallLog } from "@/hooks/echo/call-log";
 import { ChatArea } from "@/components/echo/app/chat-area";
 
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { registerNavLayer, canGoBack, closeTopLayer, isVoiceRecordingActive } from "@/lib/back-nav";
+import { useEdgeBackGesture } from "@/hooks/echo/use-edge-back";
 const SettingsModal = dynamic(
   () => import("@/components/echo/app/settings-modal"),
   { ssr: false }
@@ -193,6 +196,128 @@ const setEditingMessageSafe = (msg: any) => {
   useEffect(() => {
     if (user?.id) setCurrentUserId(user.id);
   }, [user?.id, setCurrentUserId]);
+
+  // ─── BACK-NAV: единый back-стек (см. lib/back-nav.ts) ───
+  // Внутренние слои ChatArea (contextMenu/bgPicker/mediaPicker) регистрирует
+  // сам ChatArea. Здесь — глобальные слои страницы.
+  useEffect(() => {
+    if (!isSettingsOpen) return;
+    return registerNavLayer({
+      id: "settings-modal",
+      priority: 110,
+      isOpen: () => true,
+      close: () => setIsSettingsOpen(false),
+    });
+  }, [isSettingsOpen]);
+
+  useEffect(() => {
+    if (!isRightPanelOpen) return;
+    return registerNavLayer({
+      id: "chat-right-panel",
+      priority: 80,
+      isOpen: () => true,
+      close: () => setIsRightPanelOpen(false),
+    });
+  }, [isRightPanelOpen]);
+
+  useEffect(() => {
+    if (!editingMessage) return;
+    return registerNavLayer({
+      id: "editing-message",
+      priority: 70,
+      isOpen: () => true,
+      close: () => setEditingMessage(null),
+    });
+  }, [editingMessage, setEditingMessage]);
+
+  useEffect(() => {
+    if (!replyingTo) return;
+    return registerNavLayer({
+      id: "replying-to",
+      priority: 70,
+      isOpen: () => true,
+      close: () => setReplyingTo(null),
+    });
+  }, [replyingTo, setReplyingTo]);
+
+  useEffect(() => {
+    if (!selectedChat) return;
+    return registerNavLayer({
+      id: "selected-chat",
+      priority: 60,
+      isOpen: () => true,
+      close: () => {
+        // Та же onBack-логика, что и у стрелки в ChatHeader — не переписываем.
+        setSelectedChat(null);
+        if (isMobile) setSearchOpen(false);
+      },
+    });
+  }, [selectedChat, isMobile, setSelectedChat, setSearchOpen]);
+
+  // Esc (десктоп) → closeTopLayer(). Если идёт запись голоса (rec !== "idle"),
+  // Esc отменяет запись в ChatInput — навигационный Esc не срабатывает.
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => {
+      try {
+        if (e.key !== "Escape" || e.repeat) return;
+        if (isVoiceRecordingActive()) return;
+        if (isMobile) return; // навигационный Esc — только десктоп
+        if (canGoBack()) {
+          e.preventDefault();
+          closeTopLayer();
+        }
+      } catch (err) {
+        console.error("[BACK-NAV] Escape handling failed:", err);
+      }
+    };
+    window.addEventListener("keydown", onEsc);
+    return () => window.removeEventListener("keydown", onEsc);
+  }, [isMobile]);
+
+  // Android системный back: MainActivity.onBackPressed эмитит в webview
+  // CustomEvent 'echo-native-back'. Есть слои → закрываем верхний.
+  // Слоёв нет → настоящий выход (finishAndRemoveTask, НЕ kill процесса).
+  useEffect(() => {
+    const onNativeBack = () => {
+      try {
+        if (canGoBack()) {
+          closeTopLayer();
+          return;
+        }
+        invoke("exit_app").catch((err: unknown) => {
+          console.error("[BACK-NAV] exit_app failed:", err);
+        });
+      } catch (err) {
+        console.error("[BACK-NAV] native back handling failed:", err);
+      }
+    };
+    window.addEventListener("echo-native-back", onNativeBack as EventListener);
+    return () => window.removeEventListener("echo-native-back", onNativeBack as EventListener);
+  }, []);
+
+  // Edge-swipe от левого края (iOS + Android): работает когда есть хоть один
+  // слой для закрытия — чат, настройки (и их под-экраны), reply/edit, панель.
+  // Нет слоёв → жеста нет. onCommit — общий closeTopLayer(): закрывает
+  // именно ВЕРХНИЙ слой (settings-sub-view → settings → чат → ...).
+  const edgeCommit = useCallback(() => {
+    try {
+      if (closeTopLayer()) return;
+      // Fallback на случай, когда реестр пуст (не должен случаться):
+      // закрываем чат — та же onBack-логика.
+      setSelectedChat(null);
+      setSearchOpen(false);
+    } catch (err) {
+      console.error("[BACK-NAV] edge-swipe commit failed:", err);
+    }
+  }, [setSelectedChat, setSearchOpen]);
+  const edgeBackEnabled =
+    isMobile && (!!selectedChat || isSettingsOpen || !!editingMessage || !!replyingTo || isRightPanelOpen);
+  const { dragX, sidebarX } = useEdgeBackGesture(
+    edgeBackEnabled,
+    edgeCommit,
+    isMobile && !!selectedChat, // сайдбар за экраном, когда открыт чат
+  );
+
 
   // === Phase 0: восстановление E2EE-ключа при старте ===
   // Rust KeyStore пуст после перезапуска. Ключ персистится device-bound
@@ -824,7 +949,18 @@ useEffect(() => {
       )}
 
       {/* --- 2. List Sidebar --- */}
-      <div className={cn(isMobile && selectedChat ? "hidden" : "w-full md:w-auto flex shrink-0 h-full")}>
+      <motion.div
+        style={{ x: sidebarX }}
+        className={cn(
+          // BACK-NAV edge-swipe: при открытом чате на мобиле сайдбар НЕ
+          // размонтируется (hidden) — он постоянно живёт за левым краем
+          // (x = -W из use-edge-back) и подъезжает синхронно с жестом.
+          // Это убирает «моргание» списка: mount в момент жеста его и давал.
+          isMobile && selectedChat
+            ? "absolute inset-y-0 left-0 w-full flex z-0"
+            : "w-full md:w-auto flex shrink-0 h-full relative z-0"
+        )}
+      >
         <ChatSidebar
           activeTab={activeTab}
           setActiveTab={setActiveTab}
@@ -852,9 +988,18 @@ useEffect(() => {
           }}
           onOpenSettings={() => setIsSettingsOpen(true)}
         />
-      </div>
+      </motion.div>
 
       {/* --- 3. Main Communication Area --- */}
+      <motion.div
+        style={{ x: dragX }}
+        className={cn(
+          "min-w-0 min-h-0",
+          // На мобиле с открытым чатом ChatArea — фуллскрин-оверлей над
+          // сайдбаром: во время edge-жеста он уезжает вправо, открывая список.
+          isMobile && selectedChat ? "absolute inset-0 z-20 flex" : "flex-1 flex relative"
+        )}
+      >
         <ChatArea
           user={user}
           selectedChat={selectedChat}
@@ -884,8 +1029,16 @@ useEffect(() => {
           handleSendVoice={handleSendVoice}
           onOpenChat={(id) => setSelectedChat(chats.find(c => c.id === id)!)}
         />
+      </motion.div>
 
       {/* --- Settings Modal --- */}
+      {/* BACK-NAV edge-swipe: настройки (и их sub-view) уезжают вправо
+          тем же спринтом, что и ChatArea. Внешняя обёртка не мешает
+          внутренней open/close-анимации (x она не трогает). */}
+      <motion.div
+        style={{ x: dragX }}
+        className={cn("fixed inset-0", !isSettingsOpen && "pointer-events-none")}
+      >
       <AnimatePresence mode="wait">
         {isSettingsOpen && (
           <motion.div
@@ -911,6 +1064,7 @@ useEffect(() => {
           </motion.div>
         )}
       </AnimatePresence>
+      </motion.div>
 
       {/* --- Mobile Hotbar --- */}
       {isMobile && !selectedChat && (

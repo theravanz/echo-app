@@ -7,6 +7,7 @@ import { cn, safeChar } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { getDevices, deleteDevice, generateHWID, saveDevice, clearCryptoKeys, type Device } from "@/lib/db";
 import { clearAuthProgress } from "@/lib/auth-storage";
+import { registerNavLayer } from "@/lib/back-nav";
 import {
   TbX as X,
   TbArrowLeft as ArrowLeft,
@@ -186,6 +187,31 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
   const [isVpnDetected, setIsVpnDetected] = useState(false);
   const [currentGeo, setCurrentGeo] = useState<any>(null);
   const [securityExpanded, setSecurityExpanded] = useState(true);
+
+  // ─── BACK-NAV: внутренние слои настроек в едином back-стеке ───
+  // QR-сканер (120) над мобильным drill-down экраном (115), который выше
+  // самой модалки настроек (110, зарегистрирована в app/page.tsx).
+  // На iOS/Android edge-swipe и системный back отсюда поднимаются наверх:
+  // sub-view → главное меню → закрыть настройки.
+  useEffect(() => {
+    if (!showQrScanner) return;
+    return registerNavLayer({
+      id: "settings-qr-scanner",
+      priority: 120,
+      isOpen: () => true,
+      close: () => setShowQrScanner(false),
+    });
+  }, [showQrScanner]);
+
+  useEffect(() => {
+    if (!activeView) return;
+    return registerNavLayer({
+      id: "settings-sub-view",
+      priority: 115,
+      isOpen: () => true,
+      close: () => setActiveView(null),
+    });
+  }, [activeView]);
 
   useEffect(() => {
     let cancelled = false;
