@@ -13,6 +13,121 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
 let supabaseClient: SupabaseClient | null = null;
 
+// ═══════════════════════════════════════════════════════════════════
+// Session freshness — ручной управляемый refresh вместо autoRefreshToken.
+//
+// ПОЧЕМУ ТАК: gotrue при autoRefreshToken:true при обрыве сети уходит в
+// retry-цикл обновления токена (fetch без таймаута → AuthRetryableFetchError),
+// после исчерпания попыток сам УДАЛЯЕТ сессию (SIGNED_OUT) — авторизация
+// «слетает» из-за airplane mode. Отключаем автомат; refresh выполняем только
+// когда сеть ПРОВЕРЕННО доступна (probe /rest/v1/ c AbortController), поэтому
+// gotrue никогда не ходит в сеть вслепую.
+// ═══════════════════════════════════════════════════════════════════
+
+const SESSION_REFRESH_MARGIN_SEC = 120;
+const CONNECTIVITY_PROBE_TIMEOUT_MS = 5000;
+const FRESHNESS_CHECK_INTERVAL_MS = 60_000;
+
+let watchdogStarted = false;
+let refreshInFlight = false;
+
+/** Живая проверка достижимости Supabase (не navigator.onLine, а реальный probe). */
+async function probeSupabaseReachable(): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CONNECTIVITY_PROBE_TIMEOUT_MS);
+    // ЛЮБОЙ HTTP-ответ (даже 401) = сервер достижим; офлайн — это только
+    // сетевое исключение/таймаут. Раньше 401 на keyless-пробе ложно
+    // считался «недоступен» → refresh не выполнялся → все запросы 401.
+    await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/`, {
+      method: "GET",
+      signal: controller.signal,
+      cache: "no-store",
+      headers: {
+        Accept: "application/json",
+        apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
+        Authorization: `Bearer ${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ""}`,
+      },
+    });
+    clearTimeout(timeoutId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Обновить сессию, если access-токен истёк или истекает. Сеть сначала
+ * проверяется probe'ом: офлайн gotrue не вызываем ВООБЩЕ — иначе он
+ * снова уйдёт в retry-цикл. Никогда не бросает (только warn в консоль).
+ */
+async function ensureSessionFresh(client: SupabaseClient, reason: string): Promise<void> {
+  if (refreshInFlight) return;
+  refreshInFlight = true;
+  try {
+    const { data } = await client.auth.getSession();
+    const session = data.session;
+    if (!session) return;
+
+    const expiresAt = session.expires_at ?? 0;
+    const timeNow = Math.floor(Date.now() / 1000);
+    if (timeNow < expiresAt - SESSION_REFRESH_MARGIN_SEC) return;
+
+    const reachable = await probeSupabaseReachable();
+    if (!reachable) {
+      console.warn(`[SupabaseAuth] ${reason}: token stale but Supabase unreachable, keep session offline`);
+      return;
+    }
+
+    const { error } = await client.auth.refreshSession();
+    if (error) {
+      console.warn(`[SupabaseAuth] ${reason}: refresh failed:`, error.message);
+      // 400/401 = refresh-токен невалиден (протух/отозван) — сессия мертва,
+      // чистим локально, чтобы не висеть «залогиненным» с нерабочим токеном.
+      const status = (error as { status?: number })?.status;
+      if (status === 400 || status === 401) {
+        try { await client.auth.signOut({ scope: "local" }); } catch { /* ignore */ }
+        console.warn(`[SupabaseAuth] ${reason}: refresh token invalid, local session cleared`);
+      }
+    } else {
+      console.log(`[SupabaseAuth] ${reason}: session refreshed`);
+    }
+  } catch (e) {
+    console.warn(`[SupabaseAuth] ${reason}: refresh error:`, e);
+  } finally {
+    refreshInFlight = false;
+  }
+}
+
+/**
+ * Публичная точка: гарантировать свежий access-токен перед сетевыми
+ * запросами (вызывается в app-init после восстановления сессии).
+ */
+export async function ensureSupabaseSessionFresh(): Promise<void> {
+  if (!supabaseClient) return;
+  await ensureSessionFresh(supabaseClient, "init");
+}
+
+/**
+ * Watchdog: refresh при возврате сети (online-событие) и периодическая
+ * проверка раз в минуту (только когда navigator.onLine). Офлайн — тишина.
+ */
+function startSessionWatchdog(client: SupabaseClient): void {
+  if (watchdogStarted || typeof window === "undefined") return;
+  watchdogStarted = true;
+
+  window.addEventListener("online", () => {
+    void ensureSessionFresh(client, "online-event");
+  });
+  window.addEventListener("offline", () => {
+    // Ничего не делаем — и это главное: не даём gotrue трогать сессию офлайн.
+  });
+  setInterval(() => {
+    if (typeof navigator !== "undefined" && !navigator.onLine) return;
+    void ensureSessionFresh(client, "periodic");
+  }, FRESHNESS_CHECK_INTERVAL_MS);
+}
+
 export function getSupabase(): SupabaseClient {
   if (!supabaseClient) {
     const supabaseUrl =
@@ -29,8 +144,15 @@ export function getSupabase(): SupabaseClient {
     supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
         persistSession: true,
+        // Авто-рефреш отключён: именно его retry-цикл удалял сессию при
+        // офлайне. Обновление — через ensureSessionFresh/startSessionWatchdog.
+        autoRefreshToken: false,
+        // QR-логин идёт через verifyOtp (API), URL-токены не используются;
+        // флаг исключает и парсинг ?chat=username как auth-параметров.
+        detectSessionInUrl: false,
       },
     });
+    startSessionWatchdog(supabaseClient);
   }
   return supabaseClient;
 }

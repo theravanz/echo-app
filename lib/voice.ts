@@ -96,6 +96,72 @@ export async function encryptAndUploadVoice(
 
 const voiceUrlCache = new Map<string, Promise<string | null>>();
 
+// ═══════════════════════════════════════════════════════════════════
+// Payload-разделение: шифруем ЛОКАЛЬНО (офлайн-ок, IPC), заливаем ПОТОМ.
+// Нужно для оптимистичной отправки: пузырь появляется сразу, а сеть
+// (upload + insert) уходит в фон/очередь.
+// ═══════════════════════════════════════════════════════════════════
+
+export interface VoicePayload {
+  cipher: Uint8Array;
+  nonce: string;
+  mime: string;
+  duration: number;
+  /** Планируемый путь в бакете — детерминирован локально, без сети. */
+  remotePath: string;
+}
+
+/**
+ * Зашифровать голосовое локально. `pubkeyOverride` — ключ из локального
+ * кэша чатов (chats.public_key), чтобы работать офлайн без сетевого
+ * запроса профиля.
+ */
+export async function encryptVoicePayload(
+  senderId: string,
+  receiverId: string,
+  blob: Blob,
+  durationSec: number,
+  pubkeyOverride?: string | null,
+): Promise<VoicePayload> {
+  const pubkey = pubkeyOverride || (await getPublicKey(receiverId));
+  if (!pubkey) throw new Error("Публичный ключ получателя не найден");
+
+  const plain = new Uint8Array(await blob.arrayBuffer());
+  const { cipher, nonce } = await encryptBytes(pubkey, plain);
+  dbg("payload: plain", plain.length, "→ cipher", cipher.length);
+
+  return {
+    cipher,
+    nonce,
+    mime: blob.type || "audio/webm",
+    duration: Math.min(Math.round(durationSec), MAX_VOICE_SECONDS),
+    remotePath: `${senderId}/voice-${Date.now()}.enc`,
+  };
+}
+
+/** Метаданные для колонки content (plaintext JSON, не секрет). */
+export function buildVoiceMeta(payload: VoicePayload, receiverId: string): VoiceMeta {
+  return {
+    path: payload.remotePath,
+    nonce: payload.nonce,
+    mime: payload.mime,
+    duration: payload.duration,
+    to: receiverId,
+    v: MEDIA_VERSION_RAW,
+  };
+}
+
+/** Загрузить готовый шифротекст (путь досылки очереди). */
+export async function uploadVoiceCipher(cipher: Uint8Array, remotePath: string): Promise<void> {
+  const { error } = await supabase.storage
+    .from(VOICE_BUCKET)
+    .upload(remotePath, new Blob([cipher as unknown as BlobPart], { type: "application/octet-stream" }), {
+      upsert: true,
+      contentType: "application/octet-stream",
+    });
+  if (error) throw error;
+}
+
 /** Расшифровать голосовое и получить blob: URL (с кэшем). */
 export function loadVoiceUrl(meta: VoiceMeta, senderId: string): Promise<string | null> {
   const key = `${VOICE_BUCKET}/${meta.path}`;

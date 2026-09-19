@@ -31,6 +31,7 @@ interface ChatSidebarProps {
   connectionStatus: ConnectionStatus;
   activeMode: NetworkMode;
   chats: Chat[];
+  chatsFetchError: boolean;
   selectedChat: Chat | null;
   onlineUsers: Set<string>;
   searchOpen: boolean;
@@ -50,7 +51,7 @@ interface ChatSidebarProps {
 export function ChatSidebar({
   activeTab, setActiveTab,
   connectionStatus, activeMode,
-  chats, selectedChat, onlineUsers,
+  chats, selectedChat, onlineUsers, chatsFetchError,
   searchOpen, searchQuery, searchResults, isSearching, isSearchFocused, recentSearches,
   onSearchOpen, onSearch, onSearchFocus, onStartChat, onSelectChat,
   onOpenSettings,
@@ -184,7 +185,14 @@ export function ChatSidebar({
 
       {/* Chat List */}
       <div className="flex-1 overflow-y-auto overscroll-contain scrollbar-hide p-2 md:p-3 space-y-1">
-        {chats.length === 0 && (
+        {chats.length === 0 && chatsFetchError && (
+          <div className="flex flex-col items-center justify-center h-full text-center p-6">
+            <ZapOff className="w-12 h-12 text-muted-foreground/20 mb-4" />
+            <div className="text-sm text-muted-foreground/60 font-medium">No network</div>
+            <div className="text-xs text-muted-foreground/40 mt-1">You&apos;re offline and this device has no cached chats yet. Connect to the internet to load your conversations.</div>
+          </div>
+        )}
+        {chats.length === 0 && !chatsFetchError && (
           <div className="flex flex-col items-center justify-center h-full text-center p-6">
             <Ghost className="w-12 h-12 text-muted-foreground/20 mb-4" />
             <div className="text-sm text-muted-foreground/60 font-medium">No conversations yet</div>

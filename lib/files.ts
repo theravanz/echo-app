@@ -37,6 +37,34 @@ export interface FileMeta {
 
 export type UploadStatus = "uploading" | "paused" | "error";
 
+/**
+ * Офлайн-детект: сеть недоступна → любые сетевые операции должны падать
+ * мгновенно, а не ждать таймаутов/ретраев (сообщение уходит в офлайн-очередь).
+ */
+export function isOfflineNow(): boolean {
+  return typeof navigator !== "undefined" && navigator.onLine === false;
+}
+
+/**
+ * Ошибка неисправима ретраем: явный 4xx (кроме 408/429) или отказ Storage.
+ * Используется и файловым пайплайном, и офлайн-очередью (дроп с тостом).
+ */
+export function isPermanentMediaError(e: any): boolean {
+  if (!e) return false;
+  if (e.offline || e.paused) return false;
+  const m = String(e?.message ?? e).toLowerCase();
+  // fallback-аплоадер: "upload 413: ..." → 4xx кроме 408/429 не ретраим
+  const m4xx = m.match(/\bupload (\d{3})\b/);
+  if (m4xx) {
+    const s = Number(m4xx[1]);
+    return s >= 400 && s < 500 && s !== 408 && s !== 429;
+  }
+  if (m.includes("payload too large") || m.includes("entity too large") || m.includes("maximum allowed size")) return true;
+  const status = typeof e?.status === "number" ? e.status : typeof e?.statusCode === "number" ? e.statusCode : undefined;
+  if (typeof status === "number") return status >= 400 && status < 500 && status !== 408 && status !== 429;
+  return false;
+}
+
 import { parseVoiceMeta } from "@/lib/voice";
 
 /** Удалить медиа-объект сообщения из Storage (voice/file). Текст — no-op. */
@@ -87,8 +115,22 @@ async function getPublicKey(userId: string): Promise<string | null> {
   } catch { return null; }
 }
 
+/** Готовый локальный шифротекст файла — доступен сразу после шифрования (до upload). */
+export interface FileCipherPayload {
+  cipher: Uint8Array;
+  /** Планируемый путь в бакете (детерминирован локально, без сети). */
+  remotePath: string;
+  nonce: string;
+}
+
 export interface FileUploadHandle {
   metaPromise: Promise<FileMeta>;
+  /**
+   * Шифротекст готов СРАЗУ после локального шифрования (офлайн-ok) — нужен,
+   * чтобы при сетевом сбое положить его в outbox офлайн-очереди без
+   * повторного шифрования и без обращения к сети.
+   */
+  cipherPromise: Promise<FileCipherPayload>;
   pause: () => void;
   resume: () => void;
   cancel: () => void;
@@ -104,7 +146,9 @@ const isNotFound = (e: any): boolean => {
 };
 
 /** Fallback без TUS: POST с прогрессом + авто-ретраи при обрыве сети.
- *  Файл ≤10 МБ, поэтому докачка с оффсета не критична — критично не потерять файл. */
+ *  Файл ≤10 МБ, поэтому докачка с оффсета не критична — критично не потерять файл.
+ *  ВАЖНО: офлайн = fail fast, без 60-секундных ожиданий — сообщение должно
+ *  мгновенно уехать в офлайн-очередь (см. use-network-queue.ts). */
 function plainUploadWithRetry(
   blob: Blob, bucket: string, path: string, token: string, apiKey: string,
   cb: { onProgress: (loaded: number, total: number) => void },
@@ -117,6 +161,7 @@ function plainUploadWithRetry(
   const attempt = (n: number): Promise<void> =>
     new Promise((res, rej) => {
       if (aborted) return rej({ paused: true });
+      if (isOfflineNow()) return rej({ offline: true });
       const xhr = new XMLHttpRequest();
       currentXhr = xhr;
       xhr.open("POST", url);
@@ -130,6 +175,8 @@ function plainUploadWithRetry(
       const giveUp = (err: any) => rej(aborted ? { paused: true } : err);
       const retryOrGiveUp = (err: any) => {
         if (aborted) return rej({ paused: true });
+        // Сеть пропала — не ждём DELAYS, сразу отдаём в очередь.
+        if (isOfflineNow()) return giveUp({ offline: true });
         if (n >= DELAYS.length - 1) return giveUp(err);
         setTimeout(() => attempt(n + 1).then(res).catch(giveUp), DELAYS[n]);
       };
@@ -162,6 +209,7 @@ export function encryptAndUploadFile(
   receiverId: string,
   file: File,
   cb: { onProgress: (loaded: number, total: number) => void; onStatus: (s: UploadStatus) => void },
+  pubkeyOverride?: string | null,
 ): FileUploadHandle {
   let cancelled = false;
   let paused = false;
@@ -179,6 +227,13 @@ export function encryptAndUploadFile(
   let resolveMeta!: (m: FileMeta) => void;
   let rejectMeta!: (e: any) => void;
   const metaPromise = new Promise<FileMeta>((res, rej) => { resolveMeta = res; rejectMeta = rej; });
+
+  // Шифротекст отдаём наружу (офлайн-очередь) сразу после локального шифрования.
+  let resolveCipher!: (p: FileCipherPayload) => void;
+  let rejectCipher!: (e: any) => void;
+  const cipherPromise = new Promise<FileCipherPayload>((res, rej) => { resolveCipher = res; rejectCipher = rej; });
+  // Гасим unhandled rejection, если очередь не запрашивает шифротекст (happy path).
+  void cipherPromise.catch(() => {});
 
   const finish = (m: FileMeta) => {
     if (settled) return;
@@ -209,6 +264,8 @@ export function encryptAndUploadFile(
   });
 
   const uploadOnce = async (): Promise<void> => {
+    // Офлайн: не тратим ни TUS-раунд, ни 60 секунд ретраев — сразу в очередь.
+    if (isOfflineNow()) throw { offline: true };
     // Путь 1: TUS, если жив
     if (!tusDisabled) {
       try {
@@ -247,7 +304,9 @@ export function encryptAndUploadFile(
   const run = async () => {
     try {
       cb.onStatus("uploading");
-      const pubkey = await getPublicKey(receiverId);
+      // Офлайн-ok: сначала пробуем ключ из локального кэша чатов, и только
+      // если его нет — идём в сеть за profiles (офлайн упадёт → ошибка).
+      const pubkey = pubkeyOverride || (await getPublicKey(receiverId));
       if (!pubkey) throw new Error("Публичный ключ получателя не найден");
 
       // v:2 — шифруем СЫРЫЕ байты файла (base64-обёртка убрана).
@@ -259,6 +318,9 @@ export function encryptAndUploadFile(
       cipher = new Blob([enc.cipher], { type: "application/octet-stream" });
       dbg("upload: plain", plain.length, "→ cipher", enc.cipher.length);
       path = `${senderId}/file-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.enc`;
+      // Шифротекст + путь готовы ЛОКАЛЬНО: офлайн-очередь может забрать их
+      // в любой момент, даже если upload ниже упадёт по сети.
+      resolveCipher({ cipher: enc.cipher, remotePath: path, nonce: enc.nonce });
       const { data: { session } } = await supabase.auth.getSession();
       token = session?.access_token ?? "";
 
@@ -266,9 +328,14 @@ export function encryptAndUploadFile(
       if (cancelled || paused) return;
       finish({ path, nonce, mime: file.type || "application/octet-stream", name: file.name, size: file.size, to: receiverId, kind: "file", v: MEDIA_VERSION_RAW });
     } catch (e: any) {
-      if (cancelled || paused || e?.paused) return;
+      if (cancelled || paused || e?.paused) {
+        rejectCipher(e?.paused ? { paused: true } : e);
+        return;
+      }
       console.error("[CRYPTO-BYTES] [FILE] upload failed:", e);
-      cb.onStatus("error");
+      // Офлайн — это не «ошибка» для UI: сообщение уходит в очередь (часики).
+      if (!e?.offline) cb.onStatus("error");
+      rejectCipher(e);
       fail(e);
     }
   };
@@ -276,6 +343,7 @@ export function encryptAndUploadFile(
 
   return {
     metaPromise,
+    cipherPromise,
     pause: () => {
       if (settled || paused) return;
       paused = true;
@@ -308,6 +376,77 @@ export function encryptAndUploadFile(
       fail({ cancelled: true });
     },
   };
+}
+
+// ─── Payload-разделение файлов: шифруем локально, заливаем потом ───
+
+export interface FilePayload {
+  cipher: Uint8Array;
+  nonce: string;
+  mime: string;
+  name: string;
+  size: number;
+  /** Планируемый путь в бакете — детерминирован локально, без сети. */
+  remotePath: string;
+}
+
+/**
+ * Зашифровать файл локально (офлайн-ok). `pubkeyOverride` — ключ из
+ * локального кэша чатов, чтобы не ходить в сеть за profiles.
+ */
+export async function encryptFilePayload(
+  senderId: string,
+  receiverId: string,
+  file: File,
+  pubkeyOverride?: string | null,
+): Promise<FilePayload> {
+  const pubkey = pubkeyOverride || (await getPublicKey(receiverId));
+  if (!pubkey) throw new Error("Публичный ключ получателя не найден");
+
+  const plain = new Uint8Array(await file.arrayBuffer());
+  const enc = await encryptBytes(pubkey, plain);
+  dbg("payload: plain", plain.length, "→ cipher", enc.cipher.length);
+
+  return {
+    cipher: enc.cipher,
+    nonce: enc.nonce,
+    mime: file.type || "application/octet-stream",
+    name: file.name,
+    size: file.size,
+    remotePath: `${senderId}/file-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.enc`,
+  };
+}
+
+/** Собрать FileMeta из локально известных частей (без сети). */
+export function makeFileMeta(
+  p: { remotePath: string; nonce: string; mime: string; name: string; size: number },
+  receiverId: string,
+): FileMeta {
+  return {
+    path: p.remotePath,
+    nonce: p.nonce,
+    mime: p.mime,
+    name: p.name,
+    size: p.size,
+    to: receiverId,
+    kind: "file",
+    v: MEDIA_VERSION_RAW,
+  };
+}
+
+export function buildFileMeta(payload: FilePayload, receiverId: string): FileMeta {
+  return makeFileMeta(payload, receiverId);
+}
+
+/** Загрузить готовый шифротекст (досылка очереди; TUS тут не нужен). */
+export async function uploadFileCipher(cipher: Uint8Array, remotePath: string): Promise<void> {
+  const { error } = await supabase.storage
+    .from(FILES_BUCKET)
+    .upload(remotePath, new Blob([cipher as unknown as BlobPart], { type: "application/octet-stream" }), {
+      upsert: true,
+      contentType: "application/octet-stream",
+    });
+  if (error) throw error;
 }
 
 // ─── Скачивание / открытие / сохранение ───

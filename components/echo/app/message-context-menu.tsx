@@ -10,9 +10,15 @@ import {
   TbPin as Pin,
   TbTrash as Trash2,
   TbEdit as Edit,
+  TbClockX as CancelSend,
 } from "react-icons/tb";
 
 const QUICK_REACTIONS = ["❤️", "😂", "👍", "🔥", "😮", "😢"];
+
+/** Локальный (не подтверждённый сервером) id — отменять можно только его. */
+function isPendingTempId(id: unknown): boolean {
+  return typeof id === "string" && id.startsWith("local_");
+}
 
 export interface ContextMenuTarget {
   message: any;
@@ -29,6 +35,7 @@ export function MessageContextMenu({
   onEdit,
   onDelete,
   onReact,
+  onCancelSend,
 }: {
   target: ContextMenuTarget | null;
   onClose: () => void;
@@ -38,6 +45,8 @@ export function MessageContextMenu({
   onEdit?: (msg: any) => void;
   onDelete: (msg: any, scope: "me" | "all") => void;
   onReact: (msg: any, emoji: string) => void;
+  /** «Отменить отправку» — только для pending-сообщения с temp-id. */
+  onCancelSend?: (msg: any) => void;
 }) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -174,12 +183,22 @@ export function MessageContextMenu({
               onClose();
             }}
           />
-          {target.isMine && onEdit && (
+          {target.isMine && onEdit && !isPendingTempId(target.message?.id) && (
             <MenuItem
               icon={Edit}
               label="Изменить"
               onClick={() => {
                 onEdit(target.message);
+                onClose();
+              }}
+            />
+          )}
+          {onCancelSend && isPendingTempId(target.message?.id) && (
+            <MenuItem
+              icon={CancelSend}
+              label="Отменить отправку"
+              onClick={() => {
+                onCancelSend(target.message);
                 onClose();
               }}
             />

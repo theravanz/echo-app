@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import { useE2EE } from "./use-e2ee";
-import type { Chat, UserProfile, Message } from "./types";
+import { cacheGetBounded, cacheSetBounded } from "./chat-cache";
+import type { Chat, UserProfile, Message, ConnectionStatus } from "./types";
 
 interface UseChatListReturn {
   chats: Chat[];
@@ -12,6 +13,7 @@ interface UseChatListReturn {
   selectedChat: Chat | null;
   setSelectedChat: React.Dispatch<React.SetStateAction<Chat | null>>;
   selectedChatRef: React.MutableRefObject<Chat | null>;
+  chatsFetchError: boolean;
   drafts: Record<string, string>;
   saveDraft: (chatId: string, text: string) => void;
   loadDraft: (chatId: string) => string;
@@ -19,8 +21,19 @@ interface UseChatListReturn {
   lastSeenMap: Record<string, string>;
 }
 
-export function useChatList(user: UserProfile | null): UseChatListReturn {
+/**
+ * Сетевой запрос списка не должен висеть минутами: жёсткий abort-таймаут.
+ * Офлайн-детект по статусу (см. ниже) обычно вообще не пускает в сеть —
+ * это защита от «статус connected, а сеть мертва».
+ */
+const CHATS_NET_TIMEOUT_MS = 8000;
+
+export function useChatList(
+  user: UserProfile | null,
+  connectionStatus: ConnectionStatus = "connected",
+): UseChatListReturn {
   const [chats, setChats] = useState<Chat[]>([]);
+  const [chatsFetchError, setChatsFetchError] = useState(false);
   const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
   const selectedChatRef = useRef<Chat | null>(null);
   const { decryptMessage } = useE2EE(chats);
@@ -28,6 +41,10 @@ export function useChatList(user: UserProfile | null): UseChatListReturn {
   decryptMessageRef.current = decryptMessage;
   const userRef = useRef(user);
   userRef.current = user;
+  // Статус связи из useConnection: если disconnected — сеть не трогаем,
+  // рендерим из кэша сразу (иначе список ждал сетевые таймауты).
+  const connectionStatusRef = useRef<ConnectionStatus>(connectionStatus);
+  connectionStatusRef.current = connectionStatus;
 
   // === Online Presence ===
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
@@ -72,10 +89,11 @@ export function useChatList(user: UserProfile | null): UseChatListReturn {
   // === Chat Fetching ===
   const fetchChats = useCallback(async (currentUserId: string) => {
     const cacheKey = `echo_chats_cache_${currentUserId}`;
+    let cachedChatsAvailable = false;
 
-    // 1. Load from cache immediately
+    // 1. Load from cache immediately (SQLCipher через Rust-слой, см. chat-cache.ts)
     try {
-      const cached = localStorage.getItem(cacheKey);
+      const cached = await cacheGetBounded(cacheKey);
       if (cached) {
         const parsed = JSON.parse(cached);
         if (parsed.chats && Array.isArray(parsed.chats)) {
@@ -83,18 +101,43 @@ export function useChatList(user: UserProfile | null): UseChatListReturn {
             if (JSON.stringify(prev) === JSON.stringify(parsed.chats)) return prev;
             return parsed.chats;
           });
+          cachedChatsAvailable = true;
         }
       }
-    } catch { /* ignore */ }
+    } catch (e) {
+      console.warn("[CHAT-CACHE] failed to read chats cache:", e);
+    }
 
-    // 2. Fetch fresh data
+    // 2. Офлайн-детект ДО сети: статус из useConnection + navigator.onLine.
+    // Иначе список ждал сетевые таймауты (десятки секунд), хотя сайдбар
+    // уже показывал Offline. Нет сети — рендерим кэш и выходим сразу.
+    const offlineNow =
+      (typeof navigator !== "undefined" && !navigator.onLine) ||
+      connectionStatusRef.current === "disconnected";
+
+    if (offlineNow) {
+      if (cachedChatsAvailable) {
+        console.warn("[CHAT-CACHE] offline (status), using cached chats — network skipped");
+        setChatsFetchError(false);
+      } else {
+        console.warn("[CHAT-CACHE] offline (status) and no cache available");
+        setChatsFetchError(true);
+      }
+      return;
+    }
+
+    // 3. Fetch fresh data — с жёстким abort-таймаутом
+    const netAbort = new AbortController();
+    const netTimeout = setTimeout(() => netAbort.abort(), CHATS_NET_TIMEOUT_MS);
     try {
+      const signal = netAbort.signal;
       const { data: recentMessages, error: msgError } = await supabase
         .from("messages")
         .select("*")
         .or(`sender_id.eq.${currentUserId},receiver_id.eq.${currentUserId}`)
         .order("created_at", { ascending: false })
-        .limit(100);
+        .limit(100)
+        .abortSignal(signal);
 
       if (msgError) throw msgError;
 
@@ -120,7 +163,8 @@ export function useChatList(user: UserProfile | null): UseChatListReturn {
         const { data: profiles } = await supabase
           .from("profiles")
           .select("*")
-          .in("id", participantIds);
+          .in("id", participantIds)
+          .abortSignal(signal);
 
         if (profiles) {
           const decrypt = decryptMessageRef.current;
@@ -155,13 +199,26 @@ export function useChatList(user: UserProfile | null): UseChatListReturn {
           );
 
           setChats(filteredChats);
-          try {
-            localStorage.setItem(cacheKey, JSON.stringify({ chats: filteredChats }));
-          } catch { /* ignore */ }
+          // Запись — fire-and-forget: UI не ждёт Rust-слой (сериализованные
+          // записи в chat-cache; при таймауте запись всё равно доедет).
+          void cacheSetBounded(cacheKey, JSON.stringify({ chats: filteredChats }))
+            .catch((e) => console.warn("[CHAT-CACHE] chats cache write failed:", e));
+          setChatsFetchError(false);
         }
       }
     } catch (err) {
-      console.error("Fetch chats error:", err);
+      // [CHAT-CACHE] Оффлайн: если кэш уже отрендерен (шаг 1 выше) — тихо
+      // продолжаем на нём, realtime/fresh обновятся при возврате сети.
+      // Если кэша нет — выставляем флаг, чтобы UI показал «нет сети»
+      // вместо вечного спиннера / пустого списка.
+      if (cachedChatsAvailable) {
+        console.warn("[CHAT-CACHE] network fetch failed, using cached chats:", err);
+      } else {
+        console.warn("[CHAT-CACHE] network fetch failed and no cache available:", err);
+        setChatsFetchError(true);
+      }
+    } finally {
+      clearTimeout(netTimeout);
     }
   }, []);
 
@@ -214,6 +271,7 @@ export function useChatList(user: UserProfile | null): UseChatListReturn {
   return {
     chats,
     setChats,
+    chatsFetchError,
     fetchChats,
     selectedChat,
     setSelectedChat,
