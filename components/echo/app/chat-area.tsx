@@ -13,6 +13,8 @@ import { ProfileViewPanel } from "@/components/echo/app/profile-view-panel";
 import { MessageBubble, type UploadUiState } from "@/components/echo/app/message-bubble";
 import {
   encryptAndUploadFile,
+  isPermanentMediaError,
+  makeFileMeta,
   parseFileMeta,
   openFileMessage,
   keyUserFor,
@@ -28,11 +30,14 @@ import {
   TbFingerprint as Fingerprint,
   TbLock as Lock,
 } from "react-icons/tb";
-import type { UserProfile, Chat, Message, NetworkMode, AppTab } from "@/hooks/echo/types";
+import type { UserProfile, Chat, Message, NetworkMode, AppTab, PendingMessage } from "@/hooks/echo/types";
 import { deleteMessageMedia } from "@/lib/files";
 import { TbFileUpload } from "react-icons/tb";
 import { useFileDragDrop } from "@/hooks/echo/use-file-dragdrop";
 import { registerNavLayer } from "@/lib/back-nav";
+import { generateTempId } from "@/hooks/echo/use-network-queue";
+import { putOutboxBlob } from "@/lib/outbox-media";
+import { insertByCreatedAt } from "@/hooks/echo/use-messages";
 
 
 interface ChatAreaProps {
@@ -56,8 +61,19 @@ interface ChatAreaProps {
   newMessage: string;
   setNewMessage: React.Dispatch<React.SetStateAction<string>>;
   fetchMessages: (chatId: string, userId: string) => void;
-  handleSendMessage: (chat: Chat, user: UserProfile, content: string) => void;
-  handleSendVoice: (chat: Chat, user: UserProfile, blob: Blob, durationSec: number) => void;
+  handleSendMessage: (
+    chat: Chat,
+    user: UserProfile,
+    content: string,
+    type?: "text" | "sticker" | "gif",
+    customContent?: string,
+    onAddToQueue?: (msg: PendingMessage) => void,
+  ) => void;
+  handleSendVoice: (chat: Chat, user: UserProfile, blob: Blob, durationSec: number, onAddToQueue?: (msg: PendingMessage) => void) => void;
+  /** Оптимистичная очередь: persist + немедленная попытка отправки. */
+  enqueuePending: (msg: PendingMessage) => void;
+  /** Отмена отправки pending-сообщения (только temp-id). */
+  onCancelPending?: (msg: Message) => void;
   isRightPanelOpen: boolean;
   setIsRightPanelOpen: (open: boolean) => void;
   onOpenChat?: (chatId: string) => void;
@@ -65,7 +81,8 @@ interface ChatAreaProps {
 
 export function ChatArea({
   user, selectedChat, isMobile, activeMode, activeTab, onlineUsers, chats, onBack, onCall, onMentionClick,
-  messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage, handleSendVoice, isRightPanelOpen, setIsRightPanelOpen, onOpenChat
+  messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage, handleSendVoice, isRightPanelOpen, setIsRightPanelOpen, onOpenChat,
+  enqueuePending, onCancelPending,
 }: ChatAreaProps) {
   const [bgPickerOpen, setBgPickerOpen] = useState(false);
   const [isMediaPickerOpen, setIsMediaPickerOpen] = useState(false);
@@ -152,11 +169,16 @@ export function ChatArea({
       }
 
       // Оптимистичный UI только если файл летит в ОТКРЫТЫЙ чат.
-      // Дроп на чат из списка → тихо грузим, баббл появится у получателя/после открытия.
+      // Дроп на чат из списка → тихо грузим; пузырь появится при открытии
+      // чата (pending-сообщение подмешивается из очереди в fetchMessages).
       const inView = receiverId === selectedChat?.id;
-      const localId = `file-local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const localId = generateTempId();
+      const createdAt = new Date().toISOString();
+      const mime = file.type || "application/octet-stream";
 
       if (inView) {
+        // Placeholder-мета: name/size/mime известны → баббл с часиками сразу,
+        // path/nonce пустые (шифротекста ещё нет).
         const optimistic: Message = {
           id: localId,
           sender_id: user.id,
@@ -164,14 +186,15 @@ export function ChatArea({
           type: "file",
           content: JSON.stringify({
             path: "", nonce: "",
-            mime: file.type || "application/octet-stream",
-            name: file.name, size: file.size,
+            mime, name: file.name, size: file.size,
             to: receiverId, kind: "file",
           }),
-          created_at: new Date().toISOString(),
+          created_at: createdAt,
           status: "sending",
+          _pending: true,
+          _pendingContent: "",
         } as Message;
-        setMessages(prev => [...prev, optimistic]);
+        setMessages(prev => insertByCreatedAt(prev, optimistic));
       }
 
       const handle = encryptAndUploadFile(user.id, receiverId, file, {
@@ -187,8 +210,14 @@ export function ChatArea({
             return n;
           });
         },
-      });
+      }, chats.find(c => c.id === receiverId)?.public_key ?? null);
       fileHandlesRef.current.set(localId, handle);
+
+      // Убираем кольцо прогресса: дальше сообщение показывает часики.
+      const clearUploadState = () => {
+        if (!inView) return;
+        setUploadStates(prev => { const n = new Map(prev); n.delete(localId); return n; });
+      };
 
       handle.metaPromise.then(async (meta) => {
         const { data: inserted, error } = await supabase.from("messages").insert({
@@ -201,16 +230,69 @@ export function ChatArea({
         if (error) throw error;
 
         if (inView) {
-          setMessages(prev => prev.map(m => m.id === localId ? (inserted as Message) : m));
-          setUploadStates(prev => { const n = new Map(prev); n.delete(localId); return n; });
+          // temp-id → real-id (swap, а не второй пузырь).
+          setMessages(prev => prev.map(m => m.id === localId
+            ? { ...m, id: inserted.id, status: "sent" as const, _pending: false, content: JSON.stringify(meta) }
+            : m));
+          clearUploadState();
         }
         fileHandlesRef.current.delete(localId);
-      }).catch((err) => {
+      }).catch(async (err) => {
         fileHandlesRef.current.delete(localId);
+
+        // Отмена юзером — просто убираем пузырь.
         if (err?.cancelled) {
           if (inView) setMessages(prev => prev.filter(m => m.id !== localId));
-        } else {
-          console.error("[FILE] upload failed:", err);
+          return;
+        }
+
+        // Явный отказ сервера (4xx/validation) — ретраить бессмысленно.
+        if (isPermanentMediaError(err)) {
+          console.error("[FILE] upload rejected by server (permanent):", err);
+          if (inView) setUploadStates(prev => new Map(prev).set(localId, { status: "error", loaded: 0, total: 0 }));
+          toast.error("Файл отклонён сервером");
+          return;
+        }
+
+        // Сеть/офлайн/5xx → сообщение НЕ удаляем: pending + очередь.
+        console.warn("[QUEUE] file send failed → pending + очередь:", err);
+        clearUploadState();
+        try {
+          const cp = await handle.cipherPromise; // шифротекст готов локально
+          const realMeta = makeFileMeta(
+            { remotePath: cp.remotePath, nonce: cp.nonce, mime, name: file.name, size: file.size },
+            receiverId,
+          );
+          if (inView) {
+            // Пузырь остаётся с часиками (pending) — статус ошибки не ставим:
+            // сообщение уйдёт в очередь и будет дослано при reconnect.
+            setMessages(prev => prev.map(m => m.id === localId
+              ? { ...m, content: JSON.stringify(realMeta), status: "pending" as const, _pending: true }
+              : m));
+          }
+          const outboxPath = await putOutboxBlob(localId, cp.cipher);
+          enqueuePending({
+            id: localId,
+            sender_id: user.id,
+            receiver_id: receiverId,
+            type: "file",
+            content: JSON.stringify(realMeta),
+            status: "pending",
+            created_at: createdAt,
+            _pending: true,
+            _pendingContent: "",
+            media: {
+              kind: "file",
+              outboxPath,
+              remotePath: cp.remotePath,
+              nonce: cp.nonce,
+              mime,
+              name: file.name,
+              size: file.size,
+            },
+          } as PendingMessage);
+        } catch (e2) {
+          console.error("[QUEUE] file queueing failed:", e2);
           if (inView) setUploadStates(prev => new Map(prev).set(localId, { status: "error", loaded: 0, total: 0 }));
           toast.error("Не удалось отправить файл");
         }
@@ -368,8 +450,8 @@ export function ChatArea({
             setReplyingTo={setReplyingToSafe}
             editingMessage={editingMessage}
             setEditingMessage={setEditingMessageSafe}
-            onSend={() => handleSendMessage(selectedChat, user!, newMessage)}
-            onSendVoice={(blob, sec) => handleSendVoice(selectedChat, user!, blob, sec)}
+            onSend={() => handleSendMessage(selectedChat, user!, newMessage, "text", undefined, enqueuePending)}
+            onSendVoice={(blob, sec) => handleSendVoice(selectedChat, user!, blob, sec, enqueuePending)}
             onSendFile={onSendFile}
             selectedChat={selectedChat}
             user={user}
@@ -515,6 +597,7 @@ export function ChatArea({
           }
         }}
         onReact={(msg, emoji) => toast.success(`Реакция ${emoji} добавлена`)}
+        onCancelSend={onCancelPending ? (msg) => onCancelPending(msg as Message) : undefined}
       />
     </>
   );

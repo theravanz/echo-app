@@ -4,11 +4,43 @@ import { useState, useCallback, useRef } from "react";
 import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
 import { useE2EE } from "./use-e2ee";
+import { cacheGetBounded, cacheSetBounded } from "./chat-cache";
 import { generateTempId } from "./use-network-queue";
 import { parseCallLogJson } from "./call-log";
-import { encryptAndUploadVoice, parseVoiceMeta, type VoiceMeta } from "@/lib/voice";
-import type { Message, PendingMessage, Chat, UserProfile } from "./types";
+import {
+  buildVoiceMeta,
+  encryptVoicePayload,
+  parseVoiceMeta,
+  type VoiceMeta,
+  type VoicePayload,
+} from "@/lib/voice";
+import { MEDIA_VERSION_RAW } from "@/lib/crypto";
+import { putOutboxBlob } from "@/lib/outbox-media";
+import type { Message, PendingMessage, Chat, UserProfile, ConnectionStatus } from "./types";
 import { parseFileMeta } from "@/lib/files";
+
+/** Сетевой запрос истории чата не должен висеть: жёсткий abort-таймаут. */
+const MESSAGES_NET_TIMEOUT_MS = 8000;
+
+// ─── Порядок сообщений ───
+// Оптимистичная вставка/мердж очереди не должна ломать хронологию:
+// после рестарта недосланные сообщения встают на своё место по created_at,
+// а не в конец списка.
+const msgTs = (m: { created_at?: string }): number => {
+  const v = Date.parse(m?.created_at ?? "");
+  return Number.isFinite(v) ? v : 0;
+};
+
+export function insertByCreatedAt(prev: Message[], msg: Message): Message[] {
+  const next = prev.slice();
+  next.push(msg);
+  next.sort((a, b) => msgTs(a) - msgTs(b)); // sort стабилен (ES2019)
+  return next;
+}
+
+function sortByCreatedAt(list: Message[]): Message[] {
+  return [...list].sort((a, b) => msgTs(a) - msgTs(b));
+}
 
 interface UseMessagesReturn {
   messages: Message[];
@@ -33,6 +65,7 @@ interface UseMessagesReturn {
     user: UserProfile,
     blob: Blob,
     durationSec: number,
+    onAddToQueue?: (msg: PendingMessage) => void,
   ) => Promise<void>;
   handleEditMessage: (
     selectedChat: Chat,
@@ -41,7 +74,11 @@ interface UseMessagesReturn {
   messagesCacheKey: string;
 }
 
-export function useMessages(chats: Chat[] = []): UseMessagesReturn {
+export function useMessages(
+  chats: Chat[] = [],
+  connectionStatus: ConnectionStatus = "connected",
+  pendingQueue: PendingMessage[] = [],
+): UseMessagesReturn {
   const { encryptMessage, decryptMessage } = useE2EE(chats); // ← Передаем chats!
   const [messages, setMessages] = useState<Message[]>([]);
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
@@ -49,22 +86,72 @@ export function useMessages(chats: Chat[] = []): UseMessagesReturn {
   const [newMessage, setNewMessage] = useState("");
   const messagesRef = useRef<Message[]>([]);
   messagesRef.current = messages;
+  // Офлайн-детект по статусу: открытие чата без сети не ждёт таймауты.
+  const connectionStatusRef = useRef<ConnectionStatus>(connectionStatus);
+  connectionStatusRef.current = connectionStatus;
+  // Очередь недосланных — источник для мерджа после рестарта приложения.
+  const pendingQueueRef = useRef<PendingMessage[]>(pendingQueue);
+  pendingQueueRef.current = pendingQueue;
+
+  /**
+   * Домешать к списку сообщения из офлайн-очереди этого чата: после рестарта
+   * пузырь с часиками восстанавливается из SQLCipher, а не только из БД
+   * (в БД его ещё нет). Дедуп по temp-id + сортировка по created_at.
+   */
+  const withPendingForChat = useCallback(
+    (list: Message[], chatId: string, myId: string): Message[] => {
+      const pending = pendingQueueRef.current.filter(
+        (p) => p.receiver_id === chatId && p.sender_id === myId,
+      );
+      if (pending.length === 0) return list;
+      const known = new Set(list.map((m) => String(m.id)));
+      const merged = list.slice();
+      for (const p of pending) {
+        if (known.has(String(p.id))) continue;
+        known.add(String(p.id));
+        // Текст в очереди лежит шифротекстом → для рендера берём plaintext-копию.
+        const isText = !p.type || p.type === "text" || p.type === "sticker" || p.type === "gif";
+        merged.push(isText ? { ...p, content: p._pendingContent || p.content } : { ...p });
+      }
+      return sortByCreatedAt(merged);
+    },
+    [],
+  );
 
   const fetchMessages = useCallback(async (chatId: string, currentUserId: string) => {
     const cacheKey = `echo_msgs_cache_${currentUserId}_${chatId}`;
 
-    // 1. Load from cache immediately
+    // 1. Load from cache immediately (SQLCipher через Rust-слой, см. chat-cache.ts;
+    //    plaintext сообщений в localStorage запрещён — миграция legacy-ключей
+    //    прозрачна внутри cacheGet: перенос в secure_store + удаление следа)
     try {
-      const cached = localStorage.getItem(cacheKey);
+      const cached = await cacheGetBounded(cacheKey);
       if (cached) {
         const parsed = JSON.parse(cached);
         if (parsed.messages && Array.isArray(parsed.messages)) {
-          setMessages(parsed.messages);
+          setMessages(withPendingForChat(parsed.messages, chatId, currentUserId));
         }
       }
-    } catch { /* ignore */ }
+    } catch (e) {
+      console.warn("[CHAT-CACHE] failed to read messages cache:", e);
+    }
 
-    // 2. Fetch fresh from server
+    // 2. Офлайн-детект ДО сети: нет связи — сообщения уже отрендерены
+    //    из кэша выше, сеть не трогаем (иначе ждали бы таймауты).
+    //    Недосланные из очереди домиксовываем здесь же: они обязаны быть
+    //    видны с часиками сразу после рестарта приложения.
+    const offlineNow =
+      (typeof navigator !== "undefined" && !navigator.onLine) ||
+      connectionStatusRef.current === "disconnected";
+    if (offlineNow) {
+      setMessages((prev) => withPendingForChat(prev, chatId, currentUserId));
+      console.warn("[CHAT-CACHE] offline (status), using cached messages — network skipped");
+      return;
+    }
+
+    // 3. Fetch fresh from server — с жёстким abort-таймаутом
+    const netAbort = new AbortController();
+    const netTimeout = setTimeout(() => netAbort.abort(), MESSAGES_NET_TIMEOUT_MS);
     try {
       const { data, error } = await supabase
         .from("messages")
@@ -72,7 +159,8 @@ export function useMessages(chats: Chat[] = []): UseMessagesReturn {
         .or(
           `and(sender_id.eq.${currentUserId},receiver_id.eq.${chatId}),and(sender_id.eq.${chatId},receiver_id.eq.${currentUserId})`,
         )
-        .order("created_at", { ascending: true });
+        .order("created_at", { ascending: true })
+        .abortSignal(netAbort.signal);
 
       if (error) throw error;
 
@@ -117,16 +205,17 @@ export function useMessages(chats: Chat[] = []): UseMessagesReturn {
           }
         }),
       );
-      const decryptedMessages = processed.filter(Boolean);
-      setMessages(decryptedMessages as Message[]);
+      const decryptedMessages = processed.filter(Boolean) as Message[];
+      // Недосланные из очереди — поверх серверного списка (они ещё не в БД).
+      const withPending = withPendingForChat(decryptedMessages, chatId, currentUserId);
+      setMessages(withPending);
 
-      // 3. Save to cache
-      try {
-        localStorage.setItem(
-          cacheKey,
-          JSON.stringify({ messages: decryptedMessages, timestamp: new Date().toISOString() }),
-        );
-      } catch { /* storage full */ }
+      // 3. Save to cache (SQLCipher — plaintext в localStorage запрещён).
+      // Fire-and-forget: UI не ждёт Rust-слой.
+      void cacheSetBounded(
+        cacheKey,
+        JSON.stringify({ messages: withPending, timestamp: new Date().toISOString() }),
+      ).catch((e) => console.warn("[CHAT-CACHE] messages cache write failed:", e));
 
       // 4. Mark unread as read
       const unreadIds = (data || [])
@@ -139,9 +228,11 @@ export function useMessages(chats: Chat[] = []): UseMessagesReturn {
           .in("id", unreadIds);
       }
     } catch (err) {
-      console.error("Fetch messages error:", err);
+      console.warn("[CHAT-CACHE] messages fetch failed, using cached:", err);
+    } finally {
+      clearTimeout(netTimeout);
     }
-  }, [decryptMessage]);
+  }, [decryptMessage, withPendingForChat]);
 
   const handleEditMessage = useCallback(
     async (selectedChat: Chat, text: string) => {
@@ -212,7 +303,7 @@ export function useMessages(chats: Chat[] = []): UseMessagesReturn {
         _pendingContent: content,
         _pending: true,
       };
-      setMessages((prev) => [...prev, optimisticMsg]);
+      setMessages((prev) => insertByCreatedAt(prev, optimisticMsg));
       setReplyingTo(null);
 
       try {
@@ -267,58 +358,150 @@ export function useMessages(chats: Chat[] = []): UseMessagesReturn {
           ),
         );
       } catch (err) {
-        console.error("Send error, adding to offline queue:", err);
+        console.error("[QUEUE] text send failed, adding to offline queue:", err);
 
         setMessages((prev) =>
           prev.map((m) => (m.id === tempId ? { ...m, status: "pending" as const } : m)),
         );
+        // ВАЖНО: в очередь (и в БД при досылке) уходит ТОЛЬКО шифротекст —
+        // plaintext живёт исключительно в памяти/_pendingContent (SQLCipher).
         const pendingMsg: PendingMessage = {
           ...optimisticMsg,
-          id: tempId,
+          content: encrypted.content,
+          nonce: encrypted.nonce,
           status: "pending",
           _pending: true,
+          _pendingContent: content,
         } as PendingMessage;
-        onAddToQueue?.(pendingMsg);
+        if (onAddToQueue) {
+          onAddToQueue(pendingMsg);
+        } else {
+          console.error("[QUEUE] onAddToQueue не проброшен — текст не будет дослан");
+          toast.error("Сообщение не отправлено");
+        }
       }
     },
     [editingMessage, replyingTo, encryptMessage, handleEditMessage],
   );
 
+  /**
+   * ГОЛОСОВЫЕ — оптимистично, как текст:
+   *  1) пузырь с часиками появляется СРАЗУ (placeholder-мета: duration уже
+   *     известна, path/nonce пустые — шифра ещё нет);
+   *  2) шифрование локально (IPC, офлайн-ok) → реальная мета в пузырь;
+   *  3) шифротекст → outbox-файл (переживёт рестарт) → очередь;
+   *  4) отправку (Storage upload + INSERT) делает очередь, сендинг в фоне.
+   * При сетевом сбое ничего не теряется: сообщение остаётся pending и
+   * досылается при возврате сети.
+   */
   const handleSendVoice = useCallback(
-    async (selectedChat: Chat, user: UserProfile, blob: Blob, durationSec: number) => {
+    async (
+      selectedChat: Chat,
+      user: UserProfile,
+      blob: Blob,
+      durationSec: number,
+      onAddToQueue?: (msg: PendingMessage) => void,
+    ) => {
       if (!selectedChat || !user || !blob) return;
-      try {
-        // 1) E2EE-шифрование аудио (crypto_box на ключ получателя) + upload в приватный `voice`.
-        const meta = await encryptAndUploadVoice(user.id, selectedChat.id, blob, durationSec);
-        // 2) content — plaintext JSON-метаданные (не секретны), nonce-колонка не используется.
-        const { error } = await supabase
-          .from("messages")
-          .insert({
-            sender_id: user.id,
-            receiver_id: selectedChat.id,
-            content: JSON.stringify(meta),
-            type: "voice",
-            status: "sent",
-          });
-        if (error) throw error;
 
-        // Push получателю — фоном.
+      const receiverId = selectedChat.id;
+      const tempId = generateTempId();
+      const createdAt = new Date().toISOString();
+      const replyToId = replyingTo?.id || null;
+
+      // 1) Мгновенный пузырь. duration берём из рекордера → волна и время
+      //    рендерятся сразу, без ожидания шифрования/сети.
+      const placeholder: VoiceMeta = {
+        path: "",
+        nonce: "",
+        mime: blob.type || "audio/webm",
+        duration: Math.max(0, Math.round(durationSec)),
+        to: receiverId,
+        v: MEDIA_VERSION_RAW,
+      };
+      const optimistic: Message = {
+        id: tempId,
+        sender_id: user.id,
+        receiver_id: receiverId,
+        content: JSON.stringify(placeholder),
+        voice: placeholder,
+        type: "voice",
+        status: "sending",
+        created_at: createdAt,
+        reply_to_id: replyToId,
+        _pending: true,
+        _pendingContent: "",
+      };
+      setMessages((prev) => insertByCreatedAt(prev, optimistic));
+      setReplyingTo(null);
+
+      // 2) Фон: шифруем локально → outbox → очередь (она же делает отправку).
+      void (async () => {
+        let payload: VoicePayload;
         try {
-          supabase.functions.invoke("send-message-push", {
-            body: {
-              receiver_id: selectedChat.id,
-              sender_id: user.id,
-              sender_name: user.display_name || user.username || "",
-              sender_avatar: user.avatar_url || "",
+          // Публичный ключ берём из локального кэша чата (chats.public_key) —
+          // иначе офлайн-старт упёрся бы в сетевой запрос профиля.
+          payload = await encryptVoicePayload(
+            user.id,
+            receiverId,
+            blob,
+            durationSec,
+            selectedChat.public_key ?? null,
+          );
+        } catch (e) {
+          console.error("[QUEUE] voice encrypt failed:", e);
+          setMessages((prev) => prev.filter((m) => m.id !== tempId));
+          toast.error("Не удалось зашифровать голосовое сообщение");
+          return;
+        }
+
+        try {
+          const realMeta = buildVoiceMeta(payload, receiverId);
+          // Реальная мета в пузыре: нужна и для досылки, и для восстановления
+          // пузыря из очереди после рестарта.
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === tempId ? { ...m, content: JSON.stringify(realMeta), voice: realMeta } : m,
+            ),
+          );
+
+          // Шифротекст — ФАЙЛОМ в AppCache (в очередь кладём только путь:
+          // очередь персистится в SQLCipher и перезаписывается целиком).
+          const outboxPath = await putOutboxBlob(tempId, payload.cipher);
+
+          const pending: PendingMessage = {
+            ...optimistic,
+            content: JSON.stringify(realMeta),
+            voice: realMeta,
+            status: "pending",
+            _pending: true,
+            _pendingContent: "",
+            media: {
+              kind: "voice",
+              outboxPath,
+              remotePath: payload.remotePath,
+              nonce: payload.nonce,
+              mime: payload.mime,
+              duration: realMeta.duration,
             },
-          }).catch(() => {});
-        } catch { /* ignore */ }
-      } catch (err) {
-        console.error("[Voice] send failed:", err);
-        toast.error("Не удалось отправить голосовое сообщение");
-      }
+          } as PendingMessage;
+
+          if (!onAddToQueue) {
+            console.error("[QUEUE] onAddToQueue не проброшен — голосовое не будет дослано");
+            toast.error("Очередь отправки недоступна");
+            return;
+          }
+          // Очередь = источник правды: она сразу же попробует отправить
+          // (быстрый путь) и оставит сообщение при сетевом сбое.
+          onAddToQueue(pending);
+        } catch (e) {
+          console.error("[QUEUE] voice queueing failed:", e);
+          setMessages((prev) => prev.filter((m) => m.id !== tempId));
+          toast.error("Не удалось отправить голосовое сообщение");
+        }
+      })();
     },
-    [],
+    [replyingTo],
   );
 
   return {

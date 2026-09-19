@@ -66,10 +66,44 @@ export interface Message {
   _pending?: boolean;
 }
 
+/**
+ * Медиа-пейлоад офлайн-очереди (voice/file).
+ *
+ * ВЫБОР (см. lib/outbox-media.ts): шифротекст живёт ФАЙЛОМ в Tauri AppCache
+ * (`outbox/<tempId>.enc`), а очередь хранит только путь + plaintext-мету.
+ * Почему не base64 в очередь: очередь персистится в SQLCipher и
+ * перезаписывается целиком на каждое изменение — 10 МБ base64 = +33% размера,
+ * полная сериализация blob'а на каждый чих и те же байты в JS-памяти (и в
+ * стейте React, если положить их в Message).
+ */
+export interface PendingMedia {
+  kind: 'voice' | 'file';
+  /** Относительный путь шифротекста в AppCache — очередь хранит только путь. */
+  outboxPath: string;
+  /** Планируемый путь в Storage (детерминирован локально, без сети). */
+  remotePath: string;
+  nonce: string;
+  mime: string;
+  name?: string;
+  size?: number;
+  duration?: number;
+}
+
+/**
+ * Сообщение в офлайн-очереди. Персистится через chat-cache (SQLCipher,
+ * ключ `echo_queue_${userId}`), НЕ через localStorage.
+ *
+ * Инвариант контента:
+ *  - `content` — то, что уйдёт в БД: для текста это E2EE-шифротекст,
+ *    для voice/file — plaintext JSON-мета (шифруется только медиа).
+ *  - `_pendingContent` — plaintext текста ТОЛЬКО для рендера пузыря
+ *    (лежит в SQLCipher, как и остальные расшифрованные кэши).
+ */
 export interface PendingMessage extends Message {
   _pendingContent: string;
   _pending: true;
-  status: 'pending';
+  status: 'pending' | 'sending';
+  media?: PendingMedia;
 }
 
 export type NetworkMode = 'direct' | 'relay' | 'normal';

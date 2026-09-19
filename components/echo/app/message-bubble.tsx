@@ -10,6 +10,7 @@ import { CallLogMessage } from "./CallLogMessage";
 import {
   TbCheck as Check,
   TbChecks as CheckCheck,
+  TbClock as Clock,
   TbGitBranch as MeshIcon,
   TbRelationOneToOne as RelayIcon,
   TbPlayerPlayFilled as Play,
@@ -145,6 +146,31 @@ function formatDuration(seconds: number) {
 
 export interface UploadUiState { status: UploadStatus; loaded: number; total: number; }
 
+/** Статус отправки, который реально не подтверждён сервером (часики, не галочка). */
+const isPendingStatus = (status?: string): boolean => status === "pending" || status === "sending";
+
+/**
+ * Индикатор доставки в TG-стиле: часики для pending/sending, одна галочка
+ * для sent, двойная — delivered/read. Рендерится и для текста, и для
+ * voice/file (у медиа статус-строки раньше не было вообще).
+ */
+function DeliveryStatus({ status, time, className }: { status?: string; time: string; className?: string }) {
+  return (
+    <div className={cn("flex items-center gap-1 px-1 mt-1 select-none", className)}>
+      <span className="text-[11px] font-medium tabular-nums">{time}</span>
+      {isPendingStatus(status) ? (
+        <Clock className="w-3.5 h-3.5 opacity-80" />
+      ) : status === "read" ? (
+        <CheckCheck className="w-3.5 h-3.5 opacity-90" />
+      ) : status === "delivered" ? (
+        <CheckCheck className="w-3.5 h-3.5 opacity-70" />
+      ) : status === "sent" ? (
+        <Check className="w-3.5 h-3.5 opacity-60" />
+      ) : null}
+    </div>
+  );
+}
+
 const formatBytes = (n: number) => n < 1024 ? `${n} Б` : n < 1048576 ? `${(n / 1024).toFixed(1)} КБ` : `${(n / 1048576).toFixed(1)} МБ`;
 
 const fileIcon = (mime: string, name: string) => {
@@ -192,8 +218,10 @@ function FileBubble({ msg, isMe, upload, onOpen, onCancel, onResume, onContextMe
   const uploading = upload?.status === "uploading";
   const paused = upload?.status === "paused";
   const failed = upload?.status === "error";
+  // Не в БД/Storage ещё — «открывать» нечего, но и не ошибка (ждём очередь).
+  const pending = Boolean(msg?._pending);
   const progress = upload && upload.total > 0 ? upload.loaded / upload.total : 0;
-  const done = !upload;
+  const done = !upload && !pending;
 
   return (
     <div ref={innerRef} onContextMenu={onContextMenu}
@@ -220,6 +248,10 @@ function FileBubble({ msg, isMe, upload, onOpen, onCancel, onResume, onContextMe
         <RingButton progress={progress} paused={paused} isMe={isMe} onClick={paused ? onResume! : onCancel!} />
       ) : failed ? (
         <div className="w-9 h-9 rounded-full flex items-center justify-center bg-red-500/15 text-red-500 shrink-0"><TbRefresh className="w-4 h-4" /></div>
+      ) : pending ? (
+        <div className={cn("w-9 h-9 rounded-full flex items-center justify-center shrink-0", isMe ? "bg-zinc-900/10" : "bg-white/[0.07]")}>
+          <Clock className="w-4 h-4 opacity-70" />
+        </div>
       ) : (
         <div className={cn("w-9 h-9 rounded-full flex items-center justify-center shrink-0", isMe ? "bg-zinc-900/10" : "bg-white/[0.07]")}>
           <TbDownload className="w-4 h-4 opacity-60" />
@@ -229,10 +261,12 @@ function FileBubble({ msg, isMe, upload, onOpen, onCancel, onResume, onContextMe
   );
 }
 
-function VoiceBubble({ msg, isMe, recipientId, onContextMenu, innerRef }: {
+function VoiceBubble({ msg, isMe, recipientId, pending, onContextMenu, innerRef }: {
   msg: any;
   isMe: boolean;
   recipientId: string;
+  /** Сообщение ещё не улетело (pending/queue) — играть нечего. */
+  pending?: boolean;
   onContextMenu?: (e: React.MouseEvent) => void;
   innerRef?: React.RefObject<HTMLDivElement | null>;
 }) {
@@ -250,6 +284,7 @@ function VoiceBubble({ msg, isMe, recipientId, onContextMenu, innerRef }: {
   async function toggle() {
     const el = audioRef.current;
     if (!el) return;
+    if (pending) return; // ещё в очереди — файла в Storage нет
     if (playing) { el.pause(); setPlaying(false); return; }
     if (!url) {
       if (!meta) return;
@@ -306,17 +341,21 @@ function VoiceBubble({ msg, isMe, recipientId, onContextMenu, innerRef }: {
 
       <button
         onClick={toggle}
-        aria-label={playing ? "Пауза" : "Воспроизвести"}
+        disabled={pending}
+        aria-label={pending ? "Ожидает отправки" : playing ? "Пауза" : "Воспроизвести"}
         className={cn(
           "h-9 w-9 md:h-10 md:w-10 rounded-full flex items-center justify-center shrink-0 transition-all",
           "hover:scale-105 active:scale-95",
           isMe
             ? "bg-zinc-900 text-white hover:bg-zinc-800"
             : "bg-primary text-white shadow-md shadow-primary/30 hover:bg-primary/90",
-          loading && "opacity-70"
+          loading && "opacity-70",
+          pending && "opacity-70"
         )}
       >
-        {loading ? (
+        {pending ? (
+          <Clock className="w-4 h-4" />
+        ) : loading ? (
           <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24" fill="none">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
             <path className="opacity-90" d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
@@ -463,9 +502,10 @@ export const MessageBubble = memo(({
     // Аудио-ФАЙЛЫ (mime audio/*, честный mime из File.type при отправке)
     // получают встроенный мини-плеер — как mp3 в Telegram. Видео остаётся
     // обычным файл-бабблом с системным открытием.
-    // Пока файл ещё льётся (uploadState) или path пуст — показываем обычный
-    // FileBubble с кольцом прогресса: играть нечего.
-    const isAudio = Boolean(meta?.mime?.startsWith("audio/") && meta?.path);
+    // Пока файл ещё льётся (uploadState), pending (очередь) или path пуст —
+    // показываем обычный FileBubble: играть нечего.
+    const filePending = Boolean(msg?._pending) || isPendingStatus(msg?.status);
+    const isAudio = Boolean(meta?.mime?.startsWith("audio/") && meta?.path && !filePending);
     // Ключ = вторая сторона DH (как в handleFileOpen у chat-area):
     // свои → meta.to, входящие → sender_id.
     const fileKeyUserId = keyUserFor(msg, meta?.to, user?.id);
@@ -484,6 +524,7 @@ export const MessageBubble = memo(({
             <FileBubble msg={msg} isMe={isMe} upload={uploadState}
               onOpen={() => onFileOpen?.(msg)} onCancel={() => onFileCancel?.(msg)} onResume={() => onFileResume?.(msg)} />
           )}
+          {isMe && <DeliveryStatus status={msg.status} time={time} className="text-muted-foreground" />}
         </div>
       </div>
     );
@@ -526,7 +567,13 @@ export const MessageBubble = memo(({
         onTouchMove={handleTouchMove}
       >
         <div className={cn("flex flex-col", isMe ? "items-end" : "items-start")}>
-          <VoiceBubble msg={msg} isMe={isMe} recipientId={keyUserId} />
+          <VoiceBubble
+            msg={msg}
+            isMe={isMe}
+            recipientId={keyUserId}
+            pending={Boolean(msg?._pending) || isPendingStatus(msg?.status)}
+          />
+          {isMe && <DeliveryStatus status={msg.status} time={time} className="text-muted-foreground" />}
         </div>
       </div>
     );
@@ -575,7 +622,11 @@ export const MessageBubble = memo(({
                   <span className="opacity-70">{msg.delivery_path === "mesh" ? <MeshIcon className="w-3 h-3" /> : <RelayIcon className="w-3 h-3" />}</span>
                 )}
                 <span className="text-[11px] font-medium tabular-nums">{time}</span>
-                {isMe && (msg.status === "read" ? <CheckCheck className="w-3.5 h-3.5 opacity-90" /> : msg.status === "delivered" ? <CheckCheck className="w-3.5 h-3.5 opacity-70" /> : <Check className="w-3.5 h-3.5 opacity-50" />)}
+                {isMe && (isPendingStatus(msg.status)
+                  ? <Clock className="w-3.5 h-3.5 opacity-80" />
+                  : msg.status === "read" ? <CheckCheck className="w-3.5 h-3.5 opacity-90" />
+                  : msg.status === "delivered" ? <CheckCheck className="w-3.5 h-3.5 opacity-70" />
+                  : <Check className="w-3.5 h-3.5 opacity-50" />)}
               </div>
             </div>
           )}

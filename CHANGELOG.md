@@ -1,5 +1,150 @@
 # Changelog
 
+## [Unreleased]
+### Message-кэш в SQLCipher — plaintext переписки больше не в localStorage
+
+#### Изменено
+- **Message-кэш переехал в Rust-слой (SQLCipher)** (`hooks/echo/use-messages.ts`):
+  ключи `echo_msgs_cache_${userId}_${chatId}` теперь читаются/пишутся через
+  `cacheGet`/`cacheSet` из `hooks/echo/chat-cache.ts` → `secure_store`
+  зашифрованной БД (через `save/get_auth_progress`, fallback plugin-sql).
+  Прежние прямые `localStorage.getItem/setItem` убраны. Чтение кэша
+  асинхронное, до сетевого fetch — офлайн-рендер из кэша сохранён.
+- **Кэш списка чатов** (`hooks/echo/use-chat-list.ts`) — там же, в
+  `secure_store` (переведён ранее в этой итерации).
+- **Прозрачная одноразовая миграция** (`hooks/echo/chat-cache.ts`):
+  при первом `cacheGet` в Tauri, если в `secure_store` пусто, а в
+  localStorage есть legacy-ключ — значение переносится в SQLCipher
+  и из localStorage удаляется (plaintext-следы чистим). Если SQL
+  недоступен — legacy-копия сохраняется, warn в консоли.
+  При чтении из SQL устаревшая localStorage-копия ключа удаляется
+  (`cleanupLegacyCopy`). Провал записи в SQL никогда не удаляет
+  localStorage-оригинал.
+
+#### Инвариант (новый)
+- **Plaintext переписки в localStorage — запрещено.** Расшифрованные
+  сообщения живут только в памяти + SQLCipher через `chat-cache.ts`.
+  Все новые кэши с расшифрованным контентом — только там.
+
+#### Известные ограничения
+- **[KNOWN] plaintext-in-localstorage**: ключи `echo_drafts_${userId}`,
+  `echo_accounts`, `echo_device_hwid` продолжают жить в localStorage —
+  drafts содержат расшифрованный набранный текст. Не тронуты в этой
+  итерации, выносятся в SQLCipher отдельным аудитом (drafts меняются
+  на каждый keystroke → нужен debounce-план миграции).
+- Миграция legacy message-кэша срабатывает per-chat при первом открытии
+  чата, а не пачкой на старте — plaintext-ключ, который ни разу не
+  открывали после обновления, останется в localStorage до открытия чата.
+
+#### Фиксы зависания загрузки списка (эта же итерация)
+- **Offline-init больше не ждёт `getSession()`** (`app/app/page.tsx`):
+  supabase-js при отсутствии сети может виснуть в refresh-сессии
+  (fetch без таймаута) → до чтения кэша дело не доходило. userId теперь
+  достаётся синхронно из локального storage (`sb-<ref>-auth-token`,
+  fallback `echo_accounts`) и сразу вызывается `fetchChats`.
+- **IPC к Rust-слою ограничен таймаутом 1.5s** (`hooks/echo/chat-cache.ts`):
+  `cacheGetBounded`/`cacheSetBounded` — если invoke завис/хранилище
+  недоступно, отдаём null и продолжаем (онлайн-фетч загрузит с сервера).
+  Кэш никогда не блокирует рендер.
+- **Убран plugin-sql fallback** из `chat-cache.ts`: tauri-plugin-sql
+  удалён из сборки (монополия rusqlite), fallback был мёртвым кодом.
+
+#### Root cause: кэш и устройства мертвы на legacy-БД — баг версий миграций
+- **Баг парсинга версии миграции** (`src-tauri/src/storage.rs`):
+  `trim_matches('0')` срезал нули С ОБОИХ концов имени —
+  `"001__initial_schema"` → `"1__initial_schema"` → `parse()` падал →
+  `unwrap_or(0)` → V001 записывалась в `refinery_schema_history` как
+  `version=0`, а V002+ при каждом старте «находились» применёнными
+  (EXISTS(version=0) бил в запись V001) и **скипались навсегда**.
+  На реальной БД (дамп через тест) подтверждено: HISTORY=[(0,V001)],
+  secure_store/app_settings отсутствовали, devices без новых колонок —
+  отсюда `no such table: secure_store` (кэш чатов/сообщений не работал),
+  `devices has no column named device_type` и 401-каскад.
+- **Фикс**: версия строго из числового префикса имени (`V001` → 1),
+  плохое имя = ошибка, не молча 0.
+- **`V003__repair_legacy_versioning.sql`**: удаляет испорченные записи
+  (version=0), страховочно создаёт secure_store/app_settings и переносит
+  данные из auth_progress.
+- **Repair devices-колонок кодом** (SQLite не умеет условный ADD COLUMN):
+  сверка PRAGMA table_info, недостающие колонки добавляются ALTER'ом.
+  Верифицировано на реальной БД: HISTORY=[(1,V001),(2,V002),(3,V003)],
+  secure_store/app_settings созданы, devices доколонован.
+- **`cacheSet` теперь возвращает успех записи (boolean)**: раньше
+  миграция удаляла legacy-копию из localStorage, даже если запись в
+  SQL провалилась (ошибка глоталась) — данные терялись в обоих местах.
+- CACHE_IO_TIMEOUT поднят до 3с (busy_timeout в Rust — 5с, 1.5с
+  срезали легитимные операции под контеншном).
+
+#### Cache-first старт: сначала БД, потом сеть
+- `app/app/page.tsx` init перестроен по принципу «БД → сеть»:
+  1. Юзер ставится из **локальной сессии** сразу (без ожидания сетевого
+     `profiles`-запроса).
+  2. `fetchChats` вызывается **до** всех сетевых старт-операций —
+     список рендерится из SQLCipher-кэша, свежак подтягивается следом.
+  3. Только потом сеть: профиль (уточняет `user_metadata`, обновляет
+     юзера), регистрация устройства + geo-детект, quarantine-проверка.
+- Раньше кэш списка читался ПОСЛЕ профиля/geo/регистрации устройства —
+  список ждал сеть, хотя данные были локально.
+- Убран дублирующий `fetchChats` в конце device-блока (уже вызван выше).
+- Ошибка профиля больше не откатывает юзера: warn
+  `[App] profile fetch failed, using local session` и работаем дальше
+  на локальной сессии (важно для офлайна и медленной сети).
+
+#### Офлайн-старт опирается на статус связи (без ожидания сети)
+- `useChatList(user, connectionStatus)` / `useMessages(chats, connectionStatus)`:
+  перед сетевым запросом проверяется `navigator.onLine` И статус из
+  `useConnection`. Если статус `disconnected` — сеть **не трогаем вообще**:
+  список/история рендерятся из SQLCipher-кэша мгновенно, вместо ожидания
+  сетевых таймаутов (раньше именно их ждали десятки секунд, хотя сайдбар
+  уже показывал Offline).
+- **Жёсткий abort-таймаут сети** (8с) через `AbortSignal` на обоих запросах
+  (`messages`, `profiles`) — защита от «статус connected, а сеть мертва»,
+  больше никаких многоминутных зависаний.
+- **Ресинк при возврате сети**: reconnect-коллбек `useConnection` теперь
+  кроме досылки offline-очереди вызывает `fetchChats` — список
+  синхронизируется с сервером, кэш на экране обновляется (unread counts,
+  новые чаты) без ожидания пользователя.
+- `page.tsx`: порядок хуков переставлен — `useNetworkQueue`/`useConnection`
+  идут до `useChatList`, чтобы статус был доступен списку в первом рендере.
+- Диагностика: `[CHAT-CACHE] offline (status), using cached chats —
+  network skipped` / `... using cached messages — network skipped`.
+
+#### Latenсу офлайн-старта: L1-память, single-flight, сериализация записей
+- Причина медленного появления списка: IPC к Rust (в логе —
+  `IPC custom protocol failed, Tauri will now use the postMessage
+  interface`) + дублирующиеся вызовы (StrictMode даёт по 2 одинаковых
+  invoke на ключ) + WAL (один писатель; параллельные записи ждали
+  busy_timeout 5с). Итог: одно чтение кэша растягивалось на секунды.
+- **`hooks/echo/chat-cache.ts`**: L1 in-memory Map (повторные чтения —
+  0 IPC), single-flight (одинаковые параллельные чтения делят один
+  invoke), `enqueueWrite` — записи строго по одной. Тайминги: warn
+  `slow get/save_auth_progress <key>: Nms` при >300мс.
+- **Записи кэша — fire-and-forget** в `use-chat-list`/`use-messages`:
+  UI не ждёт Rust-слой, при таймауте bounded-обёртки запись всё равно
+  доезжает (память обновляется по факту успеха).
+- CACHE_IO_TIMEOUT поднят до 5с (равен busy_timeout в Rust).
+- **CSP**: в `connect-src` добавлен `ipc://localhost` — чтобы вернуть
+  быстрый custom-protocol IPC вместо postMessage-fallback.
+
+#### Фикс слетающей авторизации в офлайне (эта же итерация)
+- **`autoRefreshToken: false`** (`lib/db.ts`): gotrue при обрыве сети
+  уходил в retry-цикл обновления токена (fetch без таймаута →
+  AuthRetryableFetchError, в логе — `Failed to load resource: token,
+  network connection was lost`), после исчерпания попыток **сам удалял
+  сессию** → пользователь вылетал на /auth после airplane mode.
+- **Ручной guarded refresh** вместо автомата: `ensureSessionFresh`
+  (margin 120с) → перед refresh живой probe `/rest/v1/` с AbortController
+  (5s); офлайн gotrue не вызывается вообще, сессия сохраняется.
+  Watchdog: refresh на `online`-событии и раз в минуту (только online),
+  плюс `ensureSupabaseSessionFresh()` в app-init.
+- **`detectSessionInUrl: false`**: QR-логин идёт через `verifyOtp`
+  (API), URL-токены не используются; флаг исключает и ложный парсинг
+  deep-link `?chat=username` как auth-параметров.
+
+#### Прочее
+- Удалён мёртвый дублирующий хук `hooks/echo/use-echo-app.ts` (никем
+  не импортировался, содержал собственную копию кэш-логики чатов).
+
 ## [0.3.0] - 2026-09-18
 ### Shield Media, голосовые, файлы и raw-bytes IPC — полный E2EE-контур медиа
 

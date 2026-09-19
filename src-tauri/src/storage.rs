@@ -100,6 +100,10 @@ const MIGRATIONS: &[(&str, &str)] = &[
         "V002__split_auth_progress",
         include_str!("../migrations/V002__split_auth_progress.sql"),
     ),
+    (
+        "V003__repair_legacy_versioning",
+        include_str!("../migrations/V003__repair_legacy_versioning.sql"),
+    ),
 ];
 
 /// Прочитать или создать 16-байтовую соль для DB-ключа.
@@ -271,11 +275,23 @@ fn run_migrations(conn: &Connection) -> Result<(), String> {
     .map_err(|e| format!("[Storage] history table: {e}"))?;
 
     for (name, sql) in MIGRATIONS {
-        let version: i64 = name
-            .trim_start_matches("V")
-            .trim_matches('0')
-            .parse()
-            .unwrap_or(0);
+        // ВАЖНО: версию берём строго из числового префикса. Прежний вариант
+        // `trim_matches('0')` срезал нули с ОБОИХ концов ("001__initial_schema"
+        // -> "1__initial_schema"), parse() падал -> unwrap_or(0) -> ВСЕ миграции
+        // записывались/проверялись как version=0: V001 отмечалась как
+        // применённая (хотя её DDL не чинил legacy-схему), а V002+ скипались
+        // навсегда (EXISTS(version=0) находил запись V001). Итог: нет
+        // secure_store/app_settings -> кэш чатов и auth-прогресс мертвы.
+        let version: i64 = {
+            let digits: String = name
+                .trim_start_matches('V')
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            digits
+                .parse()
+                .map_err(|e| format!("[Storage] bad migration name '{name}': {e}"))?
+        };
 
         let applied: bool = conn
             .query_row(
@@ -306,6 +322,40 @@ fn run_migrations(conn: &Connection) -> Result<(), String> {
             })?;
         log::info!("[Storage] applied migration {name}");
     }
+
+    // Починка legacy-схемы devices: на БД, созданной старым runtime-CREATE,
+    // таблица существует без новых колонок — CREATE IF NOT EXISTS её не чинит,
+    // а SQLite не умеет условный ADD COLUMN. Сверяем PRAGMA table_info.
+    {
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(devices)")
+            .map_err(|e| format!("[Storage] table_info devices: {e}"))?;
+        let existing: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(|e| format!("[Storage] table_info devices: {e}"))?
+            .filter_map(|x| x.ok())
+            .collect();
+        drop(stmt);
+
+        const REQUIRED: &[(&str, &str)] = &[
+            ("device_type", "TEXT DEFAULT 'desktop'"),
+            ("os_name", "TEXT DEFAULT ''"),
+            ("browser_name", "TEXT DEFAULT ''"),
+            ("ip_address", "TEXT DEFAULT ''"),
+            ("location", "TEXT DEFAULT ''"),
+            ("timezone", "TEXT DEFAULT ''"),
+            ("is_vpn", "INTEGER DEFAULT 0"),
+            ("is_current", "INTEGER DEFAULT 0"),
+        ];
+        for (col, decl) in REQUIRED {
+            if !existing.iter().any(|c| c == col) {
+                conn.execute(&format!("ALTER TABLE devices ADD COLUMN {col} {decl}"), [])
+                    .map_err(|e| format!("[Storage] devices ADD COLUMN {col}: {e}"))?;
+                log::info!("[Storage] devices: added missing column {col}");
+            }
+        }
+    }
+
     Ok(())
 }
 /// Простой пул пре-ключеванных SQLCipher-соединений (LIFO через mpsc).

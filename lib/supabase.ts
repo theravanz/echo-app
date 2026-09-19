@@ -7,4 +7,4 @@ import { getSupabase as _getSupabase, getPersistedSession, persistSession, termi
 export const supabase = _getSupabase()
 
 // Реэкспорт функций
-export { getSupabase, getPersistedSession, persistSession, terminateSession, generateHWID, getDevices, deleteDevice, getLocalAccount, saveLocalAccount, ensureAuth } from './db'
+export { getSupabase, getPersistedSession, persistSession, terminateSession, generateHWID, getDevices, deleteDevice, getLocalAccount, saveLocalAccount, ensureAuth, ensureSupabaseSessionFresh } from './db'

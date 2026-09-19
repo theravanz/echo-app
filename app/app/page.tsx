@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, memo, useCallback, Suspense } from "react";
+import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -76,7 +77,7 @@ import {
 } from "react-icons/tb";
 import { cn, safeChar } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { supabase } from "@/lib/supabase";
+import { supabase, ensureSupabaseSessionFresh } from "@/lib/supabase";
 import { useTranslation } from "@/hooks/use-translation";
 import { useNotifications } from "@/hooks/echo/use-notifications";
 import { useNotificationSettings } from "@/hooks/echo/use-notification-settings";
@@ -91,7 +92,7 @@ import { useProfiles } from "@/hooks/echo/use-profiles";
 import { saveDevice, generateHWID, getDevices, deleteDevice } from "@/lib/db";
 import { detectDevice } from "@/lib/device-info";
 import dynamic from "next/dynamic";
-import type { UserProfile, Chat, Message, NetworkMode, AppTab, ConnectionStatus } from "@/hooks/echo/types";
+import type { UserProfile, Chat, Message, NetworkMode, AppTab, ConnectionStatus, PendingMessage } from "@/hooks/echo/types";
 import { ChatSidebar } from "@/components/echo/app/chat-sidebar";
 import { MobileTabBar } from "@/components/echo/app/mobile-tab-bar";
 import { CallOverlay, type OutgoingCallRequest, type CallLogData, deriveRoomId } from "@/components/echo/app/CallOverlay";
@@ -122,7 +123,6 @@ function EchoAppContent() {
   const { language } = useTranslation();
 
   // App State
-  const [appLoading, setAppLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<AppTab>('chats');
   const [activeMode, setActiveMode] = useState<NetworkMode>('direct');
   const [user, setUser] = useState<UserProfile | null>(null);
@@ -137,7 +137,27 @@ function EchoAppContent() {
 
   const [isRightPanelOpen, setIsRightPanelOpen] = useState(false); 
 
-  const { chats, setChats, fetchChats, selectedChat, setSelectedChat, selectedChatRef, drafts, saveDraft, onlineUsers } = useChatList(user);
+  // Network queue + connection status идут ДО useChatList: список чатов
+  // опирается на статус связи (офлайн → рендер из кэша без сетевых таймаутов).
+  const { pendingQueue, ready: queueReady, addToQueue, removeFromQueue, processPendingQueue } = useNetworkQueue(user?.id ?? null);
+  const reconnectRef = useRef<() => void>(() => {});
+  const { connectionStatus, setConnectionStatus } = useConnection(() => reconnectRef.current());
+
+  const { chats, setChats, chatsFetchError, fetchChats, selectedChat, setSelectedChat, selectedChatRef, drafts, saveDraft, onlineUsers } = useChatList(user, connectionStatus);
+
+  // Проход по очереди, который применяет swap temp-id → real-id к стейту
+  // сообщений, объявляется ПОСЛЕ useMessages — здесь только стабильная ссылка,
+  // чтобы reconnect-колбэк всегда дёргал актуальную версию.
+  const flushQueueRef = useRef<() => Promise<void>>(async () => {});
+
+  // Возврат сети: досылаем offline-очередь и синхронизируем список с сервером
+  // (кэш при этом уже отрендерен — список не «ждёт» сеть).
+  useEffect(() => {
+    reconnectRef.current = () => {
+      void flushQueueRef.current();
+      if (userRef.current?.id) fetchChats(userRef.current.id);
+    };
+  }, [fetchChats]);
 
   const handleMentionClick = useCallback(async (username: string) => {
     try {
@@ -173,10 +193,78 @@ function EchoAppContent() {
     }
   }, [selectedChat, setSelectedChat]);
 
-  const { messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage, handleSendVoice } = useMessages(chats);
-  const { processPendingQueue } = useNetworkQueue();
-  const { connectionStatus, setConnectionStatus } = useConnection(processPendingQueue);
+  const { messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage, handleSendVoice } = useMessages(chats, connectionStatus, pendingQueue);
   const { searchOpen, setSearchOpen, searchQuery, searchResults, isSearching, isSearchFocused, setIsSearchFocused, recentSearches, searchRef, searchTimeoutRef, handleSearch, handleStartChat, clearSearch, setCurrentUserId } = useProfiles();
+
+  // ─── ОФЛАЙН-ОЧЕРЕДЬ: досылка + swap temp-id → real-id ───
+  // Один проход по очереди (последовательно, по одному сообщению).
+  // Результат применяем к стейту: успех → меняем id (часики → галочка),
+  // дроп сервером → убираем пузырь (тост уже показал хук).
+  const runFlushQueue = useCallback(async () => {
+    const results = await processPendingQueue();
+    if (results.length === 0) return;
+    const sent = results.filter((r) => r.ok && r.realId);
+    const dropped = results.filter((r) => !r.ok && r.dropped);
+    if (sent.length > 0) {
+      setMessages((prev) =>
+        prev.map((m) => {
+          const hit = sent.find((s) => s.tempId === m.id);
+          return hit
+            ? { ...m, id: hit.realId as string, status: "sent" as const, _pending: false }
+            : m;
+        }),
+      );
+    }
+    if (dropped.length > 0) {
+      setMessages((prev) => prev.filter((m) => !dropped.some((d) => d.tempId === m.id)));
+    }
+    console.log(
+      `[QUEUE] UI-синхронизация: swap=${sent.length}, drop=${dropped.length}, ` +
+        `retry=${results.length - sent.length - dropped.length}`,
+    );
+  }, [processPendingQueue, setMessages]);
+
+  // Проходы строго по одному: сообщение, добавленное во время досылки,
+  // не «зависает» — следующий проход цепочки его подхватит.
+  const flushChainRef = useRef<Promise<void>>(Promise.resolve());
+  const flushQueue = useCallback((): Promise<void> => {
+    const next = flushChainRef.current.then(
+      () => runFlushQueue(),
+      () => runFlushQueue(),
+    );
+    flushChainRef.current = next.catch((e) => console.error("[QUEUE] flush chain failed:", e));
+    return flushChainRef.current;
+  }, [runFlushQueue]);
+
+  useEffect(() => {
+    flushQueueRef.current = flushQueue;
+  }, [flushQueue]);
+
+  // Персистентная очередь готова (гидратация из SQLCipher) → досылаем.
+  // Это же покрывает кейс «убили приложение с pending → рестарт → досылка».
+  useEffect(() => {
+    if (!queueReady || !user?.id) return;
+    void flushQueue();
+  }, [queueReady, user?.id, flushQueue]);
+
+  // Оптимистичный путь: в очередь + сразу попытка отправки (быстрый путь).
+  const enqueuePending = useCallback(
+    (msg: PendingMessage) => {
+      addToQueue(msg);
+      void flushQueue();
+    },
+    [addToQueue, flushQueue],
+  );
+
+  // «Отменить отправку» из контекст-меню pending-сообщения (только temp-id).
+  const cancelPending = useCallback(
+    async (msg: Message) => {
+      await removeFromQueue(msg.id);
+      setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+      toast.success("Отправка отменена");
+    },
+    [removeFromQueue, setMessages],
+  );
 
 // Обёртки, чтобы ответ и редактирование взаимно исключали друг друга
 const setReplyingToSafe = (msg: any) => {
@@ -591,6 +679,30 @@ useEffect(() => {
 
     return () => { if (unlisten) unlisten(); };
   }, [openChatByUsername]);
+// ═══════════════════════════════════════════════════════════════════
+// Offline userId — БЕЗ getSession(). При офлайне supabase-js может
+// зависнуть в refreshSession (fetch без таймаута) — до кэша тогда не
+// дойдём. userId достаём синхронно из локального storage supabase-js
+// (ключ `sb-<ref>-auth-token`) и фолбэка echo_accounts.
+// ═══════════════════════════════════════════════════════════════════
+function getOfflineUserId(): string | null {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('sb-') && k.endsWith('-auth-token')) {
+        const rec = JSON.parse(localStorage.getItem(k) || '{}');
+        if (rec?.user?.id) return rec.user.id as string;
+      }
+    }
+  } catch { /* ignore */ }
+  try {
+    const accounts = JSON.parse(localStorage.getItem('echo_accounts') || '[]');
+    if (Array.isArray(accounts) && accounts[0]?.id) return accounts[0].id as string;
+  } catch { /* ignore */ }
+  return null;
+}
+
+
 
 useEffect(() => {
   let isMounted = true;
@@ -622,8 +734,23 @@ useEffect(() => {
       });
 
       // 4. Асинхронная инициализация (сессия, профиль, чаты)
+      // ОФФЛАЙН (cache-first): userId берём синхронно из локального storage
+      // (sb-*-auth-token / echo_accounts) и сразу рендерим список из
+      // SQLCipher — сеть не трогаем вообще (статус disconnected + onLine=false),
+      // поэтому никаких ожиданий таймаутов.
       if (isOffline) {
-        if (isMounted) setAppLoading(false);
+        const offlineUserId = getOfflineUserId();
+        if (offlineUserId && isMounted) {
+          const offlineUser: UserProfile = {
+            id: offlineUserId,
+            user_metadata: {},
+          } as unknown as UserProfile;
+          setUser(offlineUser);
+          userRef.current = offlineUser;
+          await fetchChats(offlineUserId);
+        } else {
+          console.warn('[App] offline init: no local session available');
+        }
         return;
       }
 
@@ -641,7 +768,6 @@ useEffect(() => {
       } catch (e) {
         console.error('App init: auth check failed/timeout:', e);
         if (isMounted) {
-          setAppLoading(false);
           router.push('/auth');
         }
         return;
@@ -652,20 +778,52 @@ useEffect(() => {
         return;
       }
 
-      let userData: UserProfile;
+      // Свежесть access-токена: если истёк/истекает — ручной refresh
+      // (autoRefreshToken отключён в lib/db.ts, чтобы офлайн retry-цикл
+      // gotrue не удалял сессию). Fire-and-forget: init не блокируем.
+      ensureSupabaseSessionFresh().catch(e => console.warn('[SupabaseAuth] init refresh rejected:', e));
+
+      // ═══ CACHE-FIRST: сначала БД, потом сеть ═══
+      // 1) Юзер — из локальной сессии, мгновенно (без сетевого запроса профиля).
+      const sessionUser = session.user as UserProfile;
+      if (isMounted) {
+        setUser(sessionUser);
+        userRef.current = sessionUser;
+      }
+
+      // 2) Список чатов — из SQLCipher-кэша сразу же. Внутри fetchChats
+      //    сначала рендерится кэш, затем идёт сеть за свежаком (и
+      //    обновляет unread/new при возврате). Раньше список ждал
+      //    сетевые профиль/geo/регистрацию устройства ниже.
+      void fetchChats(session.user.id)
+        .catch(err => console.warn('[CHAT-CACHE] fetchChats rejected:', err));
+
+      // 3) Далее сеть — уточняем профиль и, если пришло, обновляем юзера.
+      //    abort-таймаут: не даём сети повесить инициализацию.
+      let userData: UserProfile = sessionUser;
+      const profileAbort = new AbortController();
+      const profileTimeout = setTimeout(() => profileAbort.abort(), 8000);
       try {
-        const { data: profile } = await supabase.from('profiles').select('*').eq('id', session.user.id).maybeSingle();
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', session.user.id)
+          .abortSignal(profileAbort.signal)
+          .maybeSingle();
         userData = { ...session.user, user_metadata: { ...session.user.user_metadata, ...(profile || {}) } } as UserProfile;
-      } catch {
-        userData = session.user as UserProfile;
+        if (isMounted) {
+          setUser(userData);
+          userRef.current = userData;
+        }
+      } catch (e) {
+        console.warn('[App] profile fetch failed, using local session:', e);
+      } finally {
+        clearTimeout(profileTimeout);
       }
 
       if (!isMounted) return;
-      setUser(userData);
-      userRef.current = userData;
 
-
-      // Register this device + check quarantine
+      // Register this device + check quarantine (сеть/geo — уже после кэша)
       try {
         const hwid = await generateHWID();
         localStorage.setItem('echo_device_hwid', hwid); // sync for old code
@@ -834,15 +992,11 @@ useEffect(() => {
         }
       } catch (err) { console.error('Device init error:', err); }
 
-      fetchChats(userData.id).catch(err => console.error('Fetch chats error:', err));
-
-      // Init complete — снимаем loading-состояние (раньше это делалось
-      // только в catch, что оставляло appLoading=true навсегда при успехе).
-      if (isMounted) setAppLoading(false);
+      // fetchChats уже вызван выше (cache-first) — здесь сеть за свежаком
+      // дополнительно дёрнет realtime/reconnect.
 
     } catch (error) {
       console.error('App init error:', error);
-      if (isMounted) setAppLoading(false);
     }
   };
 
@@ -882,13 +1036,6 @@ useEffect(() => {
   }
 }, [selectedChat]);
 
-  if (appLoading) {
-    return (
-      <div className="h-dvh bg-background flex items-center justify-center noise-overlay">
-        <div className="w-12 h-12 border-4 border-primary/20 border-t-primary rounded-full animate-spin" />
-      </div>
-    );
-  }
   return (
     <div id="echo-app-root" className="flex h-dvh bg-background text-foreground overflow-hidden selection:bg-primary/30 antialiased relative noise-overlay">
 
@@ -967,6 +1114,7 @@ useEffect(() => {
           connectionStatus={connectionStatus}
           activeMode={activeMode}
           chats={chats}
+          chatsFetchError={chatsFetchError}
           selectedChat={selectedChat}
           onlineUsers={onlineUsers}
           searchOpen={searchOpen}
@@ -1027,6 +1175,8 @@ useEffect(() => {
           fetchMessages={fetchMessages}
           handleSendMessage={handleSendMessage}
           handleSendVoice={handleSendVoice}
+          enqueuePending={enqueuePending}
+          onCancelPending={cancelPending}
           onOpenChat={(id) => setSelectedChat(chats.find(c => c.id === id)!)}
         />
       </motion.div>
