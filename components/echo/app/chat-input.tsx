@@ -5,6 +5,7 @@ import { motion, AnimatePresence, useDragControls } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { MediaPicker } from "./media-picker";
+import { messagePreview } from "@/lib/utils";
 import {
   TbSend as Send,
   TbPaperclip as Paperclip,
@@ -523,7 +524,7 @@ export function ChatInput({
                   {replyingTo ? `Ответ: ${replyingTo.sender_id === user?.id ? "Себе" : selectedChat?.display_name || selectedChat?.username}` : "Редактирование"}
                 </div>
                 <div className="text-[13px] text-zinc-400 truncate leading-snug">
-                  {replyingTo ? replyingTo.content : editingMessage?.content}
+                  {replyingTo ? messagePreview(replyingTo) : editingMessage?.content}
                 </div>
               </div>
               <button onClick={cancelAction} className="w-7 h-7 rounded-full flex items-center justify-center text-zinc-500 hover:text-white hover:bg-white/10 transition-colors shrink-0">

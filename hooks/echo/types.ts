@@ -57,8 +57,12 @@ export interface Message {
   created_at: string;
   reply_to_id?: string | null;
   reply_to?: {
+    id: string;
     sender_id: string;
+    type?: "text" | "sticker" | "gif" | "voice" | "file" | "call_log";
     content: string;
+    call_status?: "incoming" | "outgoing" | "missed";
+    call_duration?: number;
   } | null;
   is_edited?: boolean;
   read_at?: string;
