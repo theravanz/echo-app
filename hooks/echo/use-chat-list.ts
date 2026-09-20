@@ -166,32 +166,53 @@ export function useChatList(
           .in("id", participantIds)
           .abortSignal(signal);
 
-        if (profiles) {
-          const decrypt = decryptMessageRef.current;
-          const finalChats = await Promise.all(
-            profiles.map(async (p: any) => {
-              const chatData = chatMap[p.id];
-              if (!chatData?.lastMsgRaw) return null;
-              const decrypted = await decrypt(
-                chatData.lastMsgRaw.content || "",
-                chatData.lastMsgRaw.nonce || "",
-                p.id,
-              );
-              // Format preview for media messages
-              const msgType = chatData.lastMsgRaw.type || 'text';
-              const preview = msgType === 'sticker' ? '📸 Sticker'
-                : msgType === 'gif' ? '🎥 GIF'
-                : decrypted;
-              return {
-                ...p,
-                id: p.id,
-                lastMessage: preview,
-                lastMessageType: msgType,
-                lastMessageTime: chatData.lastMessageTime,
-                unreadCount: chatData.unreadCount,
-              } as Chat;
-            }),
-          );
+if (profiles) {
+  const decrypt = decryptMessageRef.current;
+  const finalChats = await Promise.all(
+    profiles.map(async (p: any) => {
+      const chatData = chatMap[p.id];
+      if (!chatData?.lastMsgRaw) return null;
+      
+      const msgType = chatData.lastMsgRaw.type || 'text';
+      
+      // voice/file/call_log: content — plaintext JSON-мета (или системные данные),
+      // decrypt НЕ вызываем. Превью строим из меты напрямую.
+      let preview: string;
+      if (msgType === 'voice') {
+        preview = '🎙 Голосовое сообщение';
+      } else if (msgType === 'file') {
+        let meta: any = null;
+        try {
+          meta = JSON.parse(chatData.lastMsgRaw.content || '{}');
+        } catch { /* ignore */ }
+        preview = meta?.name ? `📎 ${meta.name}` : '📎 Файл';
+      } else if (msgType === 'call_log') {
+        const cs = chatData.lastMsgRaw.call_status || 'missed';
+        preview = cs === 'missed' ? '📞 Пропущенный звонок' : cs === 'incoming' ? '📞 Входящий звонок' : '📞 Исходящий звонок';
+      } else if (msgType === 'sticker') {
+        preview = '📸 Sticker';
+      } else if (msgType === 'gif') {
+        preview = '🎥 GIF';
+      } else {
+        // Только текст прогоняем через E2EE-дешифратор
+        const decrypted = await decrypt(
+          chatData.lastMsgRaw.content || "",
+          chatData.lastMsgRaw.nonce || "",
+          p.id,
+        );
+        preview = decrypted;
+      }
+      
+      return {
+        ...p,
+        id: p.id,
+        lastMessage: preview,
+        lastMessageType: msgType,
+        lastMessageTime: chatData.lastMessageTime,
+        unreadCount: chatData.unreadCount,
+      } as Chat;
+    }),
+  );
 
           const filteredChats = finalChats.filter((c): c is Chat => c !== null);
           filteredChats.sort(

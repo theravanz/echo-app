@@ -16,10 +16,12 @@ import {
   TbPlayerPlayFilled as Play,
   TbPlayerPauseFilled as Pause,
   TbAlertCircle as TbAlertCircle,
+  TbPencil as TbPencil,
 } from "react-icons/tb";
 import { TbX as X, TbDownload, TbPhoto, TbVideo, TbMusic, TbFile, TbFileText, TbFileZip, TbRefresh } from "react-icons/tb";
 import { parseFileMeta, keyUserFor, type UploadStatus } from "@/lib/files";
 import { AudioFileBubble } from "./audio-file-bubble";
+import { messagePreview } from "@/lib/utils";
 
 interface MessageBubbleProps {
   msg: any;
@@ -604,30 +606,32 @@ export const MessageBubble = memo(({
               <div className={cn("font-semibold mb-0.5 truncate", isMe ? "text-primary-foreground/80" : "text-primary")}>
                 {msg.reply_to.sender_id === user?.id ? "Вы" : (activeChat.display_name || activeChat.username)}
               </div>
-              <div className={cn("truncate", isMe ? "text-primary-foreground/60" : "text-zinc-400")}>{msg.reply_to.content}</div>
+              <div className={cn("truncate", isMe ? "text-primary-foreground/60" : "text-zinc-400")}>
+                {messagePreview(msg.reply_to)}
+              </div>
             </div>
           )}
 
           {!isOnlyMention && (
             <div className="relative">
               <div
-                className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] [word-break:break-word] pr-16"
-                style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}
+                className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] [word-break:break-word]"
                 onClick={handleContentClick}
               >
                 {renderMessageContent(msg.content, msg.type || "text")}
-              </div>
-              <div className={cn("absolute bottom-0 right-0 flex items-center gap-1 pl-2 pb-0.5", isMe ? "text-primary-foreground/60" : "text-zinc-500")}>
+                {/* Инлайн-футер: в потоке, текст обтекает */}
+                <span className={cn(
+                  "float-right inline-flex items-center gap-1 pl-2 -mb-1 translate-y-0.5",
+                  isMe ? "text-primary-foreground/60" : "text-zinc-500"
+                )}>
                 {msg.delivery_path && msg.delivery_path !== "direct" && (
                   <span className="opacity-70">{msg.delivery_path === "mesh" ? <MeshIcon className="w-3 h-3" /> : <RelayIcon className="w-3 h-3" />}</span>
                 )}
-                <span className="text-[11px] font-medium tabular-nums">{time}</span>
-                {isMe && (isPendingStatus(msg.status)
-                  ? <Clock className="w-3.5 h-3.5 opacity-80" />
-                  : msg.status === "read" ? <CheckCheck className="w-3.5 h-3.5 opacity-90" />
-                  : msg.status === "delivered" ? <CheckCheck className="w-3.5 h-3.5 opacity-70" />
-                  : <Check className="w-3.5 h-3.5 opacity-50" />)}
-              </div>
+                {msg.is_edited && <TbPencil className="w-3 h-3 opacity-80" />}
+                  <span className="text-[10px] font-medium tabular-nums">{time}</span>
+                {isMe && (msg.status === "read" ? <CheckCheck className="w-3.5 h-3.5 opacity-90" /> : msg.status === "delivered" ? <CheckCheck className="w-3.5 h-3.5 opacity-70" /> : <Check className="w-3.5 h-3.5 opacity-50" />)}
+                </span>
+                </div>
             </div>
           )}
           {isOnlyMention && <div className="flex flex-col gap-2">{mentionCards}</div>}

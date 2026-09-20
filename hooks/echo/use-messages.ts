@@ -206,6 +206,52 @@ export function useMessages(
         }),
       );
       const decryptedMessages = processed.filter(Boolean) as Message[];
+
+            // ─── Reply-таргеты: собираем id, дозапрашиваем, декриптим по типу ───
+      const replyIds = [...new Set(
+        (data || []).map((m: any) => m.reply_to_id).filter(Boolean)
+      )] as string[];
+
+      if (replyIds.length > 0) {
+        try {
+          const { data: replyRows } = await supabase
+            .from("messages")
+            .select("id, sender_id, receiver_id, content, nonce, type, created_at, call_status")
+            .in("id", replyIds);
+
+          if (replyRows) {
+            const replyMap = new Map<string, any>();
+            await Promise.all(replyRows.map(async (r: any) => {
+              let content: string;
+              if (r.type === "voice" || r.type === "file" || r.type === "call_log") {
+                // plaintext-мета — decrypt не вызываем
+                content = r.content || "";
+              } else {
+                const otherId = r.sender_id === currentUserId ? r.receiver_id : r.sender_id;
+                try {
+                  content = await decryptMessage(r.content || "", r.nonce || "", otherId);
+                } catch { content = "[E2EE Error]"; }
+              }
+              replyMap.set(r.id, {
+                id: r.id,
+                sender_id: r.sender_id,
+                type: r.type,
+                content,
+                call_status: r.call_status,
+              });
+            }));
+
+            for (const m of decryptedMessages as any[]) {
+              if (m.reply_to_id && replyMap.has(m.reply_to_id)) {
+                m.reply_to = replyMap.get(m.reply_to_id);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn("[REPLY] reply-join failed:", e);
+        }
+      }
+
       // Недосланные из очереди — поверх серверного списка (они ещё не в БД).
       const withPending = withPendingForChat(decryptedMessages, chatId, currentUserId);
       setMessages(withPending);
@@ -300,6 +346,13 @@ export function useMessages(
         status: "pending",
         created_at: new Date().toISOString(),
         reply_to_id: replyingTo?.id || null,
+        reply_to: replyingTo ? {
+          id: replyingTo.id,
+          sender_id: replyingTo.sender_id,
+          type: replyingTo.type,
+          content: replyingTo.content, // уже расшифрованный в памяти
+          call_status: replyingTo.call_status,
+        } : null,
         _pendingContent: content,
         _pending: true,
       };

@@ -22,3 +22,25 @@ export const formatRelativeTime = (date: string | Date) => {
   if (diffInSeconds < 604800) return `${Math.floor(diffInSeconds / 86400)}d`;
   return then.toLocaleDateString();
 };
+/** Человекочитаемое превью сообщения (reply, список чатов, уведомления).
+ *  voice/file/call_log несут plaintext-мету в content — не текст. */
+export const messagePreview = (msg: any): string => {
+  if (!msg) return "";
+  if (msg.type === "voice") return "🎙 Голосовое сообщение";
+  if (msg.type === "file") {
+    let meta = msg.file;
+    if (!meta && typeof msg.content === "string") {
+      try { meta = JSON.parse(msg.content); } catch { /* ignore */ }
+    }
+    return meta?.name ? `📎 ${meta.name}` : "📎 Файл";
+  }
+  if (msg.type === "call_log") {
+    const s = msg.call_status;
+    return s === "missed" ? "📞 Пропущенный звонок"
+      : s === "incoming" ? "📞 Входящий звонок" : "📞 Исходящий звонок";
+  }
+  if (msg.type === "sticker") return "Стикер";
+  if (msg.type === "gif") return "GIF";
+  if (msg.type === "image") return "🖼 Фото";
+  return typeof msg.content === "string" ? msg.content : "";
+};
