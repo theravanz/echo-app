@@ -53,6 +53,12 @@ export interface MediaEnvelope {
 
 /** Зашифровать произвольный Blob через Rust media_encrypt. */
 export async function encryptBlob(blob: Blob): Promise<MediaEnvelope> {
+  const keyOk = await ensureMediaKeyReady();
+  if (!keyOk) {
+    throw new Error(
+      "Медиа-ключ не загружен. Войди в аккаунт заново или восстанови E2EE по мнемонике.",
+    );
+  }
   const buf = await blob.arrayBuffer();
   const plaintextB64 = bytesToBase64(buf);
   const env = await invoke<MediaEnvelope>("media_encrypt", {
@@ -78,6 +84,33 @@ export async function decryptEnvelopeToBlob(
 /** Доступен ли медиа-ключ (E2EE-сид загружен). */
 export async function mediaKeyReady(): Promise<boolean> {
   try {
+    return await invoke<boolean>("media_key_status");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Гарантировать готовность медиа-ключа (E2EE-сид загружен в Rust KeyStore).
+ * Медиа-ключ = HKDF(E2EE seed), поэтому без восстановленного сида шифрование
+ * медиа невозможно. Если ключа нет — пробуем device-bound restore (как при
+ * старте приложения). Возвращает `false`, если восстановить не удалось
+ * (нет сохранённого ключа / сменилось железо / запуск вне Tauri).
+ */
+export async function ensureMediaKeyReady(): Promise<boolean> {
+  try {
+    if (await invoke<boolean>("media_key_status")) return true;
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    const userId = session?.user?.id;
+    if (userId) {
+      try {
+        await invoke("crypto_restore_key", { userId });
+      } catch (e) {
+        console.warn("[MEDIA] key restore failed:", e);
+      }
+    }
     return await invoke<boolean>("media_key_status");
   } catch {
     return false;

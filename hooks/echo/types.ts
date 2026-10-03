@@ -56,6 +56,9 @@ export interface Message {
   status?: "sending" | "pending" | "sent" | "read";
   created_at: string;
   reply_to_id?: string | null;
+  /** Метаданные лога звонка (для type === "call_log"). */
+  call_status?: "incoming" | "outgoing" | "missed";
+  call_duration?: number;
   reply_to?: {
     id: string;
     sender_id: string;
