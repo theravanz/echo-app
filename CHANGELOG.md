@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.1] - 2026-10-03
 ### Message-кэш в SQLCipher — plaintext переписки больше не в localStorage
 
 #### Изменено
@@ -144,6 +144,51 @@
 #### Прочее
 - Удалён мёртвый дублирующий хук `hooks/echo/use-echo-app.ts` (никем
   не импортировался, содержал собственную копию кэш-логики чатов).
+
+### Shield Media: приватные bucket'ы — без 400 на старых фото и с видимым зашифрованным аватаром
+
+#### Исправлено
+- **Спам 400 на старых фото** (`cover-*.jpg`, `pub-*.jpg`): после того как
+  `avatars`/`tracks`/`publications`/`stories` стали приватными (`0007`), часть
+  компонентов всё ещё рендерила сохранённые в БД ПУБЛИЧНЫЕ URL напрямую в `<img>`
+  → `GET /storage/v1/object/public/...` отдаёт 400. Сами объекты в бакете целы.
+- **`SecureImage`** (`secure-image.tsx`) пересобрал приоритет источника:
+  `расшифрованный blob (path+nonce)` → `signed-URL для legacy` → `внешний src`.
+  Раньше был `src || secure`, из-за чего зашифрованный формат вообще не
+  достигал применения, а legacy-ссылка 400-илась без фоллбэка.
+- **`use-secure-media.ts`**: добавлены `publicUrlToStoragePath()`,
+  `loadSignedStorageUrl()` и `useSignedStorageUrl()` — извлекают storage-путь из
+  публичной ссылки (`/storage/v1/object/public/<bucket>/<path>`) и открывают
+  объект короткоживущим signed-URL. Legacy-файлы не шифровались, поэтому
+  расшифровка им не нужна. Внешние ссылки (giphy и т.п.) проходят как есть.
+- **Свой профиль «не показывал» новое фото после сохранения**:
+  `settings-modal.tsx` собирал `EditableProfile` из `user_metadata` и не
+  прокидывал `avatar_storage_path`/`avatar_nonce`/`avatar_mime` (и
+  `activity_cover_path`/`activity_cover_nonce`), а `ProfileViewer` показывала
+  только `profile.avatar_url`. После загрузки нового аватара `avatar_url = null`
+  → вместо картинки показывались инициалы (выглядело как «фото не отправилось»).
+  Все аватары/обложки (`profile-edit-panel.tsx`, `profile-view-panel.tsx`,
+  аватар в сайдбаре `app/app/page.tsx`, обложки в списке треков) переведены на
+  `SecureAvatar`/`SecureImage`.
+- **Реальная причина ошибки сохранения была не видна**: `handleSave` гасил её
+  в общий тост «Не удалось сохранить профиль» — теперь показывает текст ошибки.
+
+#### Исправлено (сборка)
+- **`pnpm build` падал на type-check** (`hooks/echo/types.ts`): у `Message`
+  отсутствовали поля `call_status` / `call_duration`, хотя они используются в
+  `hooks/echo/use-messages.ts` (оптимистичный `reply_to`) и
+  `components/echo/app/message-bubble.tsx`. Из-за этой ошибки Tauri-сборка не
+  проходила вовсе → приложение продолжало запускаться со старым `out/`, что и
+  давало ощущение «всё отвалилось». Типы дополнены, `tsc --noEmit` и
+  `next build` проходят.
+
+#### Добавлено
+- **`ensureMediaKeyReady()`** (`lib/media.ts`): перед шифрованием медиа
+  проверяет `media_key_status` и, если ключа нет, пытается выполнить
+  device-bound `crypto_restore_key` для активной сессии. Медиа-ключ =
+  `HKDF(E2EE seed, "echo/media")`, поэтому без загруженного сида шифровать
+  нечем. Если ключ получить не удалось — бросается понятная ошибка
+  («Медиа-ключ не загружен…»), а не общий toast.
 
 ## [0.3.0] - 2026-09-18
 ### Shield Media, голосовые, файлы и raw-bytes IPC — полный E2EE-контур медиа
