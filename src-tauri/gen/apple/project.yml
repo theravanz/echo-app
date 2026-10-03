@@ -10,7 +10,7 @@ configs:
 settingGroups:
   app:
     base:
-      PRODUCT_NAME: echo-tauri
+      PRODUCT_NAME: Echo
       PRODUCT_BUNDLE_IDENTIFIER: com.theravanz.echo-tauri
 targetTemplates:
   app:
