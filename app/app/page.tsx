@@ -76,6 +76,7 @@ import {
   TbLink as LinkIcon
 } from "react-icons/tb";
 import { cn, safeChar } from "@/lib/utils";
+import { SecureAvatar } from "@/components/echo/app/secure-avatar";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { supabase, ensureSupabaseSessionFresh } from "@/lib/supabase";
 import { useTranslation } from "@/hooks/use-translation";
@@ -1081,11 +1082,15 @@ useEffect(() => {
             </button>
             <button className="w-12 h-12 rounded-full border border-white/5 p-1 hover:border-primary/40 transition-all overflow-hidden relative group" onClick={() => setIsSettingsOpen(true)}>
                <div className="w-full h-full rounded-full bg-primary/20 flex items-center justify-center text-primary text-xs font-bold uppercase overflow-hidden">
-                 {user?.user_metadata?.avatar_url ? (
-                   <img src={user.user_metadata.avatar_url} className="w-full h-full object-cover" alt="" />
-                 ) : (
-                   safeChar(user?.user_metadata?.display_name || user?.email, "D")
-                 )}
+                 <SecureAvatar
+                   src={user?.user_metadata?.avatar_url}
+                   bucket="avatars"
+                   path={user?.user_metadata?.avatar_storage_path}
+                   nonce={user?.user_metadata?.avatar_nonce}
+                   mime={user?.user_metadata?.avatar_mime}
+                   className="w-full h-full object-cover"
+                   fallback={safeChar(user?.user_metadata?.display_name || user?.email, "D")}
+                 />
                </div>
                <div className="absolute inset-0 bg-primary/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                   <Settings className="w-4 h-4 text-white" />

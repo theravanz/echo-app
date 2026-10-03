@@ -38,8 +38,8 @@ import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import * as mm from "music-metadata";
 import { base64ToBytes, compressAvatar, compressImage, encryptBlob } from "@/lib/media";
-import { useSecureMediaUrl } from "@/hooks/echo/use-secure-media";
 import { SecureImage } from "./secure-image";
+import { SecureAvatar } from "./secure-avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -477,16 +477,6 @@ function TrackListItem({ track, onSelect, onDelete }: { track: UserTrack; onSele
   const deleteOpacity = useTransform(x, [-80, -20], [1, 0]);
   const [confirming, setConfirming] = useState(false);
 
-  // Обложка зашифрована -> резолвим blob: URL из приватного bucket (с кэшем).
-  const secureCover = useSecureMediaUrl(
-    "tracks",
-    track.cover_path,
-    track.cover_nonce,
-    track.cover_mime || "image/webp",
-    Boolean(track.cover_path && !track.cover_url),
-  );
-  const coverSrc = track.cover_url || secureCover;
-
   function handleDragEnd(_: any, info: PanInfo) {
     if (info.offset.x < -80) {
       setConfirming(true);
@@ -524,7 +514,7 @@ function TrackListItem({ track, onSelect, onDelete }: { track: UserTrack; onSele
         className="relative w-full flex items-center gap-3 p-2 bg-background text-left"
       >
         <div className="w-14 h-14 rounded-xl shrink-0 overflow-hidden flex items-center justify-center" style={{ background: track.gradient || BACKGROUND_PRESETS[0].css }}>
-          {coverSrc ? <img src={coverSrc} className="w-full h-full object-cover" alt="" /> : <Music className="w-6 h-6 text-muted-foreground/80" />}
+          <SecureImage src={track.cover_url} bucket="tracks" path={track.cover_path} nonce={track.cover_nonce} mime={track.cover_mime} className="w-full h-full object-cover" fallback={<Music className="w-6 h-6 text-muted-foreground/80" />} />
         </div>
         <div className="flex-1 min-w-0">
           <div className="font-semibold text-sm truncate">{track.title}</div>
@@ -1202,11 +1192,7 @@ function ProfileViewer({
                     }}
                     className="group relative w-[92px] h-[92px] rounded-full overflow-hidden bg-muted border-4 border-[#0a0a0d] flex items-center justify-center font-bold text-4xl text-primary"
                   >
-                    {profile.avatar_url ? (
-                      <img src={profile.avatar_url} className="w-full h-full object-cover" alt="" />
-                    ) : (
-                      safeChar(profile.display_name || profile.username)
-                    )}
+                    <SecureAvatar src={profile.avatar_url} bucket="avatars" path={profile.avatar_storage_path} nonce={profile.avatar_nonce} mime={profile.avatar_mime} className="w-full h-full object-cover" fallback={safeChar(profile.display_name || profile.username)} />
                     <div className="absolute inset-0 bg-background/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                       <Camera className="w-5 h-5" />
                     </div>
@@ -1248,13 +1234,7 @@ function ProfileViewer({
                 className="absolute inset-0 z-40 bg-background"
               >
                 <div className="absolute inset-0">
-                  {profile.avatar_url ? (
-                    <img src={profile.avatar_url} className="w-full h-full object-cover" alt="" />
-                  ) : (
-                    <div className="w-full h-full bg-muted flex items-center justify-center text-6xl font-bold text-primary">
-                      {safeChar(profile.display_name || profile.username)}
-                    </div>
-                  )}
+                  <SecureAvatar src={profile.avatar_url} bucket="avatars" path={profile.avatar_storage_path} nonce={profile.avatar_nonce} mime={profile.avatar_mime} className="w-full h-full object-cover" fallback={<div className="w-full h-full bg-muted flex items-center justify-center text-6xl font-bold text-primary">{safeChar(profile.display_name || profile.username)}</div>} />
                 </div>
                 {/* Блюр-градиент снизу */}
                 <div className="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-[#0a0a0d] via-[#0a0a0d]/60 to-transparent backdrop-blur-sm" />
@@ -1307,13 +1287,7 @@ function ProfileViewer({
                   transition={{ type: "spring", damping: 25 }}
                   className="relative w-full h-full"
                 >
-                  {profile.avatar_url ? (
-                    <img src={profile.avatar_url} className="w-full h-full object-contain" alt="" />
-                  ) : (
-                    <div className="w-full h-full bg-muted flex items-center justify-center text-8xl font-bold text-primary">
-                      {safeChar(profile.display_name || profile.username)}
-                    </div>
-                  )}
+                  <SecureAvatar src={profile.avatar_url} bucket="avatars" path={profile.avatar_storage_path} nonce={profile.avatar_nonce} mime={profile.avatar_mime} className="w-full h-full object-contain" fallback={<div className="w-full h-full bg-muted flex items-center justify-center text-8xl font-bold text-primary">{safeChar(profile.display_name || profile.username)}</div>} />
                   {/* Header как в Telegram */}
                   <div className="absolute top-0 inset-x-0 p-4 flex items-center justify-between bg-gradient-to-b from-black/70 to-transparent">
                     <motion.button
@@ -1365,11 +1339,7 @@ function ProfileViewer({
         {hasActivity && (
           <div className="mx-5 mt-5 rounded-[20px] p-3.5 flex items-center gap-3 bg-gradient-to-br from-[#4a3d1a] to-[#2e2510]">
             <div className="w-[42px] h-[42px] rounded-xl bg-black/20 flex items-center justify-center shrink-0">
-              {profile.activity_cover_url ? (
-                <img src={profile.activity_cover_url} className="w-full h-full object-cover rounded-xl" alt="" />
-              ) : (
-                <Music className="w-[18px] h-[18px] text-amber-200" />
-              )}
+              <SecureImage src={profile.activity_cover_url} bucket="tracks" path={profile.activity_cover_path} nonce={profile.activity_cover_nonce} mime="image/webp" className="w-full h-full object-cover rounded-xl" fallback={<Music className="w-[18px] h-[18px] text-amber-200" />} />
             </div>
             <div className="flex-1 min-w-0">
               <div className="text-sm font-bold text-amber-100 truncate">{profile.activity_title}</div>
@@ -1552,7 +1522,7 @@ function ProfileEditor({
 }) {
   const [draft, setDraft] = useState<EditableProfile>(profile);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
-  const [avatarPreview, setAvatarPreview] = useState<string | null>(profile.avatar_url);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [bgPickerOpen, setBgPickerOpen] = useState(false);
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
   const [trackPickerOpen, setTrackPickerOpen] = useState(false);
@@ -1565,16 +1535,6 @@ function ProfileEditor({
   const isDirty = useMemo(() => JSON.stringify(draft) !== JSON.stringify(profile) || avatarFile !== null, [draft, profile, avatarFile]);
 
   const anySheetOpen = trackPickerOpen || channelPickerOpen || datePickerOpen;
-
-  // Безопасная аватарка: если новый формат (storage_path+nonce) — резолвим blob: URL.
-  const secureAvatarUrl = useSecureMediaUrl(
-    "avatars",
-    draft.avatar_storage_path,
-    draft.avatar_nonce,
-    draft.avatar_mime || "image/webp",
-    Boolean(draft.avatar_storage_path),
-  );
-  const shownAvatar = avatarPreview ?? secureAvatarUrl;
 
   function set<K extends keyof EditableProfile>(key: K, value: EditableProfile[K]) {
     setDraft((d) => ({ ...d, [key]: value }));
@@ -1697,7 +1657,7 @@ function ProfileEditor({
     } catch (err) {
       console.error("Profile save error:", err);
       console.error("Full error:", JSON.stringify(err, null, 2));
-      toast.error("Не удалось сохранить профиль");
+      toast.error(err instanceof Error && err.message ? err.message : "Не удалось сохранить профиль");
     } finally {
       setSaving(false);
     }
@@ -1745,7 +1705,7 @@ function ProfileEditor({
                 onClick={() => fileInputRef.current?.click()}
                 className="group relative w-[92px] h-[92px] rounded-full overflow-hidden bg-muted border-4 border-[#0a0a0d] flex items-center justify-center font-bold text-4xl text-primary"
               >
-                {shownAvatar ? <img src={shownAvatar} className="w-full h-full object-cover" alt="" /> : safeChar(draft.display_name)}
+                {avatarPreview ? <img src={avatarPreview} className="w-full h-full object-cover" alt="" /> : <SecureAvatar src={profile.avatar_url} bucket="avatars" path={draft.avatar_storage_path} nonce={draft.avatar_nonce} mime={draft.avatar_mime} className="w-full h-full object-cover" fallback={safeChar(draft.display_name)} />}
                 <div className="absolute inset-0 bg-background/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                   <Camera className="w-5 h-5" />
                 </div>
@@ -1881,7 +1841,7 @@ function ProfileEditor({
                 >
                   <div className="relative flex items-center gap-3 p-3">
                     <div className="w-14 h-14 rounded-xl overflow-hidden shrink-0 bg-black/20 flex items-center justify-center">
-                      {draft.activity_cover_url ? <img src={draft.activity_cover_url} className="w-full h-full object-cover" alt="" /> : <Music className="w-6 h-6 text-muted-foreground/80" />}
+                      <SecureImage src={draft.activity_cover_url} bucket="tracks" path={draft.activity_cover_path} nonce={draft.activity_cover_nonce} mime="image/webp" className="w-full h-full object-cover" fallback={<Music className="w-6 h-6 text-muted-foreground/80" />} />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="font-semibold text-sm truncate drop-shadow">{draft.activity_title}</div>

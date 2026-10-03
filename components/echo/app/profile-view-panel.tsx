@@ -26,8 +26,8 @@ import {
   TbShare2,
 } from "react-icons/tb";
 import { cn, safeChar } from "@/lib/utils";
-import { useSecureMediaUrl } from "@/hooks/echo/use-secure-media";
 import { SecureImage } from "./secure-image";
+import { SecureAvatar } from "./secure-avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -176,25 +176,6 @@ export function ProfileViewPanel({
   const hasActivity = !!profile.activity_title;
   const age = profile.birth_date && !profile.birth_date_hide_year ? calculateAge(profile.birth_date) : null;
 
-  // Защищённое медиа: если есть storage_path+nonce — резолвим blob: URL.
-  const secureAvatar = useSecureMediaUrl(
-    "avatars",
-    profile.avatar_storage_path,
-    profile.avatar_nonce,
-    profile.avatar_mime || "image/webp",
-    Boolean(profile.avatar_storage_path),
-  );
-  const avatarSrc = profile.avatar_url || secureAvatar;
-
-  const secureActivityCover = useSecureMediaUrl(
-    "tracks",
-    profile.activity_cover_path,
-    profile.activity_cover_nonce,
-    "image/webp",
-    Boolean(profile.activity_cover_path && !profile.activity_cover_url),
-  );
-  const activityCoverSrc = profile.activity_cover_url || secureActivityCover;
-
   return (
     <div className="flex flex-col h-full bg-background text-foreground overflow-hidden">
       <div className="flex-1 overflow-y-auto overscroll-contain scrollbar-hide">
@@ -263,11 +244,7 @@ export function ProfileViewPanel({
                     }}
                     className="group relative w-[92px] h-[92px] rounded-full overflow-hidden bg-muted border-4 border-[#0a0a0d] flex items-center justify-center font-bold text-4xl text-primary"
                   >
-                    {avatarSrc ? (
-                      <img src={avatarSrc} className="w-full h-full object-cover" alt="" />
-                    ) : (
-                      safeChar(profile.display_name || profile.username)
-                    )}
+                    <SecureAvatar src={profile.avatar_url} bucket="avatars" path={profile.avatar_storage_path} nonce={profile.avatar_nonce} mime={profile.avatar_mime} className="w-full h-full object-cover" fallback={safeChar(profile.display_name || profile.username)} />
                     <div className="absolute inset-0 bg-background/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                       <TbShare2 className="w-5 h-5" />
                     </div>
@@ -306,13 +283,7 @@ export function ProfileViewPanel({
                 className="absolute inset-0 z-40 bg-background"
               >
                 <div className="absolute inset-0">
-                  {avatarSrc ? (
-                    <img src={avatarSrc} className="w-full h-full object-cover" alt="" />
-                  ) : (
-                    <div className="w-full h-full bg-muted flex items-center justify-center text-6xl font-bold text-primary">
-                      {safeChar(profile.display_name || profile.username)}
-                    </div>
-                  )}
+                  <SecureAvatar src={profile.avatar_url} bucket="avatars" path={profile.avatar_storage_path} nonce={profile.avatar_nonce} mime={profile.avatar_mime} className="w-full h-full object-cover" fallback={<div className="w-full h-full bg-muted flex items-center justify-center text-6xl font-bold text-primary">{safeChar(profile.display_name || profile.username)}</div>} />
                 </div>
                 {/* Блюр-градиент снизу */}
                 <div className="absolute inset-x-0 bottom-0 h-40 bg-gradient-to-t from-[#0a0a0d] via-[#0a0a0d]/60 to-transparent backdrop-blur-sm" />
@@ -364,13 +335,7 @@ export function ProfileViewPanel({
                   transition={{ type: "spring", damping: 25 }}
                   className="relative w-full h-full"
                 >
-                  {avatarSrc ? (
-                    <img src={avatarSrc} className="w-full h-full object-contain" alt="" />
-                  ) : (
-                    <div className="w-full h-full bg-muted flex items-center justify-center text-8xl font-bold text-primary">
-                      {safeChar(profile.display_name || profile.username)}
-                    </div>
-                  )}
+                  <SecureAvatar src={profile.avatar_url} bucket="avatars" path={profile.avatar_storage_path} nonce={profile.avatar_nonce} mime={profile.avatar_mime} className="w-full h-full object-contain" fallback={<div className="w-full h-full bg-muted flex items-center justify-center text-8xl font-bold text-primary">{safeChar(profile.display_name || profile.username)}</div>} />
                   <div className="absolute top-0 inset-x-0 p-4 flex items-center justify-between bg-gradient-to-b from-black/70 to-transparent">
                     <motion.button
                       whileTap={{ scale: 0.9 }}
@@ -415,11 +380,7 @@ export function ProfileViewPanel({
         {hasActivity && (
           <div className="mx-5 mt-5 rounded-[20px] p-3.5 flex items-center gap-3 bg-gradient-to-br from-[#4a3d1a] to-[#2e2510]">
             <div className="w-[42px] h-[42px] rounded-xl bg-black/20 flex items-center justify-center shrink-0 overflow-hidden">
-              {activityCoverSrc ? (
-                <img src={activityCoverSrc} className="w-full h-full object-cover" alt="" />
-              ) : (
-                <Music className="w-[18px] h-[18px] text-amber-200" />
-              )}
+              <SecureImage src={profile.activity_cover_url} bucket="tracks" path={profile.activity_cover_path} nonce={profile.activity_cover_nonce} mime="image/webp" className="w-full h-full object-cover" fallback={<Music className="w-[18px] h-[18px] text-amber-200" />} />
             </div>
             <div className="flex-1 min-w-0">
               <div className="text-sm font-bold text-amber-100 truncate">{profile.activity_title}</div>

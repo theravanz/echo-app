@@ -1,14 +1,16 @@
 "use client";
 
-import { useSecureMediaUrl } from "@/hooks/echo/use-secure-media";
+import { useSecureMediaUrl, useSignedStorageUrl } from "@/hooks/echo/use-secure-media";
 
 /**
- * SecureImage — универсальный <img> для ЗАШИФРОВАННОГО медиа.
+ * SecureImage — универсальный <img> для медиа из ПРИВАТНЫХ bucket'ов.
  *
  * Логика:
- *   - если в `src` уже валидный URL (legacy / внешний) — показываем его;
  *   - если есть `path + nonce` (новый зашифрованный формат) — резолвим blob:
- *     URL через приватный bucket;
+ *     URL через приватный bucket (signed-URL + расшифровка в Rust);
+ *   - если `src` — ПУБЛИЧНАЯ ссылка на наш (теперь приватный) bucket — достаём
+ *     из неё путь и открываем через signed-URL (legacy-медиа, без шифрования);
+ *   - если `src` — внешняя ссылка (giphy и т.п.) — показываем её как есть;
  *   - иначе рендерим `fallback`.
  *
  * Это компонент (не хук напрямую), поэтому безопасен внутри `.map()`
@@ -33,14 +35,23 @@ export function SecureImage({
   className?: string;
   alt?: string;
 }) {
+  // Зашифрованное медиа (path + nonce) резолвим в blob:
   const secure = useSecureMediaUrl(
     bucket,
     path,
     nonce,
     (mime || "application/octet-stream") as string,
-    Boolean(path && !src),
+    Boolean(path && nonce),
   );
-  const effectiveSrc = src || secure;
+  // Legacy: публичная ссылка на приватный bucket → короткоживущий signed-URL.
+  const legacySigned = useSignedStorageUrl(
+    bucket,
+    src,
+    Boolean(src && !(path && nonce)),
+  );
+
+  // Приоритет: расшифрованное → signed legacy → исходный src (внешний).
+  const effectiveSrc = secure || legacySigned || src;
 
   if (effectiveSrc) {
     return (
