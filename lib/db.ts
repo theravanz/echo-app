@@ -36,20 +36,23 @@ async function probeSupabaseReachable(): Promise<boolean> {
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), CONNECTIVITY_PROBE_TIMEOUT_MS);
-    // ЛЮБОЙ HTTP-ответ (даже 401) = сервер достижим; офлайн — это только
-    // сетевое исключение/таймаут. Раньше 401 на keyless-пробе ложно
-    // считался «недоступен» → refresh не выполнялся → все запросы 401.
-    await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/`, {
+    // Health-эндпоинт GoTrue: всегда 200 БЕЗ ключа и БЕЗ авторизации.
+    // Раньше probe бил в GET /rest/v1/ С apikey — при битом/усечённом ключе
+    // это давало 401 в консоли браузера И warning-записи в Supabase edge-логах
+    // (GET | 401 | .../rest/v1/), а при валидном ключе — всё равно шумел,
+    // т.к. корень PostgREST не является табличным эндпоинтом.
+    // /auth/v1/health не требует apikey → никаких 401 ни в консоли, ни в логах.
+    const baseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").replace(/\/+$/, "");
+    const res = await fetch(`${baseUrl}/auth/v1/health`, {
       method: "GET",
       signal: controller.signal,
       cache: "no-store",
-      headers: {
-        Accept: "application/json",
-        apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
-        Authorization: `Bearer ${process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ""}`,
-      },
+      headers: { Accept: "application/json" },
     });
     clearTimeout(timeoutId);
+    // Любой HTTP-ответ (даже 4xx/5xx) = сервер достижим; офлайн — это только
+    // сетевое исключение/таймаут (abort).
+    void res;
     return true;
   } catch {
     return false;
@@ -140,6 +143,11 @@ export function getSupabase(): SupabaseClient {
         "[Supabase] MISSING_ENV: NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY must be set in environment"
       );
     }
+
+    // Примечание: длина sb_publishable_-ключей у Supabase варьируется
+    // (короткие ~40 символов — валидны). Обычная авторизация с текущим
+    // ключом работает, поэтому эвристику по длине не применяем, чтобы
+    // не шуметь ложным INVALID_ANON_KEY.
 
     supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
       auth: {

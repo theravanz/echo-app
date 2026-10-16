@@ -91,6 +91,11 @@ pub async fn qr_send_e2ee_key(
     session_id: String,
     web_pub_key: String,
     session_data: Option<serde_json::Value>,
+    // URL и anon-ключ приходят из JS (NEXT_PUBLIC_* вшиты в бандл, а Rust-рантайм
+    // их не видит — std::env::var вернул бы fallback с протухшим ключом → 401).
+    // Опциональны для обратной совместимости; при отсутствии — старый fallback.
+    supabase_url: Option<String>,
+    supabase_anon_key: Option<String>,
 ) -> Result<(), String> {
     use crate::crypto::KeyStore;
 
@@ -132,10 +137,15 @@ pub async fn qr_send_e2ee_key(
     let nonce_hex = hex::encode(nonce.as_slice());
 
     // 5. Отправить в канал auth_<session_id> через Supabase RPC.
-    let supabase_url = std::env::var("NEXT_PUBLIC_SUPABASE_URL")
-        .unwrap_or_else(|_| "https://aoxzpqwiwuzypydexfrn.supabase.co".to_string());
-    let supabase_anon_key = std::env::var("NEXT_PUBLIC_SUPABASE_ANON_KEY")
-        .unwrap_or_else(|_| "sb_publishable_AZAFBfQ2W5HPP9a78ty4hA_cokr8Y19".to_string());
+    // Параметры из JS — в приоритете; env/fallback — только для совместимости.
+    let supabase_url = supabase_url
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| std::env::var("NEXT_PUBLIC_SUPABASE_URL").ok())
+        .unwrap_or("https://aoxzpqwiwuzypydexfrn.supabase.co".to_string());
+    let supabase_anon_key = supabase_anon_key
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| std::env::var("NEXT_PUBLIC_SUPABASE_ANON_KEY").ok())
+        .unwrap_or("sb_publishable_AZAFBfQ2W5HPP9a78ty4hA_cokr8Y19".to_string());
 
     send_e2ee_key_broadcast(
         &supabase_url,
