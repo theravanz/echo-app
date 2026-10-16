@@ -1187,23 +1187,23 @@ useEffect(() => {
       </motion.div>
 
       {/* --- Settings Modal --- */}
-      {/* BACK-NAV edge-swipe: настройки (и их sub-view) уезжают вправо
-          тем же спринтом, что и ChatArea. Внешняя обёртка не мешает
-          внутренней open/close-анимации (x она не трогает). */}
-      <motion.div
-        style={{ x: dragX }}
-        className={cn("fixed inset-0", !isSettingsOpen && "pointer-events-none")}
+      {/* Отдельный слой поверх чата (z-[200]), БЕЗ dragX-трансформа:
+          transform у предка ломает nested `position: fixed` (становится
+          relative к трансформированному предку) — из-за этого модалка
+          жила «на одном слое с чатом» и чат просвечивал как часть настроек. */}
+      <div
+        className={cn("fixed inset-0 z-[200]", !isSettingsOpen && "pointer-events-none")}
       >
       <AnimatePresence mode="wait">
         {isSettingsOpen && (
           <motion.div
             key="settings"
-            initial={isMobile ? { x: "100%", opacity: 0 } : { opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={isMobile ? { x: "100%", opacity: 0 } : { opacity: 0 }}
+            initial={isMobile ? { x: "100%", opacity: 0 } : { opacity: 0, scale: 0.98 }}
+            animate={{ x: 0, opacity: 1, scale: 1 }}
+            exit={isMobile ? { x: "100%", opacity: 0 } : { opacity: 0, scale: 0.98 }}
             transition={{ type: "spring", damping: 30, stiffness: 300, mass: 0.8 }}
             className={cn(
-              "fixed inset-0 z-[100]",
+              "absolute inset-0",
               !isMobile && "flex items-center justify-center p-4",
               isMobile && "safe-top safe-bottom"
             )}
@@ -1219,7 +1219,7 @@ useEffect(() => {
           </motion.div>
         )}
       </AnimatePresence>
-      </motion.div>
+      </div>
 
       {/* --- Mobile Hotbar --- */}
       {isMobile && !selectedChat && (

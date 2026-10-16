@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { supabase } from "@/lib/supabase";
 import { cn, safeChar } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
@@ -141,7 +142,10 @@ const menuSections: MenuSection[] = [
 const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onClose, isQuarantined, quarantineTime, onUpdateUser }) => {
   const router = useRouter();
   const isMobile = useIsMobile();
+  // На десктопе сразу показываем Identity, чтобы правая панель не была пустым
+  // «Settings»-экраном — старый дефолт activeView=null выглядел багом.
   const [activeView, setActiveView] = useState<ViewType>(null);
+  const [desktopBooted, setDesktopBooted] = useState(false);
   const [devices, setDevices] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [currentHwid, setCurrentHwid] = useState('');
@@ -193,6 +197,34 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
   // самой модалки настроек (110, зарегистрирована в app/page.tsx).
   // На iOS/Android edge-swipe и системный back отсюда поднимаются наверх:
   // sub-view → главное меню → закрыть настройки.
+  //
+  // Десктоп: при монтировании сразу выбираем Identity, чтобы правая панель
+  // не оставалась пустым «Settings»-экраном (выглядело как баг).
+  useEffect(() => {
+    if (isMobile || desktopBooted) return;
+    setDesktopBooted(true);
+    setActiveView('profile');
+  }, [isMobile, desktopBooted]);
+
+  // Esc на десктопе: сначала закрывает sub-view, потом саму модалку.
+  useEffect(() => {
+    if (isMobile) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (showQrScanner) { setShowQrScanner(false); return; }
+      if (activeView && activeView !== 'profile') { setActiveView('profile'); return; }
+      onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isMobile, activeView, showQrScanner, onClose]);
+
+  // Пока настройки открыты — лочим скролл подложки (чат не уезжает под модалкой).
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
   useEffect(() => {
     if (!showQrScanner) return;
     return registerNavLayer({
@@ -464,15 +496,25 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
   );
 
   // --- Devices View ---
+  // На десктопе у sub-view есть кнопка «назад» (ведёт в Identity, а не в
+  // пустой экран): раньше стрелка рендерилась только на мобиле и из раздела
+  // нельзя было вернуться в сайдбар без закрытия настроек.
   const renderDevices = () => (
     <div className="p-4 md:p-10 space-y-6">
       <div className="flex items-center justify-between mb-4">
-        {isMobile && (
-          <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView(null)}>
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-        )}
-        <h2 className="text-2xl font-display font-bold tracking-tight">Devices</h2>
+        <div className="flex items-center gap-2">
+          {!isMobile && activeView !== 'profile' && (
+            <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView('profile')} aria-label="Back to settings" title="Back">
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+          )}
+          {isMobile && (
+            <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView(null)}>
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+          )}
+          <h2 className="text-2xl font-display font-bold tracking-tight">Devices</h2>
+        </div>
         <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={onClose}>
           <X className="w-5 h-5" />
         </button>
@@ -654,12 +696,19 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
   const renderPrivacy = () => (
     <div className="p-4 md:p-10 space-y-6">
       <div className="flex items-center justify-between mb-4">
-        {isMobile && (
-          <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView(null)}>
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-        )}
-        <h2 className="text-2xl font-display font-bold tracking-tight">Privacy</h2>
+        <div className="flex items-center gap-2">
+          {!isMobile && activeView !== 'profile' && (
+            <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView('profile')} aria-label="Back to settings" title="Back">
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+          )}
+          {isMobile && (
+            <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView(null)}>
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+          )}
+          <h2 className="text-2xl font-display font-bold tracking-tight">Privacy</h2>
+        </div>
         <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={onClose}>
           <X className="w-5 h-5" />
         </button>
@@ -710,12 +759,19 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
     return (
       <div className="p-4 md:p-10 space-y-6">
         <div className="flex items-center justify-between mb-4">
-          {isMobile && (
-            <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView(null)}>
-              <ArrowLeft className="w-5 h-5" />
-            </button>
-          )}
-          <h2 className="text-2xl font-display font-bold tracking-tight">Language</h2>
+          <div className="flex items-center gap-2">
+            {!isMobile && activeView !== 'profile' && (
+              <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView('profile')} aria-label="Back to settings" title="Back">
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+            )}
+            {isMobile && (
+              <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView(null)}>
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+            )}
+            <h2 className="text-2xl font-display font-bold tracking-tight">Language</h2>
+          </div>
           <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={onClose}>
             <X className="w-5 h-5" />
           </button>
@@ -781,12 +837,19 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
     return (
       <div className="p-4 md:p-10 space-y-6">
         <div className="flex items-center justify-between mb-4">
-          {isMobile && (
-            <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView(null)}>
-              <ArrowLeft className="w-5 h-5" />
-            </button>
-          )}
-          <h2 className="text-2xl font-display font-bold tracking-tight">Alerts &amp; Notifications</h2>
+          <div className="flex items-center gap-2">
+            {!isMobile && activeView !== 'profile' && (
+              <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView('profile')} aria-label="Back to settings" title="Back">
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+            )}
+            {isMobile && (
+              <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView(null)}>
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+            )}
+            <h2 className="text-2xl font-display font-bold tracking-tight">Alerts &amp; Notifications</h2>
+          </div>
           <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={onClose}>
             <X className="w-5 h-5" />
           </button>
@@ -853,7 +916,14 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
         viewContent = (
           <div className="p-4 md:p-10 space-y-2">
             <div className="flex items-center justify-between mb-2">
-              <h2 className="text-2xl font-display font-bold tracking-tight flex items-center gap-2">Alerts <Badge type="beta" /></h2>
+              <div className="flex items-center gap-2">
+                {!isMobile && (
+                  <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView('profile')} aria-label="Back to settings" title="Back">
+                    <ArrowLeft className="w-5 h-5" />
+                  </button>
+                )}
+                <h2 className="text-2xl font-display font-bold tracking-tight flex items-center gap-2">Alerts <Badge type="beta" /></h2>
+              </div>
               <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40" onClick={onClose}>
                 <X className="w-5 h-5" />
               </button>
@@ -866,12 +936,19 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
         viewContent = (
           <div className="p-4 md:p-10 space-y-2">
             <div className="flex items-center justify-between mb-2">
-              <h2 className="text-2xl font-display font-bold tracking-tight flex items-center gap-2">Interface <Badge type="beta" /></h2>
+              <div className="flex items-center gap-2">
+                {!isMobile && (
+                  <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView('profile')} aria-label="Back to settings" title="Back">
+                    <ArrowLeft className="w-5 h-5" />
+                  </button>
+                )}
+                <h2 className="text-2xl font-display font-bold tracking-tight flex items-center gap-2">Interface <Badge type="beta" /></h2>
+              </div>
               <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40" onClick={onClose}>
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <InterfaceSettings user={user} onBack={() => setActiveView(null)} onClose={onClose} />
+            <InterfaceSettings user={user} onBack={() => setActiveView(isMobile ? null : 'profile')} onClose={onClose} />
           </div>
         );
         break;
@@ -879,15 +956,22 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
         viewContent = (
           <div className="p-4 md:p-10 space-y-4">
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-2xl font-display font-bold tracking-tight">Security</h2>
-              <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40" onClick={() => setActiveView(null)}>
-                <ArrowLeft className="w-5 h-5" />
+              <div className="flex items-center gap-2">
+                {!isMobile && (
+                  <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView('profile')} aria-label="Back to settings" title="Back">
+                    <ArrowLeft className="w-5 h-5" />
+                  </button>
+                )}
+                <h2 className="text-2xl font-display font-bold tracking-tight">Security</h2>
+              </div>
+              <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40" onClick={onClose}>
+                <X className="w-5 h-5" />
               </button>
             </div>
             {menuSections.find(s => s.isSecurity)?.items.map(item => {
               const Icon = item.icon;
               return (
-                <button key={item.id} onClick={() => item.action && setActiveView(item.action)} className="w-full flex items-center gap-4 p-5 rounded-[28px] border border-white/5 bg-white/[0.02] hover:bg-white/5 transition-all">
+                <button key={item.id} onClick={() => item.action ? setActiveView(item.action) : toast(`${item.label} — скоро`, { description: 'Раздел в разработке' })} className="w-full flex items-center gap-4 p-5 rounded-[28px] border border-white/5 bg-white/[0.02] hover:bg-white/5 transition-all">
                   <div className="w-12 h-12 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
                     <Icon className="w-5 h-5 text-white/60" />
                   </div>
@@ -903,17 +987,31 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
         );
         break;
       default:
+        // Сюда попадают пункты без своего view (Network, Storage): вместо
+        // «пустого Settings» показываем честную заглушку с кнопкой назад.
         viewContent = (
           <div className="p-4 md:p-10 space-y-2">
             <div className="flex items-center justify-between mb-2">
-              <h2 className="text-2xl font-display font-bold tracking-tight">
-                {activeView === 'language' ? 'Language' : activeView === 'network' ? 'Network' : 'Storage'} <Badge type="wip" />
-              </h2>
+              <div className="flex items-center gap-2">
+                {!isMobile && (
+                  <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white" onClick={() => setActiveView('profile')} aria-label="Back to settings" title="Back">
+                    <ArrowLeft className="w-5 h-5" />
+                  </button>
+                )}
+                <h2 className="text-2xl font-display font-bold tracking-tight">
+                  {activeView === 'language' ? 'Language' : activeView === 'network' ? 'Network' : 'Storage'} <Badge type="wip" />
+                </h2>
+              </div>
               <button className="w-10 h-10 rounded-2xl hover:bg-white/5 flex items-center justify-center text-white/40" onClick={onClose}>
                 <X className="w-5 h-5" />
               </button>
             </div>
-            {activeView === 'language' ? renderLanguage() : <div className="text-xs text-white/40 font-mono uppercase tracking-widest">Coming soon</div>}
+            {activeView === 'language' ? renderLanguage() : (
+              <div className="py-10 text-center space-y-3">
+                <div className="text-xs text-white/40 font-mono uppercase tracking-widest">Coming soon</div>
+                <p className="text-sm text-white/50">Раздел «{activeView === 'network' ? 'Network' : 'Storage'}» в разработке.</p>
+              </div>
+            )}
           </div>
         );
     }
@@ -967,7 +1065,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
                           <button
                             key={item.id}
                             className="w-full flex items-center gap-4 p-4 rounded-[24px] hover:bg-white/5 transition-all"
-                            onClick={() => item.action ? setActiveView(item.action) : undefined}
+                            onClick={() => item.action ? setActiveView(item.action) : toast(`${item.label} — скоро`, { description: 'Раздел в разработке' })}
                           >
                             <div className="w-10 h-10 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
                               <Icon className="w-5 h-5 text-white/40" />
@@ -997,7 +1095,7 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
                         <button
                           key={item.id}
                           className="w-full flex items-center gap-4 p-4 rounded-[24px] hover:bg-white/5 transition-all"
-                          onClick={() => item.action ? setActiveView(item.action) : undefined}
+                          onClick={() => item.action ? setActiveView(item.action) : toast(`${item.label} — скоро`, { description: 'Раздел в разработке' })}
                         >
                           <div className="w-10 h-10 rounded-2xl bg-white/5 flex items-center justify-center shrink-0">
                             <Icon className="w-5 h-5 text-white/40" />
@@ -1042,12 +1140,30 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
   }
 
   // --- Desktop: Modal with sidebar + content ---
+  // Непрозрачный отдельный слой: bg-black/70 + сплошное окно БЕЗ прозрачного
+  // bg-background/95 через которое просвечивал чат («чат как часть настроек»).
+  // Окно — solid bg-background; клик по затемнению закрывает, внутри — нет.
   return (
     <div className={cn("fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm", isMobile ? "p-0 safe-y" : "p-4")} onClick={onClose}>
-      <div className={cn("w-full bg-background/95 border border-white/10 backdrop-blur-3xl shadow-2xl overflow-hidden noise-overlay", isMobile ? "h-full rounded-none" : "max-w-3xl rounded-[48px]")} onClick={e => e.stopPropagation()}>
+      <div className={cn("w-full bg-background border border-white/10 shadow-2xl overflow-hidden", isMobile ? "h-full rounded-none" : "max-w-3xl rounded-[48px]")} onClick={e => e.stopPropagation()}>
         <div className="flex h-full md:h-[640px]">
-          {/* Sidebar */}
-          <aside className="w-56 border-r border-white/5 bg-black/20 p-8 space-y-8 shrink-0 hidden sm:block">
+          {/* Sidebar — свой скролл: без overflow-y-auto пункты ниже
+              (Identity и прочие) обрезались и не скроллились. min-h-0 чтобы
+              flex-ребёнок не распирал родителя. */}
+          <aside className="w-56 border-r border-white/5 bg-black/20 p-8 space-y-8 shrink-0 hidden sm:block min-h-0 overflow-y-auto settings-scroll">
+            {/* Шапка сайдбара: крестик закрытия на десктопе (раньше закрыть
+                можно было только кликом по затемнению — неудобно) */}
+            <div className="flex items-center justify-between">
+              <span className="text-[9px] font-mono text-white/20 uppercase tracking-[0.4em]">Menu</span>
+              <button
+                className="w-8 h-8 rounded-xl hover:bg-white/5 flex items-center justify-center text-white/40 hover:text-white transition-colors"
+                onClick={onClose}
+                aria-label="Close settings"
+                title="Close (Esc)"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
             {menuSections.map(section => {
               if (section.isSecurity) {
                 const securityItems = section.items.filter(i => i.id !== 'security');
@@ -1079,7 +1195,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
                                     ? "bg-primary text-primary-foreground shadow-2xl shadow-primary/20 font-bold"
                                     : "text-white/40 hover:text-white hover:bg-white/5"
                                 )}
-                                onClick={() => item.action ? setActiveView(item.action) : undefined}
+                                // Security-подпункты без action — тоже с тостом, а не тишина.
+                                onClick={() => item.action ? setActiveView(item.action) : toast(`${item.label} — скоро`, { description: 'Раздел в разработке' })}
                               >
                                 <Icon className="w-4 h-4 shrink-0" />
                                 <div className="text-left">
@@ -1111,7 +1228,9 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
                               ? "bg-primary text-primary-foreground shadow-2xl shadow-primary/20 font-bold"
                               : "text-white/40 hover:text-white hover:bg-white/5"
                           )}
-                          onClick={() => item.action ? setActiveView(item.action) : undefined}
+                          // Мёртвых кнопок больше нет: пункты без action
+                          // (Network, Storage) честно говорят «скоро».
+                          onClick={() => item.action ? setActiveView(item.action) : toast(`${item.label} — скоро`, { description: 'Раздел в разработке' })}
                         >
                           <Icon className="w-4 h-4 shrink-0" />
                           <div className="text-left">
@@ -1143,8 +1262,8 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
             </div>
           </aside>
 
-          {/* Content */}
-          <div className="flex-1 overflow-y-auto">
+          {/* Content — свой скролл, min-h-0 чтобы не распирать flex */}
+          <div className="flex-1 min-h-0 overflow-y-auto settings-scroll">
             {activeView === 'profile' ? renderProfile() :
              activeView === 'devices' ? renderDevices() :
              activeView === 'privacy' ? renderPrivacy() :
@@ -1178,7 +1297,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
                           <div className="text-xs text-white/40 font-mono tracking-widest mb-4">
                             UID: {(user?.id || '').substring(0, 16)}...
                           </div>
-                          <button className="h-9 px-5 rounded-xl border border-white/10 hover:bg-white/5 text-[10px] uppercase tracking-widest font-bold transition-all">
+                          <button
+                            className="h-9 px-5 rounded-xl border border-white/10 hover:bg-white/5 text-[10px] uppercase tracking-widest font-bold transition-all"
+                            onClick={() => toast('Export Identity — скоро', { description: 'Выгрузка ключей узла в разработке' })}
+                          >
                             <Fingerprint className="w-3.5 h-3.5 inline mr-2" />
                             Export Identity
                           </button>
@@ -1213,7 +1335,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
                           }
                         </div>
                       ))}
-                      <button className="w-full rounded-[28px] border-2 border-dashed border-white/10 hover:border-primary/40 hover:bg-primary/5 h-16 text-xs uppercase tracking-widest font-bold transition-all flex items-center justify-center gap-3">
+                      <button
+                        className="w-full rounded-[28px] border-2 border-dashed border-white/10 hover:border-primary/40 hover:bg-primary/5 h-16 text-xs uppercase tracking-widest font-bold transition-all flex items-center justify-center gap-3"
+                        onClick={() => toast('Мультиаккаунт — скоро', { description: 'Подключение второго узла в разработке' })}
+                      >
                         <UserPlus className="w-5 h-5" /> Connect New Node
                       </button>
                     </div>
@@ -1231,7 +1356,10 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ user, accounts = [], onCl
                         <p className="text-xs text-destructive-foreground/60 leading-relaxed font-medium">
                           This will permanently purge your local node identity and revoke all E2EE session keys.
                         </p>
-                        <button className="mt-3 h-10 px-6 rounded-xl bg-destructive text-destructive-foreground font-bold uppercase tracking-widest text-[10px] active:scale-95 transition-all hover:bg-destructive/90">
+                        <button
+                          className="mt-3 h-10 px-6 rounded-xl bg-destructive text-destructive-foreground font-bold uppercase tracking-widest text-[10px] active:scale-95 transition-all hover:bg-destructive/90"
+                          onClick={() => toast('Purge — скоро', { description: 'Безопасная очистка узла в разработке' })}
+                        >
                           Execute Purge
                         </button>
                       </div>

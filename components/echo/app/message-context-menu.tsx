@@ -118,13 +118,16 @@ export function MessageContextMenu({
 
   return createPortal(
     <AnimatePresence>
-      {/* Оверлей для закрытия и приватности фона (ТЯЖЕЛЫЙ БЛЮР ТОЛЬКО ЗДЕСЬ, это 1 элемент, лагов не будет) */}
+      {/* Прозрачный кликкетчер: БЕЗ блюра и БЕЗ затемнения поверх сообщения.
+          Соседи приглушаются через isDimmed (blur + opacity-20) в самих
+          бабблах, а выбранное сообщение остаётся на полной яркости —
+          его текст читается, пока открыто меню. */}
       <motion.div
         key="overlay"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
-        className="fixed inset-0 z-[9998] bg-black/60 backdrop-blur-md"
+        className="fixed inset-0 z-[9998] bg-transparent"
         onClick={onClose}
       />
 

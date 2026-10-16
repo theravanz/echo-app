@@ -238,6 +238,28 @@
   scrollbar-width: none;
 }
 
+/* Видимый тонкий скролл для панелей настроек (сайдбар + контент):
+   глобально в app/app скроллбары скрыты (*::-webkit-scrollbar display:none),
+   поэтому пункты ниже сгиба были недоступны и непонятно что там есть что-то ещё. */
+.settings-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+.settings-scroll::-webkit-scrollbar {
+  display: block;
+  width: 6px;
+}
+.settings-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.settings-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}
+.settings-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.25);
+}
+
 @layer base {
   body, html {
     box-sizing: border-box;
