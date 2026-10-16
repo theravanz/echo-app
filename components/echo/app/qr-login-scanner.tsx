@@ -62,16 +62,31 @@ const handleQrFound = useCallback(async (raw: string) => {
         return;
       }
 
-      const { data: issued, error: issueErr } = await supabase.functions.invoke('qr-issue-session');
-      if (issueErr || !issued?.token_hash) {
-        setError("Не удалось выпустить сессию для нового устройства");
-        setStatus("error");
-        return;
-      }
+      // Сессия для нового устройства: передаём ТЕКУЩИЕ токены мобилки
+      // (access_token + refresh_token) внутри зашифрованного конверта.
+      // Десктоп вызовет setSession() и получит собственную сессию.
+      // Почему не qr-issue-session: она выпускает magiclink token_hash через
+      // generateLink({ email }), а у phone-аккаунтов email НЕТ вообще (422),
+      // да и десктоп такой конверт принять не может — setSession требует
+      // именно access_token/refresh_token. Прямая передача работает
+      // одинаково для email- и phone-пользователей; конверт зашифрован
+      // SalsaBox, сервер видит только ciphertext.
+      const sessionData = {
+        access_token: mobileSession.access_token,
+        refresh_token: mobileSession.refresh_token,
+      };
 
-      const sessionData = { token_hash: issued.token_hash, type: "magiclink" as const };
-
-      await invoke("qr_send_e2ee_key", { sessionId, webPubKey: webPubKeyHex, sessionData });
+      // ВАЖНО: Rust-рантайм Tauri НЕ видит NEXT_PUBLIC_* env (они вшиты
+      // только в JS-бандл на этапе сборки). Поэтому URL и anon-ключ передаём
+      // явными параметрами — иначе qr_send_e2ee_key падал бы на захардкоженный
+      // fallback-ключ в qr_auth.rs и получал 401 на RPC broadcast_message.
+      await invoke("qr_send_e2ee_key", {
+        sessionId,
+        webPubKey: webPubKeyHex,
+        sessionData,
+        supabaseUrl: process.env.NEXT_PUBLIC_SUPABASE_URL,
+        supabaseAnonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      });
 
       setStatus("success");
       setTimeout(() => onClose(), 2000);

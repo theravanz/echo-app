@@ -9,7 +9,11 @@ interface UseConnectionReturn {
   checkConnectivity: () => Promise<boolean>;
 }
 
-// Реальная проверка соединения с Supabase через REST API
+// Реальная проверка соединения с Supabase через GoTrue health.
+// ВАЖНО: НЕ бить в /rest/v1/ — корень PostgREST без apikey даёт 401,
+// с битым ключом тоже 401; оба случая сыпали warning-записями в Supabase
+// edge-логах и ошибками в консоль (а useConnection опрашивает каждые 15с,
+// в StrictMode — дублями). /auth/v1/health всегда 200 без ключа.
 const checkRealConnectivity = async (): Promise<boolean> => {
   if (typeof navigator !== "undefined" && !navigator.onLine) return false;
 
@@ -17,20 +21,18 @@ const checkRealConnectivity = async (): Promise<boolean> => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
 
-    const res = await fetch(
-      `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/`,
-      {
-        method: "GET",
-        signal: controller.signal,
-        cache: "no-store",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
+    const baseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? "").replace(/\/+$/, "");
+    const res = await fetch(`${baseUrl}/auth/v1/health`, {
+      method: "GET",
+      signal: controller.signal,
+      cache: "no-store",
+      headers: {
+        Accept: "application/json",
       },
-    );
+    });
 
     clearTimeout(timeoutId);
+    void res;
     return true;
   } catch {
     return false;
