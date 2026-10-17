@@ -14,6 +14,8 @@ export interface NotificationSettings {
   directMessagesOnly: boolean;
   pushNotifications?: boolean;
   backgroundPolling?: boolean;
+  minimizeToTray?: boolean;
+  notificationMode?: string;
 }
 
 const DEFAULT_SETTINGS: NotificationSettings = {
@@ -24,6 +26,8 @@ const DEFAULT_SETTINGS: NotificationSettings = {
   directMessagesOnly: false,
   pushNotifications: true,
   backgroundPolling: true,
+  minimizeToTray: true,
+  notificationMode: "polling",
 };
 
 // Проверка Tauri окружения
@@ -103,19 +107,22 @@ export function useNotificationSettings(
             settings: {
               enabled: newSettings.enabled,
               sound: newSettings.sound,
-              message_preview: newSettings.messagePreview,
-              group_by_chat: newSettings.groupByChat,
+              messagePreview: newSettings.messagePreview,
+              groupByChat: newSettings.groupByChat,
               direct_messages_only: newSettings.directMessagesOnly,
-              push_notifications: newSettings.pushNotifications ?? true,
-              background_polling: newSettings.backgroundPolling ?? true,
+              pushNotifications: newSettings.pushNotifications ?? true,
+              backgroundPolling: newSettings.backgroundPolling ?? true,
+              minimizeToTray: newSettings.minimizeToTray ?? true,
+              notificationMode: newSettings.notificationMode ?? "polling",
             },
           });
+          console.log("[NotificationSettings] Successfully synced to Rust");
         } catch (err) {
           console.error("[NotificationSettings] Rust sync failed:", err);
         }
       }
     },
-    [user?.id, isTauri],
+    [user?.id],
   );
 
   const updateSetting = useCallback(
