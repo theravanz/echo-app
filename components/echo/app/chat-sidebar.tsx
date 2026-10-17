@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   TbSearch as Search,
@@ -12,6 +13,10 @@ import {
   TbWifi as Wifi,
   TbClock as Clock,
   TbGhost as Ghost,
+  TbEdit as Compose,
+  TbUsers as UsersIcon,
+  TbSpeakerphone as ChannelIcon,
+  TbX as X,
 } from "react-icons/tb";
 import { cn, safeChar, formatRelativeTime } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -21,6 +26,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
   DropdownMenuLabel,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import type { Chat, UserProfile, AppTab, ConnectionStatus, NetworkMode } from "@/hooks/echo/types";
 import { SecureAvatar } from "./secure-avatar";
@@ -46,6 +52,10 @@ interface ChatSidebarProps {
   onStartChat: (profile: UserProfile) => void;
   onSelectChat: (chat: Chat) => void;
   onOpenSettings: () => void;
+  /** Открыть UI создания группы (первый шаг — меню New Group). */
+  onCreateGroup?: () => void;
+  /** Открыть UI создания канала (пока заглушка). */
+  onCreateChannel?: () => void;
 }
 
 export function ChatSidebar({
@@ -55,6 +65,7 @@ export function ChatSidebar({
   searchOpen, searchQuery, searchResults, isSearching, isSearchFocused, recentSearches,
   onSearchOpen, onSearch, onSearchFocus, onStartChat, onSelectChat,
   onOpenSettings,
+  onCreateGroup, onCreateChannel,
 }: ChatSidebarProps) {
   const connectionIcon = () => {
     switch (connectionStatus) {
@@ -70,6 +81,34 @@ export function ChatSidebar({
       case 'connecting': return <span className="font-display font-bold text-2xl tracking-tight text-muted-foreground">Connecting</span>;
       case 'disconnected': return <span className="font-display font-bold text-2xl tracking-tight text-destructive">Offline</span>;
     }
+  };
+
+  // ── Compose: кнопка «Написать» + выпадающее меню ──
+  // Handlers-заглушки: логики групп/каналов пока нет, только UI/UX.
+  // Родитель может перехватить через onCreateGroup/onCreateChannel.
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [composeNotice, setComposeNotice] = useState<string | null>(null);
+
+  const handleCreateGroup = () => {
+    setComposeOpen(false);
+    if (onCreateGroup) {
+      onCreateGroup();
+      return;
+    }
+    // Fallback-заглушка, если родитель не передал onCreateGroup.
+    setComposeNotice("Создание групп скоро");
+    window.setTimeout(() => setComposeNotice(null), 2200);
+  };
+
+  const handleCreateChannel = () => {
+    setComposeOpen(false);
+    if (onCreateChannel) {
+      onCreateChannel();
+      return;
+    }
+    // Fallback-заглушка, если родитель не передал onCreateChannel.
+    setComposeNotice("Создание каналов скоро");
+    window.setTimeout(() => setComposeNotice(null), 2200);
   };
 
   const modeStyles = (mode: NetworkMode) => {
@@ -119,8 +158,63 @@ export function ChatSidebar({
           <Button variant="ghost" size="icon" className="rounded-2xl w-10 h-10 text-muted-foreground hover:text-primary hover:bg-primary/5 transition-all" onClick={() => onSearchOpen(true)}>
             <Search className="w-5 h-5" />
           </Button>
+          {/* Compose: «карандаш в квадрате» + dropdown New Group / New Channel.
+              Стилистика — как у соседней кнопки поиска (ghost, rounded-2xl). */}
+          <DropdownMenu open={composeOpen} onOpenChange={setComposeOpen}>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="Написать"
+                title="Написать"
+                className="rounded-2xl w-10 h-10 text-muted-foreground hover:text-primary hover:bg-primary/5 transition-all"
+              >
+                <Compose className="w-5 h-5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" sideOffset={8} className="w-56 rounded-2xl border-border bg-background/95 backdrop-blur-3xl p-2">
+              <DropdownMenuLabel className="text-[9px] font-mono uppercase tracking-widest text-muted-foreground px-3 py-2">Написать</DropdownMenuLabel>
+              <DropdownMenuItem onSelect={handleCreateGroup} className="rounded-xl gap-3 py-3 px-3 cursor-pointer">
+                <span className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
+                  <UsersIcon className="w-4 h-4 text-primary" />
+                </span>
+                <span>
+                  <span className="block text-sm font-bold">New Group</span>
+                  <span className="block text-[10px] text-muted-foreground font-medium">Группа до 200 тыс. участников</span>
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={handleCreateChannel} className="rounded-xl gap-3 py-3 px-3 cursor-pointer">
+                <span className="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
+                  <ChannelIcon className="w-4 h-4 text-primary" />
+                </span>
+                <span>
+                  <span className="block text-sm font-bold">New Channel</span>
+                  <span className="block text-[10px] text-muted-foreground font-medium">Трансляция для подписчиков</span>
+                </span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
+
+      {/* Локальный fallback-тост заглушки (если нет onCreateGroup/onCreateChannel) */}
+      <AnimatePresence>
+        {composeNotice && (
+          <motion.div
+            initial={{ opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.18 }}
+            className="mx-4 mb-2 flex items-center gap-2 px-3 py-2 rounded-xl bg-primary/10 border border-primary/20 text-xs font-medium text-foreground"
+          >
+            <Compose className="w-4 h-4 text-primary shrink-0" />
+            <span className="flex-1">{composeNotice}</span>
+            <button onClick={() => setComposeNotice(null)} aria-label="Закрыть" className="text-muted-foreground hover:text-foreground transition-colors">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Search Overlay */}
       <AnimatePresence>
