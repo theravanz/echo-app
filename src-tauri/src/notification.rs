@@ -6,6 +6,7 @@ use tokio::time::{interval, Duration};
 // === Notification Types ===
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")] 
 pub struct NotificationSettings {
     pub enabled: bool,
     pub sound: bool,
@@ -14,6 +15,8 @@ pub struct NotificationSettings {
     pub direct_messages_only: bool,
     pub push_notifications: bool,
     pub background_polling: bool,
+    pub minimize_to_tray: bool,
+    pub notification_mode: String,
 }
 
 impl Default for NotificationSettings {
@@ -26,6 +29,8 @@ impl Default for NotificationSettings {
             direct_messages_only: false,
             push_notifications: true,
             background_polling: true,
+            minimize_to_tray: true,
+            notification_mode: "polling".to_string(),
         }
     }
 }
