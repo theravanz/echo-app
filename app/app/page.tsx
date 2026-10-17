@@ -95,6 +95,7 @@ import { detectDevice } from "@/lib/device-info";
 import dynamic from "next/dynamic";
 import type { UserProfile, Chat, Message, NetworkMode, AppTab, ConnectionStatus, PendingMessage } from "@/hooks/echo/types";
 import { ChatSidebar } from "@/components/echo/app/chat-sidebar";
+import { GroupCreateModal } from "@/components/echo/app/group-create-modal";
 import { MobileTabBar } from "@/components/echo/app/mobile-tab-bar";
 import { CallOverlay, type OutgoingCallRequest, type CallLogData, deriveRoomId } from "@/components/echo/app/CallOverlay";
 import { serializeCallLog } from "@/hooks/echo/call-log";
@@ -129,6 +130,8 @@ function EchoAppContent() {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [accounts, setAccounts] = useState<any[]>([]);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // New Group UI (первый шаг — меню создания, логики групп пока нет).
+  const [isGroupCreateOpen, setIsGroupCreateOpen] = useState(false);
   const [outgoingCall, setOutgoingCall] = useState<OutgoingCallRequest | null>(null);
   const [isQuarantined, setIsQuarantined] = useState(false);
   const [quarantineTime, setQuarantineTime] = useState("");
@@ -1140,6 +1143,13 @@ useEffect(() => {
             if (user) fetchMessages(chat.id, user.id);
           }}
           onOpenSettings={() => setIsSettingsOpen(true)}
+          onCreateGroup={() => setIsGroupCreateOpen(true)}
+          onCreateChannel={() => toast.info("Создание каналов скоро")}
+        />
+        <GroupCreateModal
+          open={isGroupCreateOpen}
+          chats={chats}
+          onClose={() => setIsGroupCreateOpen(false)}
         />
       </motion.div>
 
