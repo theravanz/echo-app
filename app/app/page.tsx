@@ -1,82 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef, memo, useCallback, Suspense } from "react";
+import { useState, useEffect, useRef, useCallback, Suspense } from "react";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { useRouter, useSearchParams } from "next/navigation";
-import {
-  TbSearch as Search,
-  TbPlus as Plus,
-  TbSettings as Settings,
-  TbDotsVertical as MoreVertical,
-  TbSend as Send,
-  TbPaperclip as Paperclip,
-  TbShield as Shield,
-  TbShare as Share2,
-  TbCpu as Cpu,
-  TbSignal4G as Signal,
-  TbUser as User,
-  TbCheck as Check,
-  TbChecks as CheckCheck,
-  TbArrowLeft as ArrowLeft,
-  TbLock as Lock,
-  TbTrash as Trash2,
-  TbArrowBackUp as Reply,
-  TbEdit as Edit,
-  TbCopy as Copy,
-  TbExternalLink as ExternalLink,
-  TbGlobe as Globe,
-  TbWifi as Wifi,
-  TbTrophy as Trophy,
-  TbChevronDown as ChevronDown,
-  TbChevronUp as ChevronUp,
-  TbChevronLeft as ChevronLeft,
-  TbChevronRight as ChevronRight,
-  TbPencil as Pen,
-  TbEyeOff as EyeOff,
-  TbBold as Bold,
-  TbItalic as Italic,
-  TbCode as Code,
-  TbMoodSmile as Smile,
-  TbDeviceMobile as Smartphone,
-  TbMoon as Moon,
-  TbShoppingBag as ShoppingBag,
-  TbRss as Rss,
-  TbHome as Home,
-  TbUserPlus as UserPlus,
-  TbStar as Star,
-  TbLogout as LogOut,
-  TbBolt as Zap,
-  TbLayersIntersect as Layers,
-  TbDatabase as Database,
-  TbX as X,
-  TbHeart as Heart,
-  TbMessage as MessageSquare,
-  TbRepeat as Repeat2,
-  TbInfoCircle as Info,
-  TbCompass as Compass,
-  TbHash as Hash,
-  TbBell as Bell,
-  TbVolume2 as Volume2,
-  TbShieldCheck as ShieldCheck,
-  TbDeviceDesktop as HardDrive,
-  TbPalette as Palette,
-  TbKey as Key,
-  TbSpeakerphone as Megaphone,
-  TbUsers as Users,
-  TbFingerprint as Fingerprint,
-  TbSparkles as Sparkles,
-  TbRefresh as RefreshCw,
-  TbAlertTriangle as AlertTriangle,
-  TbPhoto as ImageIcon,
-  TbGift as Gift,
-  TbFilter as Filter,
-  TbClock as Clock, TbGhost as Ghost,
-  TbBoltOff as ZapOff,
-  TbLink as LinkIcon
-} from "react-icons/tb";
-import { cn, safeChar } from "@/lib/utils";
-import { SecureAvatar } from "@/components/echo/app/secure-avatar";
+import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { supabase, ensureSupabaseSessionFresh } from "@/lib/supabase";
 import { useTranslation } from "@/hooks/use-translation";
@@ -108,7 +36,7 @@ import { listen } from '@tauri-apps/api/event';
 import { registerNavLayer, canGoBack, closeTopLayer, isVoiceRecordingActive } from "@/lib/back-nav";
 import { useEdgeBackGesture } from "@/hooks/echo/use-edge-back";
 const SettingsModal = dynamic(
-  () => import("@/components/echo/app/settings-modal"),
+  () => import("@/components/echo/app/settings/settings-modal"),
   { ssr: false }
 );
 
