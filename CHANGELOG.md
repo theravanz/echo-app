@@ -1,52 +1,42 @@
 # Changelog
 
-## [0.3.2] - 2026-10-16
+## [0.3.2] - 2026-10-17
+
+### Редизайн десктопной навигации и структуры (macOS Style)
+- **Боковая панель папок (`AppNavRail`)**:
+  - Панель навигации по папкам вынесена в отдельный компонент (`components/echo/app/app-nav-rail.tsx`).
+  - Обновлён логотип приложения на PNG-версию (`/logo.png`) с оптимизированным размером (`w-11 h-11`), повышенной яркостью (`brightness-125`) и эффектом свечения (`drop-shadow`).
+  - Увеличены интерактивные области и иконки папок до 52px.
+  - В нижнюю часть навигационной панели добавлена кнопка настройки папок (`TbAdjustmentsHorizontal`).
+  - Добавлены всплывающие уведомления «скоро» для создания и настройки папок.
+- **Сайдбар списка чатов (`ChatSidebar`)**:
+  - Перенесены основные вкладки приложения в нижний навигационный бар сайдбара.
+  - Увеличены карточки чатов, аватары (56px) и шрифты для лучшей читаемости в стиле macOS Telegram.
+  - Удалены дублирующие элементы управления.
+
 ### QR-вход Tauri Desktop → телефон + десктопные настройки + контекстное меню
 
 #### Исправлено
-- **QR-вход Tauri Desktop → телефон** (`components/echo/app/qr-login-scanner.tsx`,
-  `src-tauri/src/qr_auth.rs`):
-  - сканер кладёт в зашифрованный конверт текущие токены мобилки
-    (`access_token` + `refresh_token`) вместо magiclink `token_hash` из
-    `qr-issue-session` — та выпускается через `generateLink({ email })`,
-    а у phone-аккаунтов email нет вообще (422), да и десктопный `setSession()`
-    такой конверт принять не мог;
-  - `qr_send_e2ee_key` принимает `supabase_url`/`supabase_anon_key` явными
-    invoke-параметрами — Rust-рантайм Tauri не видит `NEXT_PUBLIC_*` env
-    (они вшиты только в JS-бандл), старый захардкоженный fallback-ключ давал
-    401 на `POST /rest/v1/rpc/broadcast_message`.
-- **Десктопные настройки: чат больше не «часть настроек»** (`app/app/page.tsx`,
-  `components/echo/app/settings-modal.tsx`):
-  - обёртка модалки — обычный `div fixed inset-0 z-[200]` без `dragX`-трансформа
-    (transform у предка ломал nested `position: fixed`, модалка схлопывалась
-    в слой чата);
-  - окно — сплошное `bg-background` без прозрачности/блюра/шума
-    (было `bg-background/95` + `backdrop-blur` — чат просвечивал сквозь).
+- **QR-вход Tauri Desktop → телефон** (`components/echo/app/qr-login-scanner.tsx`, `src-tauri/src/qr_auth.rs`):
+  - сканер кладёт в зашифрованный конверт текущие токены мобилки (`access_token` + `refresh_token`) вместо magiclink `token_hash` из `qr-issue-session` — та выпускается через `generateLink({ email })`, а у phone-аккаунтов email нет вообще (422), да и десктопный `setSession()` такой конверт принять не мог;
+  - `qr_send_e2ee_key` принимает `supabase_url`/`supabase_anon_key` явными invoke-параметрами — Rust-рантайм Tauri не видит `NEXT_PUBLIC_*` env (они вшиты только в JS-бандл), старый захардкоженный fallback-ключ давал 401 на `POST /rest/v1/rpc/broadcast_message`.
+- **Десктопные настройки: чат больше не «часть настроек»** (`app/app/page.tsx`, `components/echo/app/settings-modal.tsx`):
+  - обёртка модалки — обычный `div fixed inset-0 z-[200]` без `dragX`-трансформа (transform у предка ломал nested `position: fixed`, модалка схлопывалась в слой чата);
+  - окно — сплошное `bg-background` без прозрачности/блюра/шума (было `bg-background/95` + `backdrop-blur` — чат просвечивал сквозь).
 - **Сайдбар настроек скроллится** (`settings-modal.tsx`, `app/globals.css`):
-  - у `aside` не было `overflow-y-auto` + `min-h-0` — пункты ниже сгиба
-    обрезались; у сайдбара и контента теперь собственные скроллы;
-  - новый класс `.settings-scroll` — тонкий видимый скроллбар
-    (глобально в `app/app` скроллбары скрыты, было непонятно что внизу есть ещё).
+  - у `aside` не было `overflow-y-auto` + `min-h-0` — пункты ниже сгиба обрезались; у сайдбара и контента теперь собственные скроллы;
+  - новый класс `.settings-scroll` — тонкий видимый скроллбар (глобально в `app/app` скроллбары скрыты, было непонятно что внизу есть ещё).
 - **Контекстное меню больше не блюрит сообщение** (`message-context-menu.tsx`):
-  - оверлей был `bg-black/60 backdrop-blur-md` поверх всего включая выбранное
-    сообщение — текст было не прочитать; теперь прозрачный кликкетчер,
-    приглушение фона остаётся через `isDimmed` соседних бабблов.
-- **Шумные 401/404 в консоли и Supabase edge-логах** (`lib/db.ts`,
-  `hooks/echo/use-connection.ts`, `app/app/page.tsx`):
-  - connectivity-probe переведены с `GET /rest/v1/` на `GET /auth/v1/health`
-    (200 без ключа; раньше — 401 на каждый опрос, в StrictMode дублями);
+  - оверлей был `bg-black/60 backdrop-blur-md` поверх всего включая выбранное сообщение — текст было не прочитать; теперь прозрачный кликкетчер, приглушение фона остаётся через `isDimmed` соседних бабблов.
+- **Шумные 401/404 в консоли и Supabase edge-логах** (`lib/db.ts`, `hooks/echo/use-connection.ts`, `app/app/page.tsx`):
+  - connectivity-probe переведены с `GET /rest/v1/` на `GET /auth/v1/health` (200 без ключа; раньше — 401 на каждый опрос, в StrictMode дублями);
   - `noise.png` (404, файла нет в `public/`) заменён инлайн SVG-noise.
 
 #### Удобство (десктопные настройки)
-- Кнопки «назад» во всех sub-view (Devices, Privacy, Language, Alerts,
-  Interface, Security, Network/Storage) — ведут в Identity, Esc закрывает
-  sub-view → потом модалку; крестик закрытия в шапке сайдбара; лок скролла
-  подложки.
-- Network/Storage — честная заглушка «Coming soon» вместо пустого экрана;
-  мёртвых кнопок нет — пункты без обработчиков (Network, Storage,
-  Security-подпункты, Connect New Node, Export Identity, Execute Purge)
-  отвечают тостом «скоро» (тостер уже смонтирован в `app/layout.tsx`).
+- Кнопки «назад» во всех sub-view (Devices, Privacy, Language, Alerts, Interface, Security, Network/Storage) — ведут в Identity, Esc закрывает sub-view → потом модалку; крестик закрытия в шапке сайдбара; лок скролла подложки.
+- Network/Storage — честная заглушка «Coming soon» вместо пустого экрана; мёртвых кнопок нет — пункты без обработчиков (Network, Storage, Security-подпункты, Connect New Node, Export Identity, Execute Purge) отвечают тостом «скоро» (тостер уже смонтирован в `app/layout.tsx`).
 - Log Out доступен и на мобиле (раньше был только в десктопном сайдбаре).
+
 
 ## [0.3.1] - 2026-10-03
 ### Message-кэш в SQLCipher — plaintext переписки больше не в localStorage
