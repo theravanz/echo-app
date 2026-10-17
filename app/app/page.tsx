@@ -100,6 +100,7 @@ import { MobileTabBar } from "@/components/echo/app/mobile-tab-bar";
 import { CallOverlay, type OutgoingCallRequest, type CallLogData, deriveRoomId } from "@/components/echo/app/CallOverlay";
 import { serializeCallLog } from "@/hooks/echo/call-log";
 import { ChatArea } from "@/components/echo/app/chat-area";
+import { AppNavRail } from "@/components/echo/app/app-nav-rail";
 
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { invoke } from '@tauri-apps/api/core';
@@ -1049,58 +1050,11 @@ useEffect(() => {
         <div className="absolute bottom-[-10%] right-[-10%] w-[40vw] h-[40vw] bg-blue-500/10 rounded-full blur-[100px] animate-pulse" style={{ animationDelay: '2s' }} />
       </div>
 
-      {/* --- 1. Navigation Rails --- */}
+      {/* --- 1. Folder Nav Rail --- */}
       {!isMobile && (
-        <aside className="w-[84px] border-r border-white/5 flex flex-col items-center py-8 gap-8 bg-black/20 backdrop-blur-3xl z-30 shrink-0">
-          <div className="group cursor-pointer">
-             <img src="/logo-full.svg" alt="E" className="h-6 w-auto grayscale opacity-50 group-hover:grayscale-0 group-hover:opacity-100 transition-all duration-500" />
-          </div>
-
-          <div className="flex flex-col gap-5">
-            {[
-              { id: 'community', icon: Users, label: 'Community' },
-              { id: 'chats', icon: MessageSquare, label: 'Chats' },
-              { id: 'feed', icon: Compass, label: 'Feed' }
-            ].map(tab => (
-              <button
-                key={tab.id}
-                className={cn(
-                  "w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-500 relative group",
-                  activeTab === tab.id ? "bg-primary text-primary-foreground shadow-2xl shadow-primary/20 scale-110" : "text-white/20 hover:text-white hover:bg-white/5"
-                )}
-                onClick={() => setActiveTab(tab.id as any)}
-              >
-                <tab.icon className="w-5 h-5 relative z-10" />
-                {activeTab === tab.id && <div className="absolute inset-0 bg-primary blur-md opacity-40 rounded-2xl" />}
-                <div className="absolute left-full ml-4 px-3 py-1.5 bg-card border border-white/10 rounded-lg text-[10px] font-mono uppercase tracking-widest opacity-0 group-hover:opacity-100 pointer-events-none transition-all translate-x-[-10px] group-hover:translate-x-0 whitespace-nowrap z-50 shadow-2xl">
-                   {tab.label}
-                </div>
-              </button>
-            ))}
-          </div>
-
-          <div className="mt-auto flex flex-col gap-5">
-            <button className="w-12 h-12 rounded-2xl bg-white/5 text-white/20 flex items-center justify-center hover:bg-white/10 hover:bg-white/10 hover:text-white transition-all">
-              <Plus className="w-5 h-5" />
-            </button>
-            <button className="w-12 h-12 rounded-full border border-white/5 p-1 hover:border-primary/40 transition-all overflow-hidden relative group" onClick={() => setIsSettingsOpen(true)}>
-               <div className="w-full h-full rounded-full bg-primary/20 flex items-center justify-center text-primary text-xs font-bold uppercase overflow-hidden">
-                 <SecureAvatar
-                   src={user?.user_metadata?.avatar_url}
-                   bucket="avatars"
-                   path={user?.user_metadata?.avatar_storage_path}
-                   nonce={user?.user_metadata?.avatar_nonce}
-                   mime={user?.user_metadata?.avatar_mime}
-                   className="w-full h-full object-cover"
-                   fallback={safeChar(user?.user_metadata?.display_name || user?.email, "D")}
-                 />
-               </div>
-               <div className="absolute inset-0 bg-primary/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                  <Settings className="w-4 h-4 text-white" />
-               </div>
-            </button>
-          </div>
-        </aside>
+        <AppNavRail
+        activeFolderId="all"
+        />
       )}
 
       {/* --- 2. List Sidebar --- */}
