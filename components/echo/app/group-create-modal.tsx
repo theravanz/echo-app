@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useDragControls } from "framer-motion";
 import { toast } from "sonner";
 import {
   TbX as X,
@@ -23,6 +23,7 @@ import { compressAvatar } from "@/lib/media";
 import { SecureAvatar } from "./secure-avatar";
 import type { Chat } from "@/hooks/echo/types";
 
+// ── Типы групп: лимит участников + дефолт ──
 export type GroupKind = "standard" | "super" | "superprivate";
 
 export const GROUP_KINDS: { id: GroupKind; label: string; limit: number; hint: string; icon: typeof UsersIcon }[] = [
@@ -31,13 +32,43 @@ export const GROUP_KINDS: { id: GroupKind; label: string; limit: number; hint: s
   { id: "superprivate", label: "SuperPrivate", limit: 500, hint: "До 500 участников, только по приглашениям", icon: LockIcon },
 ];
 
+// ── Мобильный iOS-sheet: параметры анимации ──
+// Кривая Apple pageSheet: быстрый старт, плавное торможение — «плавно, но быстро».
+const SHEET_EASE: [number, number, number, number] = [0.32, 0.72, 0, 1];
+const SHEET_DURATION = 0.44;        // появление, сек
+const SHEET_EXIT_DURATION = 0.3;    // закрытие, сек
+const SHEET_DISMISS_OFFSET = 110;   // свайп вниз дальше этого (px) закрывает
+const SHEET_DISMISS_VELOCITY = 650; // flick вниз быстрее этого (px/s) закрывает
+const BEHIND_SCALE = 0.94;          // насколько «отдаляется» экран под шитом
+
+/** matchMedia-хук: mobile = ниже Tailwind-брейкпоинта md (768px). */
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsMobile(mq.matches);
+    update();
+    mq.addEventListener("change", update);
+    return () => mq.removeEventListener("change", update);
+  }, []);
+  return isMobile;
+}
+
 interface GroupCreateModalProps {
   open: boolean;
+  /** Все пользователи, с которыми есть чат — кандидаты в участники. */
   chats: Chat[];
   onClose: () => void;
+  /** Логики создания пока нет — UI/UX only (вызовется позже). */
   onSubmit?: (draft: { name: string; bio: string; kind: GroupKind; memberIds: string[]; avatarFile: File | null }) => void;
 }
 
+/**
+- New Group — первый шаг создания группы (UI/UX only, без серверной логики).
+- На мобильных (< md) открывается как iOS pageSheet: фуллскрин-плашка выезжает
+  снизу, фон под ней слегка «отдаляется» (scale 0.94), свайп вниз по шапке
+  или грабберу закрывает. На десктопе — прежний центрированный диалог.
+ */
 export function GroupCreateModal({ open, chats, onClose, onSubmit }: GroupCreateModalProps) {
   const [name, setName] = useState("");
   const [bio, setBio] = useState("");
@@ -50,6 +81,10 @@ export function GroupCreateModal({ open, chats, onClose, onSubmit }: GroupCreate
   const [memberQuery, setMemberQuery] = useState("");
   const [memberIds, setMemberIds] = useState<string[]>([]);
   const avatarInputRef = useRef<HTMLInputElement>(null);
+  const dragControls = useDragControls();
+  const bgAnimsRef = useRef<Animation[]>([]);
+  const openTokenRef = useRef(0);
+  const isMobile = useIsMobile();
 
   const activeKind = GROUP_KINDS.find((k) => k.id === kind) ?? GROUP_KINDS[0];
 
@@ -63,6 +98,76 @@ export function GroupCreateModal({ open, chats, onClose, onSubmit }: GroupCreate
 
   const selectedMembers = chats.filter((c) => memberIds.includes(c.id));
   const limitReached = memberIds.length >= activeKind.limit;
+
+  // ── Блокируем скролл страницы, пока открыт мобильный шит ──
+  useEffect(() => {
+    if (!open || !isMobile) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [open, isMobile]);
+
+  // ── iOS-эффект: фон под шитом слегка «отдаляется» (scale + скругление) ──
+  // Цель ищется так: [data-sheet-backdrop] на корне приложения → <main> →
+  // первый ребёнок #root / #__next. Можно повесить data-sheet-backdrop
+  // на свой layout-контейнер для точного контроля.
+  useEffect(() => {
+    if (!open || !isMobile) return;
+    const token = ++openTokenRef.current;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    const target =
+      document.querySelector<HTMLElement>("[data-sheet-backdrop]") ??
+      document.querySelector<HTMLElement>("main") ??
+      (document.getElementById("root")?.firstElementChild as HTMLElement | null) ??
+      (document.getElementById("__next")?.firstElementChild as HTMLElement | null);
+    if (!target) return;
+
+    // Гасим незавершённые анимации от прошлого открытия/закрытия
+    bgAnimsRef.current.forEach((a) => {
+      try { a.cancel(); } catch { /* уже отменена */ }
+    });
+    bgAnimsRef.current = [];
+
+    const prevOverflow = target.style.overflow;
+    const prevRadius = target.style.borderRadius;
+    target.style.overflow = "hidden";
+    target.style.willChange = "transform";
+
+    const zoomIn = target.animate(
+      [
+        { transform: "scale(1) translateY(0px)", borderRadius: "0px" },
+        { transform: `scale(${BEHIND_SCALE}) translateY(-8px)`, borderRadius: "24px" },
+      ],
+      { duration: SHEET_DURATION * 1000, easing: "cubic-bezier(0.32, 0.72, 0, 1)", fill: "forwards" }
+    );
+    bgAnimsRef.current = [zoomIn];
+
+    return () => {
+      const zoomOut = target.animate(
+        [
+          { transform: `scale(${BEHIND_SCALE}) translateY(-8px)`, borderRadius: "24px" },
+          { transform: "scale(1) translateY(0px)", borderRadius: "0px" },
+        ],
+        { duration: SHEET_EXIT_DURATION * 1000, easing: "cubic-bezier(0.32, 0.72, 0, 1)", fill: "forwards" }
+      );
+      bgAnimsRef.current = [zoomIn, zoomOut];
+      const restore = () => {
+        try { zoomIn.cancel(); } catch { /* уже отменена */ }
+        try { zoomOut.cancel(); } catch { /* уже отменена */ }
+        bgAnimsRef.current = bgAnimsRef.current.filter((a) => a !== zoomIn && a !== zoomOut);
+        // Если шит успели открыть снова — не трогаем стили (свой набор уже стоит)
+        if (openTokenRef.current === token) {
+          target.style.overflow = prevOverflow;
+          target.style.borderRadius = prevRadius;
+          target.style.willChange = "";
+        }
+      };
+      zoomOut.finished.then(restore).catch(restore);
+    };
+  }, [open, isMobile]);
 
   const resetAll = () => {
     setName("");
@@ -138,7 +243,12 @@ export function GroupCreateModal({ open, chats, onClose, onSubmit }: GroupCreate
   };
 
   const portalHeader = (
-    <div className="shrink-0 flex items-center gap-2 px-4 py-3 border-b border-white/5">
+    <div
+      className="shrink-0 flex items-center gap-2 px-4 py-3 border-b border-white/5"
+      // Шапка — тоже «ручка» для свайпа вниз (как в iOS), кнопки при этом кликаются
+      onPointerDown={isMobile ? (e) => dragControls.start(e) : undefined}
+      style={isMobile ? { touchAction: "none" } : undefined}
+    >
       <button
         className="w-9 h-9 rounded-xl hover:bg-white/5 flex items-center justify-center text-white/60 hover:text-white transition-colors"
         onClick={handleClose}
@@ -418,27 +528,66 @@ export function GroupCreateModal({ open, chats, onClose, onSubmit }: GroupCreate
           key="group-create"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
-          className="fixed inset-0 z-[300] flex items-end sm:items-center justify-center bg-black/70 backdrop-blur-sm sm:p-4"
+          exit={{ opacity: 0, transition: { duration: 0.24 } }}
+          transition={{ duration: 0.18 }}
+          className={cn(
+            "fixed inset-0 z-[300] flex",
+            isMobile
+              ? "items-end bg-black/55"
+              : "items-center justify-center bg-black/70 backdrop-blur-sm p-4"
+          )}
           onClick={handleClose}
         >
-          {/* Анимация отдаливания фона (опционально, можно повесить на главный контейнер приложения, если есть реф) */}
           <motion.div
-            initial={{ opacity: 0, y: "100%", scale: 1 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: "100%", scale: 1 }}
-            transition={{ type: "spring", damping: 30, stiffness: 300, mass: 0.8 }}
-            className={cn(
-              "w-full flex flex-col bg-background border border-white/10 shadow-2xl overflow-hidden",
-              /* Мобилки: на весь экран скругленные сверху, планшеты/ПК: обычное по центру */
-              "h-[100dvh] sm:h-auto sm:max-h-[calc(100vh-2rem)] sm:max-w-md sm:rounded-[28px]",
-              "rounded-t-[32px] sm:rounded-[28px]"
-            )}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Создание группы"
+            initial={isMobile ? { y: "100%" } : { opacity: 0, scale: 0.96, y: 12 }}
+            animate={isMobile ? { y: 0, opacity: 1 } : { opacity: 1, scale: 1, y: 0 }}
+            exit={
+              isMobile
+                ? { y: "100%", transition: { duration: SHEET_EXIT_DURATION, ease: SHEET_EASE } }
+                : { opacity: 0, scale: 0.96, y: 12 }
+            }
+            transition={
+              isMobile
+                ? { duration: SHEET_DURATION, ease: SHEET_EASE }
+                : { type: "spring", damping: 28, stiffness: 320, mass: 0.9 }
+            }
+            drag={isMobile ? "y" : false}
+            dragListener={false}
+            dragControls={dragControls}
+            dragConstraints={{ top: 0, bottom: 0 }}
+            dragElastic={0.4}
+            dragMomentum={false}
+            onDragEnd={(_, info) => {
+              if (!isMobile) return;
+              if (info.offset.y > SHEET_DISMISS_OFFSET || info.velocity.y > SHEET_DISMISS_VELOCITY) {
+                handleClose();
+              }
+            }}
+            className={
+              isMobile
+                // iOS pageSheet: почти на весь экран, скруглённый верх, фон за шитом виден
+                ? "w-full h-[97dvh] flex flex-col bg-background border border-t-white/10 border-x-0 border-b-0 rounded-t-[22px] shadow-2xl overflow-hidden"
+                : "w-full max-w-md max-h-[calc(100vh-2rem)] flex flex-col bg-background border border-white/10 rounded-[28px] shadow-2xl overflow-hidden"
+            }
             onClick={(e) => e.stopPropagation()}
           >
+            {isMobile && (
+              <div
+                className="shrink-0 flex justify-center pt-[max(0.625rem,env(safe-area-inset-top))] pb-1.5 cursor-grab active:cursor-grabbing"
+                style={{ touchAction: "none" }}
+                onPointerDown={(e) => dragControls.start(e)}
+              >
+                <div className="w-10 h-1.5 rounded-full bg-white/20" />
+              </div>
+            )}
             {portalHeader}
-            <div className="flex-1 min-h-0 overflow-y-auto settings-scroll p-5 space-y-6">
+            <div className={cn(
+              "flex-1 min-h-0 overflow-y-auto settings-scroll p-5 space-y-6 overscroll-contain",
+              isMobile && "pb-[max(1.25rem,env(safe-area-inset-bottom))]"
+            )}>
               {avatarBlock}
               {nameBlock}
               {kindBlock}
