@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import { useE2EE } from "./use-e2ee";
 import { cacheGetBounded, cacheSetBounded } from "./chat-cache";
+import { openGroupKeyPacket, openGroupMetadata, loadGroupKeys, saveGroupKey } from "@/lib/groups";
 import type { Chat, UserProfile, Message, ConnectionStatus } from "./types";
 
 interface UseChatListReturn {
@@ -27,6 +28,109 @@ interface UseChatListReturn {
  * это защита от «статус connected, а сеть мертва».
  */
 const CHATS_NET_TIMEOUT_MS = 8000;
+
+/**
+ * Построить список групповых чатов текущего пользователя (Zero-Knowledge).
+ *
+ * Поток на каждую группу:
+ *  1. group_members (user_id = me) → список group_id.
+ *  2. groups (in group_id) → encrypted_metadata + metadata_nonce + creator_id.
+ *  3. profiles (in creator_id) → public_key создателя (нужен для DH).
+ *  4. group_key_mailbox (user_id = me) → пакет ключей (только первый вход).
+ *  5. Локальный кэш ключей (SQLCipher): если info_key уже раскрыт — не лезем
+ *     в mailbox. Иначе openGroupKeyPacket → info_key → openGroupMetadata →
+ *     { name, bio, avatar_url } → сохраняем ключ локально.
+ *
+ * Возвращает Chat[] с type:'group'. Ошибки одной группы не роняют остальные.
+ */
+async function buildGroupChats(userId: string, signal: AbortSignal): Promise<Chat[]> {
+  const { data: memberships, error: memErr } = await supabase
+    .from("group_members")
+    .select("group_id")
+    .eq("user_id", userId)
+    .abortSignal(signal);
+  if (memErr || !memberships?.length) return [];
+  const groupIds = memberships.map((m: any) => m.group_id);
+
+  // Подтягиваем всех участников этих групп для подсчета member_count
+  const { data: allMembers } = await supabase
+    .from("group_members")
+    .select("group_id, user_id")
+    .in("group_id", groupIds)
+    .abortSignal(signal);
+
+  const memberCountMap = new Map<string, number>();
+  for (const m of allMembers || []) {
+    memberCountMap.set(m.group_id, (memberCountMap.get(m.group_id) || 0) + 1);
+  }
+
+  const { data: groups, error: gErr } = await supabase
+    .from("groups")
+    .select("*")
+    .in("id", groupIds)
+    .abortSignal(signal);
+  if (gErr || !groups?.length) return [];
+
+  const creatorIds = Array.from(new Set(groups.map((g: any) => g.creator_id).filter(Boolean)));
+  const [{ data: creators }, { data: packets }] = await Promise.all([
+    supabase.from("profiles").select("id, public_key").in("id", creatorIds).abortSignal(signal),
+    supabase.from("group_key_mailbox").select("group_id, encrypted_payload, nonce").eq("user_id", userId).abortSignal(signal),
+  ]);
+  const creatorPub = new Map<string, string>((creators ?? []).map((p: any) => [p.id, p.public_key]));
+  const packetByGroup = new Map<string, any>((packets ?? []).map((p: any) => [p.group_id, p]));
+
+  const cachedKeys = await loadGroupKeys(userId);
+
+  const chats = await Promise.all(
+    groups.map(async (g: any): Promise<Chat | null> => {
+      const creatorPublicKey = creatorPub.get(g.creator_id) ?? "";
+      let keys = cachedKeys[g.id];
+
+      if (!keys) {
+        const pkt = packetByGroup.get(g.id);
+        if (!pkt || !creatorPublicKey) return null;
+        try {
+          keys = await openGroupKeyPacket(creatorPublicKey, pkt.encrypted_payload, pkt.nonce);
+          await saveGroupKey(userId, g.id, keys);
+        } catch (e) {
+          console.warn("[CHAT-CACHE] group key open failed:", g.id, e);
+          return null;
+        }
+      }
+      if (!creatorPublicKey) return null;
+
+      let meta: { name?: string; bio?: string; avatar_url?: string };
+      try {
+        meta = await openGroupMetadata(keys.info_key, creatorPublicKey, g.encrypted_metadata, g.metadata_nonce);
+      } catch (e) {
+        console.warn("[CHAT-CACHE] group metadata open failed:", g.id, e);
+        return null;
+      }
+
+      return {
+        id: g.id,
+        type: "group",
+        creator_id: g.creator_id,
+        display_name: meta.name || "Группа",
+        bio: meta.bio || "",
+        avatar_storage_path: meta.avatar_url || null,
+        avatar_nonce: null,
+        avatar_mime: null,
+        group_seed: keys.seed,
+        msg_key_0: keys.msg_key_0, // ← Сохраняем msg_key_0
+        member_count: memberCountMap.get(g.id) || 1,
+        lastMessage: "Группа создана",
+        lastMessageTime: g.created_at,
+        created_at: g.created_at,
+        unreadCount: 0,
+        wallpaper_preset: "solid",
+        wallpaper_photo_url: null,
+      } as Chat;
+    }),
+  );
+
+  return chats.filter((c): c is Chat => c !== null);
+}
 
 export function useChatList(
   user: UserProfile | null,
@@ -131,6 +235,8 @@ export function useChatList(
     const netTimeout = setTimeout(() => netAbort.abort(), CHATS_NET_TIMEOUT_MS);
     try {
       const signal = netAbort.signal;
+      // Группы тянем ПАРАЛЛЕЛЬНО с пайплайном DM (Promise.all внутри buildGroupChats).
+      const groupChatsPromise = buildGroupChats(currentUserId, signal);
       const { data: recentMessages, error: msgError } = await supabase
         .from("messages")
         .select("*")
@@ -159,6 +265,7 @@ export function useChatList(
         }
       }
 
+      let dmChats: Chat[] = [];
       if (participantIds.length > 0) {
         const { data: profiles } = await supabase
           .from("profiles")
@@ -206,6 +313,7 @@ if (profiles) {
       return {
         ...p,
         id: p.id,
+        type: 'direct',
         lastMessage: preview,
         lastMessageType: msgType,
         lastMessageTime: chatData.lastMessageTime,
@@ -214,19 +322,26 @@ if (profiles) {
     }),
   );
 
-          const filteredChats = finalChats.filter((c): c is Chat => c !== null);
-          filteredChats.sort(
-            (a, b) => new Date(b.lastMessageTime!).getTime() - new Date(a.lastMessageTime!).getTime(),
-          );
-
-          setChats(filteredChats);
-          // Запись — fire-and-forget: UI не ждёт Rust-слой (сериализованные
-          // записи в chat-cache; при таймауте запись всё равно доедет).
-          void cacheSetBounded(cacheKey, JSON.stringify({ chats: filteredChats }))
-            .catch((e) => console.warn("[CHAT-CACHE] chats cache write failed:", e));
-          setChatsFetchError(false);
+          dmChats = finalChats.filter((c): c is Chat => c !== null);
         }
       }
+
+      // Объединяем DM + группы в один плоский список, сортируем по
+      // последнему обновлению (lastMessageTime, fallback — created_at группы).
+      const groupChats = await groupChatsPromise;
+      const allChats = [...dmChats, ...groupChats];
+      allChats.sort(
+        (a, b) =>
+          new Date(b.lastMessageTime || b.created_at || 0).getTime() -
+          new Date(a.lastMessageTime || a.created_at || 0).getTime(),
+      );
+
+      setChats(allChats);
+      // Запись — fire-and-forget: UI не ждёт Rust-слой (сериализованные
+      // записи в chat-cache; при таймауте запись всё равно доедет).
+      void cacheSetBounded(cacheKey, JSON.stringify({ chats: allChats }))
+        .catch((e) => console.warn("[CHAT-CACHE] chats cache write failed:", e));
+      setChatsFetchError(false);
     } catch (err) {
       // [CHAT-CACHE] Оффлайн: если кэш уже отрендерен (шаг 1 выше) — тихо
       // продолжаем на нём, realtime/fresh обновятся при возврате сети.

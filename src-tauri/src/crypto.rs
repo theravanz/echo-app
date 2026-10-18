@@ -811,7 +811,231 @@ pub async fn crypto_qr_decrypt(
     })
 }
 // ═══════════════════════════════════════════════════════════════════
-// Тесты
+// Группы (Zero-Knowledge): генерация сида + KDF + упаковка ключей
+// ═══════════════════════════════════════════════════════════════════
+// Сервер — «слепой» ретранслятор: Name/Bio и групповые сиды он видит только
+// в шифротексте. Вся криптография — здесь, в Rust (ключи не покидают backend):
+//   1. Group Master Seed — 32 случайных байта (OsRng).
+//   2. KDF: HKDF-SHA256(seed, info) — domain-separated ключи:
+//        "echo/group/info" → Info_Key (метаданные Name/Bio/avatar),
+//        "echo/group/msg0" → Message_Key_0 (первый ключ цепочки сообщений).
+
+use hkdf::Hkdf;
+
+/// Domain-separation info для группового KDF (HKDF-SHA256).
+const GROUP_INFO_KEY_INFO: &[u8] = b"echo/group/info";
+const GROUP_MSG0_KEY_INFO: &[u8] = b"echo/group/msg0";
+
+/// HKDF-SHA256(seed, info) → 32 байта. Seed зануляется вызывающим кодом.
+fn group_kdf(seed: &[u8; KEY_SIZE], info: &[u8]) -> Result<[u8; KEY_SIZE], String> {
+    let hk = Hkdf::<Sha256>::new(None, &seed[..]);
+    let mut okm = [0u8; KEY_SIZE];
+    hk.expand(info, &mut okm)
+        .map_err(|e| format!("[Group] HKDF expand: {e}"))?;
+    Ok(okm)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GroupSeedBundle {
+    /// base64 Group Master Seed (32B) — нужен фронту ТОЛЬКО для локального
+    /// сохранения в зашифрованное хранилище; на сервер не уходит.
+    pub seed: String,
+    /// base64 Info_Key (HKDF "echo/group/info").
+    pub info_key: String,
+    /// base64 Message_Key_0 (HKDF "echo/group/msg0").
+    pub msg_key_0: String,
+}
+
+/// Шаг 1–2: сгенерировать Group Master Seed + вывести Info_Key / Message_Key_0.
+#[tauri::command]
+pub async fn group_gen_seed() -> Result<GroupSeedBundle, String> {
+    tokio::task::spawn_blocking(|| {
+        let mut rng = SaltOsRng;
+        let mut seed = [0u8; KEY_SIZE];
+        rng.fill_bytes(&mut seed);
+        let info_key = group_kdf(&seed, GROUP_INFO_KEY_INFO)?;
+        let msg_key_0 = group_kdf(&seed, GROUP_MSG0_KEY_INFO)?;
+        let out = GroupSeedBundle {
+            seed: BASE64.encode(seed),
+            info_key: BASE64.encode(info_key),
+            msg_key_0: BASE64.encode(msg_key_0),
+        };
+        seed.fill(0);
+        Ok(out)
+    })
+    .await
+    .map_err(|e| format!("[Group] task: {e}"))?
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GroupSealedBox {
+    pub ciphertext: String,
+    pub nonce: String,
+    /// base64 эфемерного X25519-публичного ключа (нужен получателю для DH).
+    pub eph_pub: String,
+}
+
+/// Шаг 3: зашифровать метаданные группы (JSON UTF-8, base64 на входе).
+/// Шифрование — Info_Key через SalsaBox с эфемерной X25519-парой; результат
+/// идёт в Edge Function как encrypted_metadata/metadata_nonce.
+#[tauri::command]
+pub async fn group_seal_metadata(
+    app: tauri::AppHandle,
+    info_key_b64: String,
+    metadata_b64: String,
+) -> Result<GroupSealedBox, String> {
+    let store = app.state::<KeyStore>();
+    // Привязка к сессии: ключ должен быть загружен (создатель авторизован).
+    if !store.has_key() {
+        return Err("[Group] E2EE key not loaded".to_string());
+    }
+    let info_key = b64_to_32(&info_key_b64)?;
+    let metadata = BASE64
+        .decode(&metadata_b64)
+        .map_err(|e| format!("[Group] metadata decode: {e}"))?;
+    // Self-box: получатель = собственный публичный ключ. SalsaBox строится
+    // от info_key как «приватного» скаляра: X25519-clamp в dalek
+    // детерминирован, seal/open получат тот же DH и расшифровка сойдётся
+    // тем же info_key (см. group_open_metadata — следующая итерация).
+    let scalar = store.private_scalar()?;
+    let secret = StaticSecret::from(scalar);
+    let self_pub = XPublic::from(&secret);
+    let salsa = SalsaBox::new(
+        &BoxPublicKey::from(*self_pub.as_bytes()),
+        &BoxSecretKey::from(info_key),
+    );
+    let mut rng = OsRng;
+    let nonce = SalsaBox::generate_nonce(&mut rng);
+    let ct = salsa
+        .encrypt(&nonce, metadata.as_slice())
+        .map_err(|e| format!("[Group] metadata seal: {e:?}"))?;
+    Ok(GroupSealedBox {
+        ciphertext: BASE64.encode(&ct),
+        nonce: BASE64.encode(nonce.as_slice()),
+        eph_pub: store.public_key_b64()?,
+    })
+}
+
+/// Шаг 4: упаковать Group Master Seed + ключи для одного участника.
+/// DH: собственный приватный ключ (KeyStore, не покидает Rust) +
+/// публичный X25519 участника. Пакет = JSON { seed, info_key, msg_key_0,
+/// chain_index: 0 } (base64-поля), зашифрованный SalsaBox.
+#[tauri::command]
+pub async fn group_seal_key_packet(
+    app: tauri::AppHandle,
+    recipient_pubkey: String,
+    seed_b64: String,
+    info_key_b64: String,
+    msg_key_0_b64: String,
+) -> Result<GroupSealedBox, String> {
+    let store = app.state::<KeyStore>();
+    let our_scalar = store.private_scalar()?;
+    let their_pub = b64_to_32(&recipient_pubkey)?;
+    // Валидируем формат входных ключей (ровно 32B base64), содержимое не логируем.
+    let seed = b64_to_32(&seed_b64)?;
+    let info_key = b64_to_32(&info_key_b64)?;
+    let msg_key_0 = b64_to_32(&msg_key_0_b64)?;
+    let packet = serde_json::json!({
+        "seed": BASE64.encode(seed),
+        "info_key": BASE64.encode(info_key),
+        "msg_key_0": BASE64.encode(msg_key_0),
+        "chain_index": 0,
+    });
+    let message = serde_json::to_vec(&packet)
+        .map_err(|e| format!("[Group] packet JSON: {e}"))?;
+    let salsa = SalsaBox::new(
+        &BoxPublicKey::from(their_pub),
+        &BoxSecretKey::from(our_scalar),
+    );
+    let mut rng = OsRng;
+    let nonce = SalsaBox::generate_nonce(&mut rng);
+    let ct = salsa
+        .encrypt(&nonce, message.as_slice())
+        .map_err(|e| format!("[Group] packet seal: {e:?}"))?;
+    Ok(GroupSealedBox {
+        ciphertext: BASE64.encode(&ct),
+        nonce: BASE64.encode(nonce.as_slice()),
+        eph_pub: store.public_key_b64()?,
+    })
+}
+
+/// Расшифровать пакет ключей из group_key_mailbox (первый вход участника).
+/// SalsaBox(пакет_от_создателя = DH(creator_priv, member_pub); здесь обратное:
+/// DH(member_priv, creator_pub)) — тот же общий секрет. `sender_pub_b64` —
+/// публичный ключ создателя (profiles.public_key[creator_id]).
+#[tauri::command]
+pub async fn group_open_key_packet(
+    app: tauri::AppHandle,
+    sender_pub_b64: String,
+    ciphertext_b64: String,
+    nonce_b64: String,
+) -> Result<GroupSeedBundle, String> {
+    let store = app.state::<KeyStore>();
+    let our_scalar = store.private_scalar()?;
+    let sender_pub = b64_to_32(&sender_pub_b64)?;
+    let salsa = SalsaBox::new(
+        &BoxPublicKey::from(sender_pub),
+        &BoxSecretKey::from(our_scalar),
+    );
+    let nonce_bytes = BASE64
+        .decode(&nonce_b64)
+        .map_err(|e| format!("[Group] packet nonce decode: {e}"))?;
+    if nonce_bytes.len() != 24 {
+        return Err(format!("[Group] packet nonce must be 24 bytes, got {}", nonce_bytes.len()));
+    }
+    let nonce = crypto_box::aead::Nonce::<SalsaBox>::from_slice(&nonce_bytes);
+    let ct = BASE64
+        .decode(&ciphertext_b64)
+        .map_err(|e| format!("[Group] packet ct decode: {e}"))?;
+    let pt = salsa
+        .decrypt(nonce, ct.as_slice())
+        .map_err(|e| format!("[Group] packet open FAILED: {e:?}"))?;
+    // JSON { seed, info_key, msg_key_0, chain_index }.
+    let v: serde_json::Value = serde_json::from_slice(&pt)
+        .map_err(|e| format!("[Group] packet JSON: {e}"))?;
+    let get = |k: &str| -> Result<String, String> {
+        v.get(k).and_then(|x| x.as_str()).map(String::from)
+            .ok_or_else(|| format!("[Group] packet missing field {k}"))
+    };
+    Ok(GroupSeedBundle {
+        seed: get("seed")?,
+        info_key: get("info_key")?,
+        msg_key_0: get("msg_key_0")?,
+    })
+}
+
+/// Расшифровать метаданные группы Info_Key. Тот же бокс, что при seal:
+/// shared = DH(clamp(info_key), creator_pub). `sender_pub_b64` — публичный
+/// ключ создателя (нужен для восстановления идентичного общего секрета).
+#[tauri::command]
+pub async fn group_open_metadata(
+    info_key_b64: String,
+    sender_pub_b64: String,
+    metadata_ct_b64: String,
+    nonce_b64: String,
+) -> Result<String, String> {
+    let info_key = b64_to_32(&info_key_b64)?;
+    let sender_pub = b64_to_32(&sender_pub_b64)?;
+    let salsa = SalsaBox::new(
+        &BoxPublicKey::from(sender_pub),
+        &BoxSecretKey::from(info_key),
+    );
+    let nonce_bytes = BASE64
+        .decode(&nonce_b64)
+        .map_err(|e| format!("[Group] metadata nonce decode: {e}"))?;
+    if nonce_bytes.len() != 24 {
+        return Err(format!("[Group] metadata nonce must be 24 bytes, got {}", nonce_bytes.len()));
+    }
+    let nonce = crypto_box::aead::Nonce::<SalsaBox>::from_slice(&nonce_bytes);
+    let ct = BASE64
+        .decode(&metadata_ct_b64)
+        .map_err(|e| format!("[Group] metadata ct decode: {e}"))?;
+    let pt = salsa
+        .decrypt(nonce, ct.as_slice())
+        .map_err(|e| format!("[Group] metadata open FAILED: {e:?}"))?;
+    String::from_utf8(pt).map_err(|e| format!("[Group] metadata UTF-8: {e}"))
+}
+
 // ═══════════════════════════════════════════════════════════════════
 
 #[cfg(test)]

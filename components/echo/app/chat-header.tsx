@@ -1,7 +1,7 @@
 "use client";
 
 import { memo } from "react";
-import { cn } from "@/lib/utils";
+import { cn, safeChar } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -45,9 +45,14 @@ export const ChatHeader = memo(function ChatHeader({
 }: ChatHeaderProps) {
   if (!selectedChat) return null;
 
-  const statusText = isOnline
-    ? "в сети"
-    : (lastSeenLabel ? `был(а) ${lastSeenLabel}` : "не в сети");
+  const isGroup = selectedChat.type === 'group';
+  const memberCount = selectedChat.member_count ?? 1;
+
+  const statusText = isGroup
+    ? `${memberCount} участников`
+    : (isOnline
+        ? "в сети"
+        : (lastSeenLabel ? `был(а) ${lastSeenLabel}` : "не в сети"));
 
   return (
     <header
@@ -56,7 +61,6 @@ export const ChatHeader = memo(function ChatHeader({
         isMobile ? "h-auto pb-3 safe-pt-header px-3" : "h-20 px-6"
       )}
     >
-      {/* Кнопка "Назад" */}
       {isMobile && (
         <Button
           variant="ghost"
@@ -68,7 +72,6 @@ export const ChatHeader = memo(function ChatHeader({
         </Button>
       )}
 
-      {/* Аватар */}
       <div
         onClick={onOpenProfile}
         className="rounded-full border border-white/10 flex items-center justify-center text-sm font-bold shadow-md shrink-0 mr-3 cursor-pointer overflow-hidden"
@@ -89,31 +92,29 @@ export const ChatHeader = memo(function ChatHeader({
             className="w-full h-full object-cover"
           />
         ) : (
-          (selectedChat.display_name?.[0] || selectedChat.username?.[0] || "U").toUpperCase()
+          safeChar(isGroup ? selectedChat.display_name : (selectedChat.display_name || selectedChat.username))
         )}
       </div>
 
-      {/* Текст: Имя + Статус */}
       <div
         onClick={onOpenProfile}
         className="flex-1 min-w-0 max-w-full overflow-hidden mr-3 cursor-pointer"
       >
         <div className="block max-w-full text-white whitespace-nowrap overflow-hidden text-ellipsis font-semibold" style={{ fontSize: isMobile ? 15 : 17 }}>
-          {selectedChat.display_name || selectedChat.username}
+          {isGroup ? (selectedChat.display_name || "Группа") : (selectedChat.display_name || selectedChat.username)}
         </div>
         <div
           className="block max-w-full whitespace-nowrap overflow-hidden text-ellipsis transition-colors"
           style={{
             fontSize: isMobile ? 11 : 12,
             fontFamily: "monospace",
-            color: isOnline ? "#22c55e" : "rgba(161,161,170,0.8)",
+            color: isGroup ? "rgba(161,161,170,0.8)" : (isOnline ? "#22c55e" : "rgba(161,161,170,0.8)"),
           }}
         >
           {statusText}
         </div>
       </div>
 
-      {/* Правая часть */}
       <div className="flex items-center shrink-0" style={{ gap: isMobile ? 8 : 16 }}>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

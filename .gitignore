@@ -48,4 +48,12 @@ next-env.d.ts
 *.apk
 *.idsig
 *.keystore
+
 .agents/
+.github/
+.vscode
+.idea
+.windsurf
+.opencode
+.augment
+.gemini
