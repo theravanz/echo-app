@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS public.group_key_mailbox (
 );
 
 CREATE INDEX IF NOT EXISTS idx_group_key_mailbox_user
+  ON public.group_key_mailbox (user_id);
 
 -- 4. Атомарное создание группы: группа → участники → пакеты ключей.
 --    Одна транзакция: либо всё, либо ничего (частичных групп не бывает).
@@ -148,8 +149,6 @@ BEGIN
   RETURN p_group_id;
 END;
 $$;
-
-  ON public.group_key_mailbox (user_id);
 
 -- 5. RLS: закрыть всё для anon/authenticated, прямой записи нет.
 --    Единственный писатель — RPC create_group_atomic (SECURITY DEFINER).
