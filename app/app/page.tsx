@@ -1032,6 +1032,16 @@ useEffect(() => {
           open={isGroupCreateOpen}
           chats={chats}
           onClose={() => setIsGroupCreateOpen(false)}
+          // Успех: модалка уже закрыта изнутри; пробуем открыть чат группы
+          // из локального списка (если его там ещё нет — список подтянет
+          // ресинк; глубокая интеграция групп в useChatList — след. итерация).
+          onCreated={(groupId) => {
+            const existing = chats.find((c) => c.id === groupId);
+            if (existing) {
+              setSelectedChat(existing);
+              if (user) fetchMessages(existing.id, user.id);
+            }
+          }}
         />
       </motion.div>
 

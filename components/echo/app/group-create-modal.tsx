@@ -15,11 +15,13 @@ import {
   TbSearch as Search,
   TbUsers as UsersIcon,
   TbLock as LockIcon,
-  TbWorld as GlobeIcon,
   TbUser as UserIcon,
+  TbLoader2 as Loader,
 } from "react-icons/tb";
 import { cn, safeChar } from "@/lib/utils";
 import { compressAvatar } from "@/lib/media";
+import { createStandardGroup, saveGroupKey } from "@/lib/groups";
+import { supabase } from "@/lib/supabase";
 import { SecureAvatar } from "./secure-avatar";
 import type { Chat } from "@/hooks/echo/types";
 
@@ -61,6 +63,8 @@ interface GroupCreateModalProps {
   onClose: () => void;
   /** Логики создания пока нет — UI/UX only (вызовется позже). */
   onSubmit?: (draft: { name: string; bio: string; kind: GroupKind; memberIds: string[]; avatarFile: File | null }) => void;
+  /** Успешное создание: закрыть модалку + перейти в чат группы. */
+  onCreated?: (groupId: string) => void;
 }
 
 /**
@@ -69,11 +73,12 @@ interface GroupCreateModalProps {
   снизу, фон под ней слегка «отдаляется» (scale 0.94), свайп вниз по шапке
   или грабберу закрывает. На десктопе — прежний центрированный диалог.
  */
-export function GroupCreateModal({ open, chats, onClose, onSubmit }: GroupCreateModalProps) {
+export function GroupCreateModal({ open, chats, onClose, onSubmit, onCreated }: GroupCreateModalProps) {
   const [name, setName] = useState("");
   const [bio, setBio] = useState("");
   const [kind, setKind] = useState<GroupKind>("standard");
   const [kindOpen, setKindOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [avatarMenuOpen, setAvatarMenuOpen] = useState(false);
@@ -219,26 +224,88 @@ export function GroupCreateModal({ open, chats, onClose, onSubmit }: GroupCreate
     if (avatarInputRef.current) avatarInputRef.current.value = "";
   };
 
-  const canSubmit = name.trim().length > 0;
+  const canSubmit = name.trim().length > 0 && !submitting;
 
+  // ── Сабмит: Group Seed → KDF → метаданные → пакеты → create-group ──
+  // Криптография — в Rust (KeyStore), сервер видит только шифротекст.
+  // Вёрстка не тронута: меняется только тело обработчика + disabled кнопки.
   const handleSubmit = async () => {
-    if (!canSubmit) {
+    if (!name.trim()) {
       toast.error("Введите название группы");
       return;
     }
-    try {
-      let prepared: File | null = null;
-      if (avatarFile) {
-        const compressed = await compressAvatar(avatarFile);
-        prepared = new File([compressed], avatarFile.name, { type: compressed.type || "image/webp" });
-      }
+    // Пока реализован только пайплайн обычных групп (is_ultra_private=false,
+    // лимит 5000 — контракт задеплоенной Edge Function create-group).
+    if (kind !== "standard") {
       if (onSubmit) {
-        onSubmit({ name: name.trim(), bio: bio.trim(), kind, memberIds, avatarFile: prepared ?? avatarFile });
-      } else {
-        toast.info("Создание групп скоро", { description: `"${name.trim()}" · ${activeKind.label} · ${memberIds.length} уч.` });
+        try {
+          const compressed = avatarFile ? await compressAvatar(avatarFile) : null;
+          const prepared = compressed && avatarFile
+            ? new File([compressed], avatarFile.name, { type: compressed.type || "image/webp" })
+            : avatarFile;
+          onSubmit({ name: name.trim(), bio: bio.trim(), kind, memberIds, avatarFile: prepared });
+        } catch {
+          toast.error("Не удалось подготовить фото");
+        }
+        return;
       }
-    } catch {
-      toast.error("Не удалось подготовить фото");
+      toast.info("Этот тип групп — следующая итерация", { description: activeKind.label });
+      return;
+    }
+    if (submitting) return;
+    setSubmitting(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const creatorId = session?.user?.id;
+      if (!creatorId) {
+        toast.error("Нет авторизации", { description: "Войдите в аккаунт заново" });
+        return;
+      }
+
+      // Публичные X25519-ключи участников из контактов чата (fallback внутри
+      // createStandardGroup — profiles.public_key, как в use-e2ee).
+      const memberPubkeys = new Map<string, string>();
+      for (const c of chats) {
+        const pk = (c as { public_key?: string | null }).public_key;
+        if (c.id && pk) memberPubkeys.set(c.id, pk);
+      }
+
+      const { group_id, seed } = await createStandardGroup({
+        name: name.trim(),
+        bio: bio.trim(),
+        memberIds,
+        avatarFile,
+        memberPubkeys,
+        creatorId,
+      });
+
+      // Создателю пакет в mailbox НЕ выдаётся (создатель уже имеет сид) —
+      // кладём его в локальный SQLCipher-кэш, иначе buildGroupChats не сможет
+      // расшифровать метаданные и группа не появится в списке у создателя.
+      try {
+        await saveGroupKey(creatorId, group_id, seed);
+      } catch (e) {
+        console.warn("[GroupCreate] failed to cache creator group key:", e);
+      }
+
+      toast.success("Группа создана", { description: `"${name.trim()}" · ${memberIds.length + 1} уч.` });
+      const createdId = group_id;
+      resetAll();
+      onClose();
+      onCreated?.(createdId);
+    } catch (e) {
+      const msg = (e as Error)?.message ?? String(e);
+      // Маппинг статусов Edge Function под дизайн-систему (sonner):
+      // 400 — данные, 409 — конфликт id, остальное — сервер/крипто.
+      if (/\(400\)|Некорректные данные/i.test(msg)) {
+        toast.error("Не удалось создать группу", { description: msg });
+      } else if (/\(409\)|уже существует/i.test(msg)) {
+        toast.error("Конфликт создания", { description: msg });
+      } else {
+        toast.error("Ошибка создания группы", { description: msg });
+      }
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -259,14 +326,14 @@ export function GroupCreateModal({ open, chats, onClose, onSubmit }: GroupCreate
       </button>
       <div className="flex-1 min-w-0">
         <h2 className="text-base font-display font-bold tracking-tight truncate">New Group</h2>
-        <p className="text-[10px] font-mono uppercase tracking-[0.25em] text-white/30">Шаг 1 из 1 · UI</p>
       </div>
       <button
-        className="px-4 h-9 rounded-xl bg-primary text-primary-foreground text-xs font-bold uppercase tracking-widest disabled:opacity-40 disabled:pointer-events-none transition-all active:scale-95"
+        className="px-4 h-9 rounded-xl bg-primary text-primary-foreground text-xs font-bold uppercase tracking-widest disabled:opacity-40 disabled:pointer-events-none transition-all active:scale-95 flex items-center gap-2"
         disabled={!canSubmit}
         onClick={handleSubmit}
       >
-        Далее
+        {submitting && <Loader className="w-4 h-4 animate-spin" />}
+        {submitting ? "Создание…" : "Далее"}
       </button>
     </div>
   );
@@ -327,9 +394,6 @@ export function GroupCreateModal({ open, chats, onClose, onSubmit }: GroupCreate
       </div>
       <div className="min-w-0">
         <div className="text-sm font-bold">Фото группы</div>
-        <p className="text-xs text-white/40 leading-relaxed">
-          Шифруется как аватары профиля (AES-256-GCM, приватный bucket).
-        </p>
       </div>
     </div>
   );
@@ -507,18 +571,12 @@ export function GroupCreateModal({ open, chats, onClose, onSubmit }: GroupCreate
   );
 
   const footerBlock = (
-    <>
-      <button
-        className="w-full h-12 rounded-2xl border border-white/10 hover:bg-white/5 text-xs font-bold uppercase tracking-widest transition-all active:scale-[0.98]"
-        onClick={handleClose}
-      >
-        Отмена
-      </button>
-      <p className="text-center text-[10px] font-mono uppercase tracking-widest text-white/25 pb-1">
-        <GlobeIcon className="w-3 h-3 inline mr-1 -mt-0.5" />
-        Логика групп — следующая итерация
-      </p>
-    </>
+    <button
+      className="w-full h-12 rounded-2xl border border-white/10 hover:bg-white/5 text-xs font-bold uppercase tracking-widest transition-all active:scale-[0.98]"
+      onClick={handleClose}
+    >
+      Отмена
+    </button>
   );
 
   return createPortal(

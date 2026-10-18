@@ -305,43 +305,49 @@ export function ChatSidebar({
             <div className="text-xs text-muted-foreground/40 mt-1">Search for users to start chatting</div>
           </div>
         )}
-        {chats.map((chat) => (
-          <button
-            key={chat.id}
-            data-dropchat={chat.id}
-            onClick={() => onSelectChat(chat)}
-            className={cn(
-              "w-full flex items-center gap-3.5 p-3.5 rounded-2xl transition-all duration-300 relative group",
-              selectedChat?.id === chat.id ? "bg-primary/15" : "hover:bg-white/5"
-            )}
-          >
-            <div className="relative shrink-0">
-              {/* Увеличенная аватарка чата (14 -> 56px) */}
-              <div
-                className="w-14 h-14 rounded-full flex items-center justify-center text-primary font-bold text-base overflow-hidden shadow-md"
-                style={{ backgroundColor: chat.avatar_color || "oklch(0.2 0.02 280)" }}
-              >
-                {chat.avatar_url || chat.avatar_storage_path ? (
-                  <SecureAvatar src={chat.avatar_url} bucket="avatars" path={chat.avatar_storage_path || undefined} nonce={chat.avatar_nonce} mime={chat.avatar_mime} fallback={safeChar(chat.display_name || chat.username)} className="w-full h-full object-cover" />
-                ) : (
-                  safeChar(chat.display_name || chat.username)
-                )}
+{chats.map((chat) => {
+          const isGroup = chat.type === 'group';
+          return (
+            <button
+              key={chat.id}
+              data-dropchat={chat.id}
+              onClick={() => onSelectChat(chat)}
+              className={cn(
+                "w-full flex items-center gap-3.5 p-3.5 rounded-2xl transition-all duration-300 relative group",
+                selectedChat?.id === chat.id ? "bg-primary/15" : "hover:bg-white/5"
+              )}
+            >
+              <div className="relative shrink-0">
+                <div
+                  className="w-14 h-14 rounded-full flex items-center justify-center text-primary font-bold text-base overflow-hidden shadow-md"
+                  style={{ backgroundColor: chat.avatar_color || "oklch(0.2 0.02 280)" }}
+                >
+                  {chat.avatar_url || chat.avatar_storage_path ? (
+                    <SecureAvatar src={chat.avatar_url} bucket="avatars" path={chat.avatar_storage_path || undefined} nonce={chat.avatar_nonce} mime={chat.avatar_mime} fallback={safeChar(chat.display_name || chat.username)} className="w-full h-full object-cover" />
+                  ) : (
+                    safeChar(isGroup ? chat.display_name : (chat.display_name || chat.username))
+                  )}
+                </div>
+                {!isGroup && onlineUsers.has(chat.id) && <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-background rounded-full shadow-[0_0_8px_rgba(34,197,94,0.6)]" />}
               </div>
-              {onlineUsers.has(chat.id) && <div className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-background rounded-full shadow-[0_0_8px_rgba(34,197,94,0.6)]" />}
-            </div>
-            <div className="flex-1 text-left min-w-0">
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-bold text-sm truncate group-hover:text-primary transition-colors">{chat.display_name || chat.username}</span>
-                <span className="text-[10px] font-mono text-muted-foreground/60 uppercase tracking-tighter">{formatRelativeTime(chat.lastMessageTime || new Date().toISOString())}</span>
+              <div className="flex-1 text-left min-w-0">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-sm truncate group-hover:text-primary transition-colors">
+                    {isGroup ? (chat.display_name || "Группа") : (chat.display_name || chat.username)}
+                  </span>
+                  <span className="text-[10px] font-mono text-muted-foreground/60 uppercase tracking-tighter">{formatRelativeTime(chat.lastMessageTime || new Date().toISOString())}</span>
+                </div>
+                <p className="text-xs text-muted-foreground line-clamp-1 font-medium">
+                  {isGroup ? (chat.lastMessage || "Группа создана") : (chat.lastMessage || `@${chat.username}`)}
+                </p>
               </div>
-              <p className="text-xs text-muted-foreground line-clamp-1 font-medium">{chat.lastMessage || `@${chat.username}`}</p>
-            </div>
-            {(chat.unreadCount ?? 0) > 0 && (
-              <div className="w-5 h-5 bg-primary rounded-full flex items-center justify-center text-[10px] font-bold text-primary-foreground shadow-sm">{chat.unreadCount}</div>
-            )}
-            {selectedChat?.id === chat.id && <div className="absolute left-0 top-3 bottom-3 w-1 bg-primary rounded-r-full" />}
-          </button>
-        ))}
+              {(chat.unreadCount ?? 0) > 0 && (
+                <div className="w-5 h-5 bg-primary rounded-full flex items-center justify-center text-[10px] font-bold text-primary-foreground shadow-sm">{chat.unreadCount}</div>
+              )}
+              {selectedChat?.id === chat.id && <div className="absolute left-0 top-3 bottom-3 w-1 bg-primary rounded-r-full" />}
+            </button>
+          );
+        })}
       </div>
 
       {/* ── 3. macOS Native Bottom Navigation Bar ── */}

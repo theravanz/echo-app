@@ -21,6 +21,7 @@ export interface UserProfile {
 
 export interface Chat {
   id: string;
+  type?: 'direct' | 'group';
   username?: string;
   display_name?: string;
   avatar_url?: string;
@@ -30,12 +31,17 @@ export interface Chat {
   avatar_mime?: string | null;
   bio?: string;
   public_key?: string;
+  creator_id?: string;
+  member_ids?: string[];
+  member_count?: number;
+  group_seed?: string | null;
+  msg_key_0?: string | null;
   lastMessage?: string | null;
   lastMessageType?: 'text' | 'sticker' | 'gif' | 'voice' | 'call_log' | 'file' | null;
   lastMessageTime?: string | null;
   last_seen?: string | null;
   unreadCount?: number;
-  /** Фон чата */
+  created_at?: string | null;
   wallpaper_preset?: 'solid' | 'doodle' | 'photo';
   wallpaper_photo_url?: string | null;
 }

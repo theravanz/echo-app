@@ -184,6 +184,11 @@ pub fn run() {
             crypto::crypto_restore_key,
             crypto::crypto_qr_ephemeral_keypair,
             crypto::crypto_qr_decrypt,
+            crypto::group_gen_seed,
+            crypto::group_seal_metadata,
+            crypto::group_seal_key_packet,
+            crypto::group_open_key_packet,
+            crypto::group_open_metadata,
             // Открытие файлов системным механизмом (мобильные):
             // Android → FileProvider + ACTION_VIEW chooser, iOS → QuickLook
             open_file_system,

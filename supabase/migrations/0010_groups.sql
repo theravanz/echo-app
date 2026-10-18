@@ -187,16 +187,16 @@ CREATE POLICY "no direct delete groups"
   USING (false);
 
 DROP POLICY IF EXISTS "members can read own memberships" ON public.group_members;
+-- ВАЖНО: НЕ самоопрашивать group_members внутри его же политики —
+-- Postgres уходит в бесконечную рекурсию (RLS → политика → RLS → …)
+-- и отдаёт 500 на каждый SELECT. Для списка чатов достаточно знать
+-- «в каких группах я состою» = user_id = auth.uid().
+-- Список всех участников группы (если понадобится) — через SECURITY DEFINER
+-- RPC, не через self-referencing политику.
 CREATE POLICY "members can read own memberships"
   ON public.group_members FOR SELECT
   TO authenticated
-  USING (
-    user_id = auth.uid()
-    OR EXISTS (
-      SELECT 1 FROM public.group_members m
-      WHERE m.group_id = group_members.group_id AND m.user_id = auth.uid()
-    )
-  );
+  USING (user_id = auth.uid());
 
 DROP POLICY IF EXISTS "no direct insert group_members" ON public.group_members;
 CREATE POLICY "no direct insert group_members"
