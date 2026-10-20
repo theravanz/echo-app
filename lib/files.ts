@@ -451,15 +451,27 @@ export async function uploadFileCipher(cipher: Uint8Array, remotePath: string): 
 
 // ─── Скачивание / открытие / сохранение ───
 
-async function downloadFileBytes(meta: FileMeta, keyUserId: string): Promise<Uint8Array> {
-  const pubkey = await getPublicKey(keyUserId);
-  if (!pubkey) throw new Error("Нет публичного ключа");
+async function downloadFileBytes(
+  meta: FileMeta,
+  keyUserId: string,
+  groupKeyB64?: string | null,
+): Promise<Uint8Array> {
   const { data: signed, error } = await supabase.storage.from(FILES_BUCKET).createSignedUrl(meta.path, 60 * 60);
   if (error || !signed?.signedUrl) throw new Error("Не удалось получить ссылку");
   const res = await fetch(signed.signedUrl);
   if (!res.ok) throw new Error(`Скачивание: ${res.status}`);
   const buf = new Uint8Array(await res.arrayBuffer());
   dbg("download: cipher", buf.length, "| v", meta.v, "| mime", meta.mime);
+
+  // Групповое медиа (v=3, AES-GCM через msg_key_0) — раньше всех веток.
+  if ((meta as any)?.v === 3 || (meta as any)?.enc === 'group') {
+    if (!groupKeyB64) throw new Error("Нет группового ключа");
+    const { decryptGroupBytes } = await import("@/lib/group-media");
+    return await decryptGroupBytes(buf, meta.nonce, groupKeyB64);
+  }
+
+  const pubkey = await getPublicKey(keyUserId);
+  if (!pubkey) throw new Error("Нет публичного ключа");
 
   try {
     // v:2 → СЫРЫЕ байты (raw-bytes IPC / json-вариант на Android).
@@ -485,14 +497,14 @@ const safeName = (n: string) => (n.replace(/[\\/:*?"<>|]/g, "_").trim().slice(0,
 const hash = (s: string) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) >>> 0; return h.toString(36); };
 
 /** Файл в кэше приложения; скачивает и расшифровывает при первом обращении. */
-export async function ensureCachedFile(meta: FileMeta, keyUserId: string): Promise<string> {
+export async function ensureCachedFile(meta: FileMeta, keyUserId: string, groupKeyB64?: string | null): Promise<string> {
   const ext = meta.name.includes(".") ? meta.name.slice(meta.name.lastIndexOf(".")) : "";
   const rel = `${CACHE_SUBDIR}/${safeName(meta.name.replace(/\.[^.]+$/, ""))}-${hash(meta.path)}${ext}`;
   const cached = await exists(rel, { baseDir: BaseDirectory.AppCache });
   dbg("[FILE-CACHE] exists:", cached, "| rel:", rel);
   if (!cached) {
     dbg("[FILE-CACHE] скачиваю...");
-    const bytes = await downloadFileBytes(meta, keyUserId);
+    const bytes = await downloadFileBytes(meta, keyUserId, groupKeyB64);
     dbg("[FILE-CACHE] скачано байт:", bytes.length);
     await mkdir(CACHE_SUBDIR, { baseDir: BaseDirectory.AppCache, recursive: true });
     await writeFile(rel, bytes, { baseDir: BaseDirectory.AppCache });
@@ -523,8 +535,8 @@ export function openPlatform(): OpenPlatform {
 }
 
 /** Открыть системным приложением (клик по файлу в чате). */
-export async function openFileMessage(meta: FileMeta, keyUserId: string): Promise<void> {
-  const rel = await ensureCachedFile(meta, keyUserId);
+export async function openFileMessage(meta: FileMeta, keyUserId: string, groupKeyB64?: string | null): Promise<void> {
+  const rel = await ensureCachedFile(meta, keyUserId, groupKeyB64);
   const dir = await appCacheDir();
   // Абсолютный путь: на мобильных его же отдаём в Rust-команду открытия.
   const abs = await join(dir, rel);

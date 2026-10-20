@@ -7,9 +7,12 @@ import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
 import { useContactAccentColor } from "@/hooks/echo/use-contact-accent";
 import { useProfileDetails } from "@/hooks/echo/use-profile-details";
+import { useGroupSenders } from "@/hooks/echo/use-group-senders";
+import { useGroupMembers } from "@/hooks/echo/use-group-members";
 import { ChatWallpaper, type WallpaperPreset } from "@/components/echo/app/chat-wallpaper";
 import { ChatBackgroundPicker } from "@/components/echo/app/chat-background-picker";
 import { ProfileViewPanel } from "@/components/echo/app/profile-view-panel";
+import { GroupProfilePanel } from "@/components/echo/app/group-profile-panel";
 import { MessageBubble, type UploadUiState } from "@/components/echo/app/message-bubble";
 import {
   encryptAndUploadFile,
@@ -21,6 +24,7 @@ import {
   MAX_FILE_BYTES,
   type FileUploadHandle,
 } from "@/lib/files";
+import { encryptAndUploadGroupFile } from "@/lib/group-upload";
 import { MessageContextMenu, type ContextMenuTarget } from "@/components/echo/app/message-context-menu";
 import { ChatInput } from "@/components/echo/app/chat-input";
 import { ChatHeader } from "@/components/echo/app/chat-header";
@@ -29,8 +33,10 @@ import {
   TbX as X,
   TbFingerprint as Fingerprint,
   TbLock as Lock,
+  TbLoader2 as Loader,
 } from "react-icons/tb";
 import type { UserProfile, Chat, Message, NetworkMode, AppTab, PendingMessage } from "@/hooks/echo/types";
+import { groupSenderColor } from "@/hooks/echo/types";
 import { deleteMessageMedia } from "@/lib/files";
 import { TbFileUpload } from "react-icons/tb";
 import { useFileDragDrop } from "@/hooks/echo/use-file-dragdrop";
@@ -92,7 +98,36 @@ export function ChatArea({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const accentColor = useContactAccentColor(selectedChat?.avatar_url || null, selectedChat?.avatar_color || null);
-  const { profile: viewedProfile } = useProfileDetails(isRightPanelOpen ? selectedChat?.id ?? null : null);
+  const isGroupChat = selectedChat?.type === 'group';
+  // Групповые отправители (ник+ава слева) и участники с ролями.
+  // useGroupSenders — батч profiles по sender_id сообщений этого чата.
+  // useGroupMembers — состав + myRole для будущего профиля группы.
+  const { senders: groupSenders, displayName: groupSenderName } = useGroupSenders(
+    selectedChat?.id ?? null,
+    !!isGroupChat,
+    messages,
+    user?.id,
+  );
+  const groupMembersState = useGroupMembers(
+    isGroupChat ? selectedChat?.id ?? null : null,
+    !!isGroupChat,
+    user?.id,
+  );
+  const groupKeyB64 = isGroupChat ? (selectedChat?.msg_key_0 ?? null) : null;
+  // Профиль, открытый ПО КЛИКУ на аватарку/ник отправителя в чате
+  // (любой участник группы, не только собеседник DM). null = дефолт
+  // панели: группа → GroupProfilePanel, DM → профиль selectedChat.id.
+  const [profileViewUserId, setProfileViewUserId] = useState<string | null>(null);
+  // Смена чата — сбрасываем открытый профиль участника (иначе панель
+  // показывала бы профиль человека из предыдущего чата).
+  useEffect(() => { setProfileViewUserId(null); }, [selectedChat?.id]);
+  // Профиль справа: у групп — БУДУЩИЙ GroupProfilePanel (см. ниже),
+  // у DM — прежний ProfileViewPanel по userId собеседника.
+  const { profile: viewedProfile } = useProfileDetails(
+    isRightPanelOpen
+      ? (profileViewUserId ?? (!isGroupChat ? selectedChat?.id ?? null : null))
+      : null,
+  );
 
   const [chatWallpaper, setChatWallpaper] = useState<{ preset: WallpaperPreset; photoUrl: string | null }>({
     preset: (selectedChat as any)?.wallpaper_preset || 'solid',
@@ -197,7 +232,32 @@ export function ChatArea({
         setMessages(prev => insertByCreatedAt(prev, optimistic));
       }
 
-      const handle = encryptAndUploadFile(user.id, receiverId, file, {
+      // ГРУППА: файлы шифруем симметрично через msg_key_0 (AES-GCM, Web Crypto) —
+      // NaCl box под один публичный ключ здесь не подходит (получателей N).
+      // Мета v=3/enc='group', путь "<groupId>/group-<ts>.enc".
+      const groupChat = chats.find(c => c.id === receiverId && c.type === 'group');
+      const groupKey = groupChat?.msg_key_0 ?? null;
+      if (groupChat && !groupKey) {
+        toast.error("Нет группового ключа — откройте группу заново");
+        return;
+      }
+
+      const handle = groupChat && groupKey
+        ? encryptAndUploadGroupFile(user.id, receiverId, groupKey, file, {
+          onProgress: (loaded, total) => {
+            if (inView) setUploadStates(prev => new Map(prev).set(localId, { status: "uploading", loaded, total }));
+          },
+          onStatus: (s) => {
+            if (!inView) return;
+            setUploadStates(prev => {
+              const n = new Map(prev);
+              const cur = n.get(localId) ?? { status: "uploading" as const, loaded: 0, total: 0 };
+              n.set(localId, { ...cur, status: s });
+              return n;
+            });
+          },
+        })
+        : encryptAndUploadFile(user.id, receiverId, file, {
         onProgress: (loaded, total) => {
           if (inView) setUploadStates(prev => new Map(prev).set(localId, { status: "uploading", loaded, total }));
         },
@@ -312,8 +372,13 @@ export function ChatArea({
     const meta = parseFileMeta(msg?.content);
     if (!meta || !meta.path) return; // ещё льётся — открывать нечего
     const keyUserId = keyUserFor(msg, meta.to, user.id);
+    // Групповое медиа (v=3/enc=group): ключ — msg_key_0 открытого чата,
+    // а не DH второй стороны.
+    const gKey = ((meta as any)?.v === 3 || (meta as any)?.enc === 'group')
+      ? (selectedChat?.type === 'group' ? selectedChat.msg_key_0 ?? null : null)
+      : null;
     try {
-      await openFileMessage(meta, keyUserId);
+      await openFileMessage(meta, keyUserId, gKey);
     } catch (e) {
       console.error("[FILE] open failed:", e);
       toast.error("Не удалось открыть файл");
@@ -367,15 +432,22 @@ export function ChatArea({
           isOnline={selectedChat ? onlineUsers.has(selectedChat.id) : false}
           lastSeenLabel={selectedChat?.last_seen ? formatRelativeTime(selectedChat.last_seen) : null}
           onBack={onBack}
-          onOpenProfile={() => setIsRightPanelOpen(true)}
+          onOpenProfile={() => { setProfileViewUserId(null); setIsRightPanelOpen(true); }}
           onOpenBgPicker={() => setBgPickerOpen(true)}
           onClearChat={async () => {
             if (!selectedChat || !user) return;
-            await supabase.from("messages").delete().or(
-              `and(sender_id.eq.${user.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${user.id})`
-            );
+            // Группа: удаляем только СВОИ сообщения (RLS и так не даст
+            // чужие) — фильтр receiver_id = groupId + sender_id = me.
+            // DM — прежний двунаправленный фильтр.
+            const q = selectedChat.type === 'group'
+              ? supabase.from("messages").delete()
+                .eq("receiver_id", selectedChat.id).eq("sender_id", user.id)
+              : supabase.from("messages").delete().or(
+                `and(sender_id.eq.${user.id},receiver_id.eq.${selectedChat.id}),and(sender_id.eq.${selectedChat.id},receiver_id.eq.${user.id})`
+              );
+            await q;
             setMessages([]);
-            toast.success("Чат очищен");
+            toast.success(selectedChat.type === 'group' ? "Ваши сообщения удалены" : "Чат очищен");
           }}
         />
 
@@ -414,6 +486,8 @@ export function ChatArea({
                 const currentId = msg?.id || (msg as any)?.temp_id;
                 const isTarget = Boolean(targetId) && String(currentId) === String(targetId);
                 const isDimmed = Boolean(contextMenu) && !isTarget;
+                // Группа: ник/ава отправителя слева (свои — справа без авы, isMe).
+                const gProfile = isGroupChat && !isMe ? groupSenders.get(msg.sender_id) : null;
 
                 return (
                   <MessageBubble
@@ -427,6 +501,21 @@ export function ChatArea({
                     onEdit={(m) => { setEditingMessageSafe(m); setNewMessage(m.content); textareaRef.current?.focus(); }}
                     onMentionClick={onMentionClick}
                     isDimmed={isDimmed}
+                    groupSenderName={gProfile ? groupSenderName(msg.sender_id) : null}
+                    groupSenderColor={gProfile?.avatar_color ?? (gProfile ? groupSenderColor(msg.sender_id) : null)}
+                    groupSenderAvatar={gProfile ? {
+                      src: gProfile.avatar_url,
+                      path: gProfile.avatar_storage_path,
+                      nonce: gProfile.avatar_nonce,
+                      mime: gProfile.avatar_mime,
+                      color: gProfile.avatar_color,
+                      fallback: (gProfile.display_name || gProfile.username || "?").slice(0, 1).toUpperCase(),
+                    } : null}
+                    groupKeyB64={groupKeyB64}
+                    onOpenSenderProfile={(senderId) => {
+                      setProfileViewUserId(senderId);
+                      setIsRightPanelOpen(true);
+                    }}
                     onContextMenu={(e, msg, isMine, rect) => {
                       e.preventDefault();
                       setContextMenu({ message: msg, isMine, anchorRect: rect });
@@ -514,6 +603,68 @@ export function ChatArea({
                 onGifSelect={() => {}}
               />
             </div>
+          </motion.aside>
+        ) : selectedChat && isRightPanelOpen && profileViewUserId ? (
+          <motion.aside
+            key="sender-profile-panel"
+            initial={isMobile ? { x: "100%", opacity: 0 } : { x: 100, opacity: 0, filter: "blur(10px)" }}
+            animate={{ x: 0, opacity: 1, filter: "blur(0px)" }}
+            exit={isMobile ? { x: "100%", opacity: 0 } : { x: 100, opacity: 0, filter: "blur(10px)" }}
+            transition={{ type: "spring", damping: 30, stiffness: 300, mass: 0.8 }}
+            className={cn(
+              "flex flex-col z-40 shrink-0",
+              isMobile ? "fixed inset-0 w-full h-full safe-top safe-bottom bg-[#0a0a0d]" : "border-l border-white/5 relative w-96"
+            )}
+          >
+            {/* Профиль участника, открытый кликом по аватарке/нику в чате.
+                Пока данные грузятся — спиннер (иначе на мобильном мелькал бы
+                профиль группы под профилем участника). */}
+            {viewedProfile ? (
+              <ProfileViewPanel
+                profile={{
+                  ...viewedProfile,
+                  is_online: onlineUsers.has(profileViewUserId),
+                  last_seen_label: formatRelativeTime(selectedChat.lastMessageTime || new Date().toISOString()),
+                }}
+                onClose={() => { setProfileViewUserId(null); }}
+                onMuteToggle={() => {}}
+                onCall={() => onCall(false)}
+                onVideoCall={() => onCall(true)}
+                onBlock={async () => {
+                  await supabase.from("blocks").insert({ blocker_id: user?.id, blocked_id: profileViewUserId });
+                }}
+                onReport={() => {}}
+                onClearHistory={() => {}}
+              />
+            ) : (
+              <div className="flex-1 flex items-center justify-center">
+                <Loader className="w-6 h-6 text-zinc-500 animate-spin" />
+              </div>
+            )}
+          </motion.aside>
+        ) : selectedChat && isRightPanelOpen && isGroupChat ? (
+          <motion.aside
+            key="group-profile-panel"
+            initial={isMobile ? { x: "100%", opacity: 0 } : { x: 100, opacity: 0, filter: "blur(10px)" }}
+            animate={{ x: 0, opacity: 1, filter: "blur(0px)" }}
+            exit={isMobile ? { x: "100%", opacity: 0 } : { x: 100, opacity: 0, filter: "blur(10px)" }}
+            transition={{ type: "spring", damping: 30, stiffness: 300, mass: 0.8 }}
+            className={cn(
+              "flex flex-col z-40 shrink-0",
+              isMobile ? "fixed inset-0 w-full h-full safe-top safe-bottom bg-[#0a0a0d]" : "border-l border-white/5 relative w-96"
+            )}
+          >
+            {/* ПРОФИЛЬ ГРУППЫ: шапка/состав/роли + ТОЧКИ ДЛЯ настроек
+                (настройки = твоя часть: имя/ава, участники, админы, кик). */}
+            <GroupProfilePanel
+              chat={selectedChat}
+              myId={user?.id ?? null}
+              members={groupMembersState.members}
+              myRole={groupMembersState.myRole}
+              isOwner={groupMembersState.isOwner}
+              isAdmin={groupMembersState.isAdmin}
+              onClose={() => { setProfileViewUserId(null); setIsRightPanelOpen(false); }}
+            />
           </motion.aside>
         ) : selectedChat && isRightPanelOpen && viewedProfile && (
           <motion.aside
