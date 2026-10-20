@@ -12,7 +12,7 @@ import { useGroupMembers } from "@/hooks/echo/use-group-members";
 import { ChatWallpaper, type WallpaperPreset } from "@/components/echo/app/chat-wallpaper";
 import { ChatBackgroundPicker } from "@/components/echo/app/chat-background-picker";
 import { ProfileViewPanel } from "@/components/echo/app/profile-view-panel";
-import { GroupProfilePanel } from "@/components/echo/app/group-profile-panel";
+import { GroupProfilePanel } from "@/components/echo/app/group-profile";
 import { MessageBubble, type UploadUiState } from "@/components/echo/app/message-bubble";
 import {
   encryptAndUploadFile,
