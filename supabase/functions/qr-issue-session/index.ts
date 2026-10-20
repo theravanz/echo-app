@@ -35,12 +35,6 @@ Deno.serve(async (req: Request) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
-    if (!user.email) {
-      return new Response(JSON.stringify({ error: 'Account has no email on file' }), {
-        status: 422,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
 
     // Service-role клиент — ТОЛЬКО внутри Edge Function, ключ никогда не уходит наружу.
     const adminClient = createClient(
@@ -48,9 +42,33 @@ Deno.serve(async (req: Request) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
 
+    // Email может отсутствовать у phone-аккаунтов. Для выдачи НЕЗАВИСИМОЙ
+    // сессии второму устройству через generateLink({ type: 'magiclink' })
+    // нужен email — поэтому phone-аккаунту проставляем детерминированный
+    // shadow-email (один раз, идемпотентно) и выпускаем тикет уже на него.
+    // Shadow-домен echo-qr.local никуда не доставляет письма: тикет
+    // потребляется только через verifyOtp({ token_hash }) на втором
+    // устройстве, отправка email не выполняется вообще.
+    let ticketEmail = user.email;
+    if (!ticketEmail) {
+      const hexId = user.id.replace(/-/g, '').toLowerCase();
+      ticketEmail = `u_${hexId}@echo-qr.local`;
+      const { error: updErr } = await adminClient.auth.admin.updateUserById(user.id, {
+        email: ticketEmail,
+        email_confirm: true,
+      });
+      if (updErr) {
+        console.error('[qr-issue-session] shadow email update failed:', updErr);
+        return new Response(JSON.stringify({ error: 'Failed to prepare account for QR login' }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
     const { data: linkData, error: linkErr } = await adminClient.auth.admin.generateLink({
       type: 'magiclink',
-      email: user.email,
+      email: ticketEmail,
     });
     if (linkErr || !linkData) {
       console.error('[qr-issue-session] generateLink failed:', linkErr);
@@ -60,11 +78,14 @@ Deno.serve(async (req: Request) => {
       });
     }
 
-    // Отдаём только token_hash — не полный action_link (там email как plaintext).
+    // Отдаём только token_hash + email тикета — не полный action_link
+    // (там email как plaintext). Десктоп гасит тикет через
+    // verifyOtp({ token_hash, type: 'email' }) и получает СВОЮ пару
+    // access/refresh — независимую от сессии телефона.
     return new Response(
       JSON.stringify({
         token_hash: linkData.properties.hashed_token,
-        email: user.email,
+        email: ticketEmail,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );

@@ -85,12 +85,19 @@ async function ensureSessionFresh(client: SupabaseClient, reason: string): Promi
     const { error } = await client.auth.refreshSession();
     if (error) {
       console.warn(`[SupabaseAuth] ${reason}: refresh failed:`, error.message);
-      // 400/401 = refresh-токен невалиден (протух/отозван) — сессия мертва,
-      // чистим локально, чтобы не висеть «залогиненным» с нерабочим токеном.
+      // 400/401 = refresh-токен невалиден (протух/отозван). Отдельный случай —
+      // refresh_token_already_used: этот refresh-токен уже погашен ДРУГИМ
+      // устройством (legacy QR-шаринг одной пары токенов на телефон+ПК при
+      // rotation=true: кто первый обновился, тот и забрал цепочку).
+      // Во всех этих случаях локальный signOut НЕ делаем: сессия второго
+      // устройства может быть жива, а нас выкинет в /auth посреди работы.
+      // Вместо разлогина — оставляем сессию как есть (access ещё может
+      // действовать до expires_at) и даём следующему refresh/watchdog
+      // попробовать снова. Полный выход — только по явному Logout.
+      const msg = `${error.message ?? ''} ${(error as { code?: string })?.code ?? ''}`.toLowerCase();
       const status = (error as { status?: number })?.status;
-      if (status === 400 || status === 401) {
-        try { await client.auth.signOut({ scope: "local" }); } catch { /* ignore */ }
-        console.warn(`[SupabaseAuth] ${reason}: refresh token invalid, local session cleared`);
+      if (status === 400 || status === 401 || msg.includes('already_used') || msg.includes('already used') || msg.includes('invalid refresh token')) {
+        console.warn(`[SupabaseAuth] ${reason}: refresh token unusable (reuse/expired), keep local session, no sign-out`);
       }
     } else {
       console.log(`[SupabaseAuth] ${reason}: session refreshed`);
