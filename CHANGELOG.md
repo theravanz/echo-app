@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+### Исправлено
+
+- **QR-вход: `refresh_token_already_used` на втором устройстве** (`supabase/functions/qr-issue-session/index.ts`, `components/echo/app/qr-login-scanner.tsx`, `app/auth/page.tsx`, `app/auth/qr/page.tsx`, `lib/db.ts`):
+  - причина — телефон и ПК делили ОДНУ пару `access/refresh`: сканер клал текущие токены мобилки в E2EE-конверт, десктоп делал `setSession()` на них же; при `enable_refresh_token_rotation=true` кто первый обновился — тот и забирал цепочку, второй получал `400 Already Used` и вылетал;
+  - теперь QR выпускает ПК НЕЗАВИСИМУЮ сессию: сканер зовёт `qr-issue-session`, кладёт в конверт одноразовый `token_hash`, десктоп гасит его через `verifyOtp({ token_hash, type: 'email' })` и получает свою пару токенов; общий refresh больше не шарится;
+  - `qr-issue-session` чинит phone-аккаунты без email: проставляет детерминированный shadow-email `u_<hexid>@echo-qr.local` (идемпотентно, `updateUserById`, письма никуда не шлются) и выпускает тикет уже на него;
+  - второй путь (`login_challenges`) — тоже тикет вместо полного `session` (заодно не храним refresh-токен в таблице, читаемой по токену);
+  - watchdog (`lib/db.ts`) при `Already Used` / невалидном refresh больше НЕ делает локальный `signOut` (раньше выкидывал в `/auth` посреди работы) — только warn, ждём следующий цикл;
+  - обратно совместимо: старый конверт `{ access_token, refresh_token }` (мобилка на старой сборке) десктоп по-прежнему принимает через `setSession`.
+  - ⚠️ после деплоя функции уже пострадавшие пары (расшаренный токен) надо перелогинить по QR один раз — дальше сессии независимые.
+
 ## [0.3.2] - 2026-10-16 - 2026-10-18
 
 ### Добавлено

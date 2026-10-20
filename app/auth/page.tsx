@@ -243,8 +243,12 @@ function AuthPageContent() {
     })();
 
     // 3) Завершение обмена: расшифровать E2EE-ключ (в Rust), авторизовать.
-    //    Конверт: { e2eeKey: <base64 32B>, session?: <supabase session> }.
+    //    Конверт: { e2eeKey: <base64 32B>, session?: { ticket?: { token_hash, email } } }.
+    //    Десктоп гасит одноразовый тикет через verifyOtp и получает СВОЮ
+    //    пару access/refresh — независимую от телефона (фикс Already Used).
     //    Фолбэк: сырой 32-байтовый ключ, если мобилка не прислала JSON.
+    //    Legacy-фолбэк: старый конверт { access_token, refresh_token }
+    //    (мобилка на старой сборке) — принимаем через setSession как раньше.
     const completeExchange = async (
       mobPubKeyHex: string,
       encryptedHex: string,
@@ -260,11 +264,13 @@ function AuthPageContent() {
         const plaintext = b64ToBytes(decRes.plaintext);
 
         let e2eeKeyB64 = '';
-        let session: { access_token?: string; refresh_token?: string } | null = null;
+        let ticket: { token_hash?: string; email?: string } | null = null;
+        let legacySession: { access_token?: string; refresh_token?: string } | null = null;
         try {
           const env = JSON.parse(new TextDecoder().decode(plaintext));
           e2eeKeyB64 = env.e2eeKey;
-          session = env.session ?? null;
+          ticket = env.session?.ticket ?? null;
+          if (env.session?.access_token) legacySession = env.session;
         } catch {
           // Сырой 32-байтовый E2EE-ключ (plaintext и есть ключ в base64).
           e2eeKeyB64 = decRes.plaintext;
@@ -274,11 +280,30 @@ function AuthPageContent() {
         // Ключ передаётся в Rust KeyStore — он не пишется в localStorage/SQLite/JS.
         await invoke('crypto_set_key', { secretKeyB64: e2eeKeyB64 });
 
-        // Восстанавливаем Supabase-сессию, если она пришла в конверте.
-        if (session?.access_token && session?.refresh_token) {
+        // Гасим тикет в НЕЗАВИСИМУЮ сессию этого устройства.
+        if (ticket?.token_hash) {
+          const verifyParams: { token_hash: string; type: 'email'; email?: string } = {
+            token_hash: ticket.token_hash,
+            type: 'email',
+          };
+          if (ticket.email) verifyParams.email = ticket.email;
+          const { data, error } = await supabase.auth.verifyOtp(verifyParams as any);
+          if (error) throw error;
+          const sbSession = data.session ?? (await supabase.auth.getSession()).data.session;
+          if (!sbSession) throw new Error('Не удалось получить сессию');
+          await persistSession(sbSession).catch(() => {});
+          // Phase 0: персистим принятый E2EE-ключ device-bound (Rust), если есть user id.
+          if (sbSession?.user?.id) {
+            await invoke('crypto_persist_key', { userId: sbSession.user.id }).catch((e) =>
+              console.error('[QR] persist E2EE key failed:', e)
+            );
+          }
+          setIsExistingUser(!!sbSession?.user?.user_metadata?.e2ee_initialized);
+        } else if (legacySession?.access_token && legacySession?.refresh_token) {
+          // Legacy: мобилка на старой сборке прислала свои токены напрямую.
           const { error } = await supabase.auth.setSession({
-            access_token: session.access_token,
-            refresh_token: session.refresh_token,
+            access_token: legacySession.access_token,
+            refresh_token: legacySession.refresh_token,
           });
           if (error) throw error;
           const { data: { session: sbSession } } = await supabase.auth.getSession();

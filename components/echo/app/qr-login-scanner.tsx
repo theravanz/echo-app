@@ -62,18 +62,24 @@ const handleQrFound = useCallback(async (raw: string) => {
         return;
       }
 
-      // Сессия для нового устройства: передаём ТЕКУЩИЕ токены мобилки
-      // (access_token + refresh_token) внутри зашифрованного конверта.
-      // Десктоп вызовет setSession() и получит собственную сессию.
-      // Почему не qr-issue-session: она выпускает magiclink token_hash через
-      // generateLink({ email }), а у phone-аккаунтов email НЕТ вообще (422),
-      // да и десктоп такой конверт принять не может — setSession требует
-      // именно access_token/refresh_token. Прямая передача работает
-      // одинаково для email- и phone-пользователей; конверт зашифрован
-      // SalsaBox, сервер видит только ciphertext.
+      // НЕЗАВИСИМАЯ сессия для нового устройства (фикс Already Used):
+      // выпускаем через qr-issue-session одноразовый magiclink-тикет
+      // (token_hash) и кладём в конверт ЕГО, а не текущие токены мобилки.
+      // Десктоп погасит тикет через verifyOtp({ token_hash, type: 'email' })
+      // и получит СВОЮ пару access/refresh. Общий refresh-токен больше
+      // не шарится → гонки rotation нет, оба устройства живут независимо.
+      // Работает и для phone-аккаунтов: функция сама проставит shadow-email.
+      const { data: issued, error: issueErr } = await supabase.functions.invoke('qr-issue-session');
+      if (issueErr || !issued?.token_hash) {
+        setError(issueErr?.message || "Не удалось выпустить сессию для нового устройства");
+        setStatus("error");
+        return;
+      }
       const sessionData = {
-        access_token: mobileSession.access_token,
-        refresh_token: mobileSession.refresh_token,
+        ticket: {
+          token_hash: issued.token_hash as string,
+          email: issued.email as string | undefined,
+        },
       };
 
       // ВАЖНО: Rust-рантайм Tauri НЕ видит NEXT_PUBLIC_* env (они вшиты

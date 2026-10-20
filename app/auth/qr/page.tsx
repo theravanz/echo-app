@@ -71,12 +71,23 @@ function QrLoginContent() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.user) throw new Error("Нет авторизации");
 
+      // НЕЗАВИСИМАЯ сессия для нового устройства (фикс Already Used):
+      // выпускаем одноразовый magiclink-тикет и кладём в challenge ЕГО,
+      // а не текущие токены этого устройства. Второе устройство погасит
+      // тикет через verifyOtp({ token_hash, type: 'email' }) и получит
+      // СВОЮ пару access/refresh. Плюс не храним refresh-токен в таблице,
+      // читаемой по токену (RLS "Anyone with token can read challenge").
+      const { data: issued, error: issueErr } = await supabase.functions.invoke('qr-issue-session');
+      if (issueErr || !issued?.token_hash) {
+        throw new Error(issueErr?.message || "Не удалось выпустить сессию для нового устройства");
+      }
+
       const { error } = await supabase
         .from("login_challenges")
         .update({
           status: "approved",
           user_id: session.user.id,
-          session_data: session,
+          session_data: { ticket: { token_hash: issued.token_hash, email: issued.email } },
           device_info: { label: deviceLabel, approved_at: new Date().toISOString() },
           updated_at: new Date().toISOString(),
         })
