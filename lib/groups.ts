@@ -62,11 +62,21 @@ function utf8ToB64(s: string): string {
   return bytesToBase64(bytes);
 }
 
-/** Загрузить аватара группы: compressAvatar → encryptBlob → приватный bucket. */
-async function uploadGroupAvatar(groupId: string, file: File): Promise<string> {
+/** Загрузить аватара группы: compressAvatar → encryptBlob → приватный bucket.
+ *
+ * ВАЖНО (RLS storage.objects, 0007): INSERT требует первый сегмент пути =
+ * auth.uid() создателя, поэтому путь "<creatorId>/g_<groupId>/avatar-…enc".
+ * Возвращает path + nonce — оба уходят в зашифрованные метаданные группы,
+ * иначе SecureAvatar не расшифрует (AES-GCM конверт требует nonce).
+ */
+async function uploadGroupAvatar(
+  creatorId: string,
+  groupId: string,
+  file: File,
+): Promise<{ path: string; nonce: string }> {
   const compressed = await compressAvatar(file);
   const env = await encryptBlob(compressed);
-  const path = `groups/${groupId}/avatar-${Date.now()}.enc`;
+  const path = `${creatorId}/g_${groupId}/avatar-${Date.now()}.enc`;
   const { error } = await supabase.storage
     .from("avatars")
     .upload(
@@ -77,7 +87,7 @@ async function uploadGroupAvatar(groupId: string, file: File): Promise<string> {
   if (error) throw error;
   // Тот же формат ссылки, что у аватаров профиля: расшифровка через
   // SecureAvatar/SecureImage по (bucket, path, nonce, mime).
-  return path;
+  return { path, nonce: env.nonce };
 }
 
 
@@ -108,10 +118,14 @@ export async function createStandardGroup(input: GroupCreateInput): Promise<Grou
 
   // 1. Аватар → приватный bucket (тот же конвейер, что у аватаров профиля:
   //    compressAvatar → encryptBlob/AES-256-GCM → upload .enc).
+  //    nonce сохраняется в метаданные — без него SecureAvatar не расшифрует.
   let avatarPath = "";
+  let avatarNonce = "";
   if (input.avatarFile) {
     try {
-      avatarPath = await uploadGroupAvatar(groupId, input.avatarFile);
+      const av = await uploadGroupAvatar(input.creatorId, groupId, input.avatarFile);
+      avatarPath = av.path;
+      avatarNonce = av.nonce;
     } catch (e) {
       throw new Error(`Не удалось загрузить фото группы: ${(e as Error)?.message ?? e}`);
     }
@@ -128,8 +142,13 @@ export async function createStandardGroup(input: GroupCreateInput): Promise<Grou
     throw new Error("group_gen_seed вернул пустой бандл (E2EE-ключ не загружен?)");
   }
 
-  // 3. Метаданные { name, bio, avatar_url } → Info_Key (XSalsa20-Poly1305).
-  const metadataJson = JSON.stringify({ name, bio: input.bio.trim(), avatar_url: avatarPath });
+  // 3. Метаданные { name, bio, avatar_url, avatar_nonce } → Info_Key (XSalsa20-Poly1305).
+  const metadataJson = JSON.stringify({
+    name,
+    bio: input.bio.trim(),
+    avatar_url: avatarPath,
+    avatar_nonce: avatarNonce,
+  });
   let sealedMeta: GroupSealedBox;
   try {
     sealedMeta = await invoke<GroupSealedBox>("group_seal_metadata", {
@@ -220,13 +239,14 @@ export async function openGroupKeyPacket(
   });
 }
 
-/** Расшифровать метаданные группы (Info_Key → XSalsa20-Poly1305). */
+/** Расшифровать метаданные группы (Info_Key → XSalsa20-Poly1305).
+ * avatar_url = путь в bucket avatars, avatar_nonce — для SecureAvatar. */
 export async function openGroupMetadata(
   infoKeyB64: string,
   senderPubB64: string,
   metadataCtB64: string,
   nonceB64: string,
-): Promise<{ name: string; bio: string; avatar_url: string }> {
+): Promise<{ name: string; bio: string; avatar_url: string; avatar_nonce?: string }> {
   const json = await invoke<string>("group_open_metadata", {
     infoKeyB64,
     senderPubB64,

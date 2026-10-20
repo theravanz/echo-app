@@ -11,6 +11,9 @@ export function useProfileDetails(userId: string | null) {
     if (!userId) { setProfile(null); return; }
     let cancelled = false;
     setLoading(true);
+    // Сбрасываем прошлый профиль: иначе при смене userId на экране
+    // мгновенно показывались бы данные предыдущего человека.
+    setProfile(null);
 
     (async () => {
       const [{ data: p }, { data: channel }, { data: gifts }, { data: pubs }] = await Promise.all([

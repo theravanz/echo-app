@@ -163,13 +163,28 @@ export async function uploadVoiceCipher(cipher: Uint8Array, remotePath: string):
 }
 
 /** Расшифровать голосовое и получить blob: URL (с кэшем). */
-export function loadVoiceUrl(meta: VoiceMeta, senderId: string): Promise<string | null> {
+export function loadVoiceUrl(meta: VoiceMeta, senderId: string, groupKeyB64?: string | null): Promise<string | null> {
   const key = `${VOICE_BUCKET}/${meta.path}`;
   const cached = voiceUrlCache.get(key);
   if (cached) return cached;
 
   const pending = (async (): Promise<string | null> => {
     try {
+      // Групповое голосовое (v=3, AES-GCM через msg_key_0) — раньше DH-ветки.
+      if ((meta as any)?.v === 3 || (meta as any)?.enc === 'group') {
+        if (!groupKeyB64) { console.warn("[VOICE-DL] group voice без ключа"); return null; }
+        const { decryptGroupBytes } = await import("@/lib/group-media");
+        const { data: signed, error: signErr } = await supabase.storage
+          .from(VOICE_BUCKET)
+          .createSignedUrl(meta.path, 60 * 60);
+        if (signErr || !signed?.signedUrl) { console.warn("[VOICE-DL] group signedUrl:", signErr?.message); return null; }
+        const res = await fetch(signed.signedUrl);
+        if (!res.ok) { console.warn("[VOICE-DL] group fetch:", res.status); return null; }
+        const buf = new Uint8Array(await res.arrayBuffer());
+        const plain = await decryptGroupBytes(buf, meta.nonce, groupKeyB64);
+        return URL.createObjectURL(new Blob([plain as unknown as BlobPart], { type: meta.mime }));
+      }
+
       const pubkey = await getPublicKey(senderId);
       if (!pubkey) { console.warn("[VOICE-DL] 1. нет public_key у", senderId); return null; }
 

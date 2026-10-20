@@ -99,7 +99,7 @@ async function buildGroupChats(userId: string, signal: AbortSignal): Promise<Cha
       }
       if (!creatorPublicKey) return null;
 
-      let meta: { name?: string; bio?: string; avatar_url?: string };
+      let meta: { name?: string; bio?: string; avatar_url?: string; avatar_nonce?: string };
       try {
         meta = await openGroupMetadata(keys.info_key, creatorPublicKey, g.encrypted_metadata, g.metadata_nonce);
       } catch (e) {
@@ -114,8 +114,8 @@ async function buildGroupChats(userId: string, signal: AbortSignal): Promise<Cha
         display_name: meta.name || "Группа",
         bio: meta.bio || "",
         avatar_storage_path: meta.avatar_url || null,
-        avatar_nonce: null,
-        avatar_mime: null,
+        avatar_nonce: meta.avatar_nonce || null,
+        avatar_mime: meta.avatar_url ? "image/webp" : null,
         group_seed: keys.seed,
         msg_key_0: keys.msg_key_0, // ← Сохраняем msg_key_0
         member_count: memberCountMap.get(g.id) || 1,

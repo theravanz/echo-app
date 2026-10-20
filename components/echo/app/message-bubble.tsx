@@ -38,6 +38,22 @@ interface MessageBubbleProps {
   onFileOpen?: (msg: any) => void;
   onFileCancel?: (msg: any) => void;
   onFileResume?: (msg: any) => void;
+  // ── Группа: профиль отправителя (ник + ава). Свои сообщения — справа
+  // без авы (isMe), чужие — слева с авой и цветным ником (Telegram-style).
+  groupSenderName?: string | null;
+  groupSenderColor?: string | null;
+  groupSenderAvatar?: {
+    src?: string | null;
+    path?: string | null;
+    nonce?: string | null;
+    mime?: string | null;
+    color?: string | null;
+    fallback?: string;
+  } | null;
+  /** Групповой ключ (msg_key_0) — для расшифровки v=3 медиа внутри пузыря. */
+  groupKeyB64?: string | null;
+  /** Клик по аватарке/нику отправителя → открыть его профиль. */
+  onOpenSenderProfile?: (senderId: string) => void;
 }
 
 // --- Helpers ---
@@ -263,10 +279,12 @@ function FileBubble({ msg, isMe, upload, onOpen, onCancel, onResume, onContextMe
   );
 }
 
-function VoiceBubble({ msg, isMe, recipientId, pending, onContextMenu, innerRef }: {
+function VoiceBubble({ msg, isMe, recipientId, groupKeyB64, pending, onContextMenu, innerRef }: {
   msg: any;
   isMe: boolean;
   recipientId: string;
+  /** Групповой ключ (msg_key_0) — для v=3 голосовых. */
+  groupKeyB64?: string | null;
   /** Сообщение ещё не улетело (pending/queue) — играть нечего. */
   pending?: boolean;
   onContextMenu?: (e: React.MouseEvent) => void;
@@ -291,7 +309,7 @@ function VoiceBubble({ msg, isMe, recipientId, pending, onContextMenu, innerRef 
     if (!url) {
       if (!meta) return;
       setLoading(true);
-      const u = await loadVoiceUrl(meta, recipientId);
+      const u = await loadVoiceUrl(meta, recipientId, groupKeyB64);
       setLoading(false);
       if (!u) return;
       setUrl(u);
@@ -423,7 +441,9 @@ function ImageBubble({ msg, onContextMenu, innerRef }: { msg: any; onContextMenu
 
 export const MessageBubble = memo(({
   msg, isMe, showAvatar, activeChat, user, onReply, onEdit, onContextMenu, onMentionClick, isDimmed,
-  uploadState, onFileOpen, onFileCancel, onFileResume
+  uploadState, onFileOpen, onFileCancel, onFileResume,
+  groupSenderName, groupSenderColor, groupSenderAvatar, groupKeyB64,
+  onOpenSenderProfile,
 }: MessageBubbleProps) => {
   const bubbleRef = useRef<HTMLDivElement>(null);
   const isJumbo = isJumboEmoji(msg.content, msg.type);
@@ -509,7 +529,7 @@ export const MessageBubble = memo(({
     const filePending = Boolean(msg?._pending) || isPendingStatus(msg?.status);
     const isAudio = Boolean(meta?.mime?.startsWith("audio/") && meta?.path && !filePending);
     // Ключ = вторая сторона DH (как в handleFileOpen у chat-area):
-    // свои → meta.to, входящие → sender_id.
+    // свои → meta.to, входящие → sender_id. Групповое (v=3) — groupKeyB64.
     const fileKeyUserId = keyUserFor(msg, meta?.to, user?.id);
     return (
       <div ref={bubbleRef} onContextMenu={handleContextMenu}
@@ -521,7 +541,7 @@ export const MessageBubble = memo(({
         )}>
         <div className={cn("flex flex-col min-w-0 max-w-full", isMe ? "items-end" : "items-start")}>
           {isAudio && meta && !uploadState ? (
-            <AudioFileBubble meta={meta} isMe={isMe} keyUserId={fileKeyUserId} />
+            <AudioFileBubble meta={meta} isMe={isMe} keyUserId={fileKeyUserId} groupKeyB64={groupKeyB64} />
           ) : (
             <FileBubble msg={msg} isMe={isMe} upload={uploadState}
               onOpen={() => onFileOpen?.(msg)} onCancel={() => onFileCancel?.(msg)} onResume={() => onFileResume?.(msg)} />
@@ -573,6 +593,7 @@ export const MessageBubble = memo(({
             msg={msg}
             isMe={isMe}
             recipientId={keyUserId}
+            groupKeyB64={groupKeyB64}
             pending={Boolean(msg?._pending) || isPendingStatus(msg?.status)}
           />
           {isMe && <DeliveryStatus status={msg.status} time={time} className="text-muted-foreground" />}
@@ -582,6 +603,8 @@ export const MessageBubble = memo(({
   }
 
   // 2. ДЛЯ ОБЫЧНЫХ СООБЩЕНИЙ
+  // Группа: чужие — слева с авой отправителя; свои — справа без авы.
+  const showGroupSender = !isMe && !!groupSenderName;
   return (
     <div className={cn(
       "flex items-end gap-2 group animate-in fade-in slide-in-from-bottom-3 duration-300",
@@ -590,6 +613,29 @@ export const MessageBubble = memo(({
       // ЧИСТЫЙ БЛЮР ДЛЯ СОСЕДЕЙ, Z-50 ДЛЯ ЦЕЛЕВОГО. НИКАКИХ RING И SCALE.
       isDimmed ? "blur-[4px] opacity-20 pointer-events-none" : "z-50"
     )}>
+      {showGroupSender && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onOpenSenderProfile?.(msg.sender_id); }}
+          className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 overflow-hidden mb-0.5 cursor-pointer hover:opacity-80 transition-opacity"
+          style={{ backgroundColor: groupSenderAvatar?.color || "#27272a", color: "#fff" }}
+          title={groupSenderName || undefined}
+        >
+          {groupSenderAvatar && (groupSenderAvatar.src || groupSenderAvatar.path) ? (
+            <SecureAvatar
+              src={groupSenderAvatar.src}
+              bucket="avatars"
+              path={groupSenderAvatar.path || undefined}
+              nonce={groupSenderAvatar.nonce}
+              mime={groupSenderAvatar.mime}
+              fallback={groupSenderAvatar.fallback || groupSenderName?.[0]?.toUpperCase()}
+              className="w-full h-full object-cover"
+            />
+          ) : (
+            groupSenderAvatar?.fallback || groupSenderName?.[0]?.toUpperCase() || "?"
+          )}
+        </button>
+      )}
       <div className={cn("flex flex-col", isMe ? "items-end" : "items-start")}>
         <div
           ref={bubbleRef}
@@ -601,6 +647,16 @@ export const MessageBubble = memo(({
             isOnlyMention && "bg-transparent border-none shadow-none p-0 rounded-none"
           )}
         >
+          {showGroupSender && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onOpenSenderProfile?.(msg.sender_id); }}
+              className="block text-[12px] font-bold leading-tight mb-1 truncate max-w-[220px] cursor-pointer hover:underline"
+              style={{ color: groupSenderColor || "#4dabf7" }}
+            >
+              {groupSenderName}
+            </button>
+          )}
           {msg.reply_to && (
             <div className={cn("mb-2.5 p-2.5 rounded-xl border-l-2 text-xs backdrop-blur-sm", isMe ? "bg-black/20 border-primary-foreground/50" : "bg-black/30 border-primary")}>
               <div className={cn("font-semibold mb-0.5 truncate", isMe ? "text-primary-foreground/80" : "text-primary")}>

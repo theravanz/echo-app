@@ -47,9 +47,11 @@ export interface AudioFileBubbleProps {
   isMe: boolean;
   /** Вторая сторона DH: свои сообщения → meta.to, входящие → sender_id. */
   keyUserId: string;
+  /** Групповой ключ (msg_key_0) — для v=3 файлов. */
+  groupKeyB64?: string | null;
 }
 
-export function AudioFileBubble({ meta, isMe, keyUserId }: AudioFileBubbleProps) {
+export function AudioFileBubble({ meta, isMe, keyUserId, groupKeyB64 }: AudioFileBubbleProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const barRef = useRef<HTMLDivElement | null>(null);
   const blobUrlRef = useRef<string | null>(null);
@@ -99,7 +101,7 @@ export function AudioFileBubble({ meta, isMe, keyUserId }: AudioFileBubbleProps)
       try {
         // Единственный сетевой путь: скачать+расшифровать в AppCache
         // (тот же кэш, что и у системного открытия), затем прочитать байты.
-        const rel = await ensureCachedFile(meta, keyUserId);
+        const rel = await ensureCachedFile(meta, keyUserId, groupKeyB64);
         const bytes = await readFile(rel, { baseDir: BaseDirectory.AppCache });
         const objectUrl = URL.createObjectURL(new Blob([bytes], { type: meta.mime || "audio/mpeg" }));
         blobUrlRef.current = objectUrl;

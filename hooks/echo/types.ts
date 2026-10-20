@@ -36,6 +36,10 @@ export interface Chat {
   member_count?: number;
   group_seed?: string | null;
   msg_key_0?: string | null;
+  // ── Групповые роли (место под будущие настройки в профиле группы) ──
+  // my_role — роль ТЕКУЩЕГО юзера в этой группе (для гейтов UI).
+  // Заполняется из group_members.role (миграция 0012), fallback — creator.
+  my_role?: GroupRole | null;
   lastMessage?: string | null;
   lastMessageType?: 'text' | 'sticker' | 'gif' | 'voice' | 'call_log' | 'file' | null;
   lastMessageTime?: string | null;
@@ -44,6 +48,50 @@ export interface Chat {
   created_at?: string | null;
   wallpaper_preset?: 'solid' | 'doodle' | 'photo';
   wallpaper_photo_url?: string | null;
+}
+
+/** Роль участника группы. Админов может быть много (owner — один). */
+export type GroupRole = 'owner' | 'admin' | 'member';
+
+/** Участник группы с профилем для рендера (ник/ава) и ролью. */
+export interface GroupMember {
+  user_id: string;
+  role: GroupRole;
+  joined_at?: string | null;
+  username?: string | null;
+  display_name?: string | null;
+  avatar_url?: string | null;
+  avatar_color?: string | null;
+  avatar_storage_path?: string | null;
+  avatar_nonce?: string | null;
+  avatar_mime?: string | null;
+}
+
+/**
+ * Профиль отправителя для групповых пузырей (ник + ава слева).
+ * Ключ — sender_id. Заполняется батчем из profiles, кэшируется в памяти
+ * на время открытого чата (см. useGroupSenders).
+ */
+export interface GroupSenderProfile {
+  id: string;
+  username?: string | null;
+  display_name?: string | null;
+  avatar_url?: string | null;
+  avatar_color?: string | null;
+  avatar_storage_path?: string | null;
+  avatar_nonce?: string | null;
+  avatar_mime?: string | null;
+}
+
+/** Акцентный цвет ника по id (детерминирован, как в Telegram). */
+export function groupSenderColor(senderId: string): string {
+  const palette = [
+    '#ff6b6b', '#ffa94d', '#ffd43b', '#69db7c',
+    '#38d9a9', '#4dabf7', '#9775fa', '#f783ac',
+  ];
+  let h = 0;
+  for (let i = 0; i < senderId.length; i++) h = (h * 31 + senderId.charCodeAt(i)) >>> 0;
+  return palette[h % palette.length];
 }
 
 export interface Message {

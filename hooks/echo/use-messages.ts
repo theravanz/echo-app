@@ -153,12 +153,18 @@ export function useMessages(
     const netAbort = new AbortController();
     const netTimeout = setTimeout(() => netAbort.abort(), MESSAGES_NET_TIMEOUT_MS);
     try {
-      const { data, error } = await supabase
-        .from("messages")
-        .select("*")
-        .or(
+      // ГРУППА: выбираем ВСЕ сообщения с receiver_id = groupId — всех
+      // отправителей, не только свои (DM-фильтр 1-на-1 их бы отрезал).
+      // chats в deps ниже: нужен, чтобы узнать type + передать groupId
+      // в decryptMessage (групповой ключ msg_key_0).
+      const isGroupChat = chats.some((c) => c.id === chatId && c.type === 'group');
+      const baseSelect = supabase.from("messages").select("*");
+      const filtered = isGroupChat
+        ? baseSelect.eq("receiver_id", chatId)
+        : baseSelect.or(
           `and(sender_id.eq.${currentUserId},receiver_id.eq.${chatId}),and(sender_id.eq.${chatId},receiver_id.eq.${currentUserId})`,
-        )
+        );
+      const { data, error } = await filtered
         .order("created_at", { ascending: true })
         .abortSignal(netAbort.signal);
 
@@ -186,6 +192,8 @@ export function useMessages(
           if (m.type === "file") {
             return { ...m, file: parseFileMeta(m.content) } as Message;
           }
+          // Текст/прочее: группы — симметрично через msg_key_0 (chatId как
+          // 4-й аргумент!), DM — классический DH по собеседнику.
           const otherId =
             m.sender_id === currentUserId ? m.receiver_id : m.sender_id;
           // Остальные сообщения — стандартный E2EE-пайплайн,
@@ -197,6 +205,7 @@ export function useMessages(
                 m.content || "",
                 m.nonce || "",
                 otherId,
+                isGroupChat ? chatId : undefined,
               ),
             } as Message;
           } catch (err) {
@@ -227,9 +236,13 @@ export function useMessages(
                 // plaintext-мета — decrypt не вызываем
                 content = r.content || "";
               } else {
+                const rIsGroup = chats.some((c) => c.id === r.receiver_id && c.type === 'group');
                 const otherId = r.sender_id === currentUserId ? r.receiver_id : r.sender_id;
                 try {
-                  content = await decryptMessage(r.content || "", r.nonce || "", otherId);
+                  content = await decryptMessage(
+                    r.content || "", r.nonce || "", otherId,
+                    rIsGroup ? r.receiver_id : undefined,
+                  );
                 } catch { content = "[E2EE Error]"; }
               }
               replyMap.set(r.id, {
@@ -263,9 +276,10 @@ export function useMessages(
         JSON.stringify({ messages: withPending, timestamp: new Date().toISOString() }),
       ).catch((e) => console.warn("[CHAT-CACHE] messages cache write failed:", e));
 
-      // 4. Mark unread as read
+      // 4. Mark unread as read (только DM: у групп нет per-user статуса;
+      //    точный read-receipt — будущая таблица user_reads, см. 0012).
       const unreadIds = (data || [])
-        .filter((m: any) => m.receiver_id === currentUserId && m.status !== "read")
+        .filter((m: any) => !isGroupChat && m.receiver_id === currentUserId && m.status !== "read")
         .map((m: any) => m.id);
       if (unreadIds.length > 0) {
         await supabase
@@ -278,7 +292,7 @@ export function useMessages(
     } finally {
       clearTimeout(netTimeout);
     }
-  }, [decryptMessage, withPendingForChat]);
+  }, [decryptMessage, withPendingForChat, chats]);
 
   const handleEditMessage = useCallback(
     async (selectedChat: Chat, text: string) => {
@@ -490,6 +504,57 @@ export function useMessages(
 
       // 2) Фон: шифруем локально → outbox → очередь (она же делает отправку).
       void (async () => {
+        // ГРУППА: голос шифруем msg_key_0 (один шифротекст для всех),
+        // мета v=3/enc='group'. DM — прежний NaCl box (encryptVoicePayload).
+        if (selectedChat.type === 'group' && selectedChat.msg_key_0) {
+          try {
+            const { encryptAndUploadGroupVoice } = await import("@/lib/group-upload");
+            const gMeta = await encryptAndUploadGroupVoice(
+              user.id, receiverId, selectedChat.msg_key_0, blob, durationSec,
+            );
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === tempId ? { ...m, content: JSON.stringify(gMeta), voice: gMeta as any } : m,
+              ),
+            );
+            // Групповой шифротекст уже залит — INSERT делаем сразу здесь
+            // (очередь для групп пока не умеет v=3 outbox; TODO: унификация).
+            try {
+              const { supabase } = await import("@/lib/supabase");
+              const { data: inserted, error } = await supabase.from("messages").insert({
+                sender_id: user.id,
+                receiver_id: receiverId,
+                type: "voice",
+                content: JSON.stringify(gMeta),
+                status: "sent",
+                reply_to_id: replyToId,
+              }).select().single();
+              if (error) throw error;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === tempId ? { ...m, id: inserted.id, status: "sent" as const, _pending: false } : m,
+                ),
+              );
+            } catch (e) {
+              console.warn("[GROUP-VOICE] insert failed → pending:", e);
+              if (onAddToQueue) {
+                onAddToQueue({
+                  ...optimistic,
+                  content: JSON.stringify(gMeta),
+                  voice: gMeta as any,
+                  status: "pending",
+                  _pending: true,
+                  _pendingContent: "",
+                } as PendingMessage);
+              }
+            }
+          } catch (e) {
+            console.error("[QUEUE] group voice encrypt failed:", e);
+            setMessages((prev) => prev.filter((m) => m.id !== tempId));
+            toast.error("Не удалось зашифровать голосовое сообщение");
+          }
+          return;
+        }
         let payload: VoicePayload;
         try {
           // Публичный ключ берём из локального кэша чата (chats.public_key) —
