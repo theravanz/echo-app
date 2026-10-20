@@ -247,10 +247,10 @@ function FileBubble({ msg, isMe, upload, onOpen, onCancel, onResume, onContextMe
       className={cn(
         "flex items-center gap-3 rounded-2xl px-3 py-2.5 select-none cursor-pointer",
         "w-[min(300px,calc(100vw-110px))] min-w-[220px]",
-        isMe ? "bg-primary-foreground/95 text-zinc-900" : "bg-zinc-800/90 border border-white/10 text-white backdrop-blur-md",
+        isMe ? "bg-primary/90 text-primary-foreground" : "bg-zinc-800/90 border border-white/10 text-white backdrop-blur-md",
         failed && "border-red-500/40"
       )}>
-      <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center shrink-0", isMe ? "bg-zinc-900/10" : "bg-white/[0.07]")}>
+      <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center shrink-0", isMe ? "bg-primary-foreground/10" : "bg-white/[0.07]")}>
         <Icon className="w-5 h-5 opacity-80" />
       </div>
       <div className="flex-1 min-w-0">
@@ -267,11 +267,11 @@ function FileBubble({ msg, isMe, upload, onOpen, onCancel, onResume, onContextMe
       ) : failed ? (
         <div className="w-9 h-9 rounded-full flex items-center justify-center bg-red-500/15 text-red-500 shrink-0"><TbRefresh className="w-4 h-4" /></div>
       ) : pending ? (
-        <div className={cn("w-9 h-9 rounded-full flex items-center justify-center shrink-0", isMe ? "bg-zinc-900/10" : "bg-white/[0.07]")}>
+        <div className={cn("w-9 h-9 rounded-full flex items-center justify-center shrink-0", isMe ? "bg-primary-foreground/10" : "bg-white/[0.07]")}>
           <Clock className="w-4 h-4 opacity-70" />
         </div>
       ) : (
-        <div className={cn("w-9 h-9 rounded-full flex items-center justify-center shrink-0", isMe ? "bg-zinc-900/10" : "bg-white/[0.07]")}>
+        <div className={cn("w-9 h-9 rounded-full flex items-center justify-center shrink-0", isMe ? "bg-primary-foreground/10" : "bg-white/[0.07]")}>
           <TbDownload className="w-4 h-4 opacity-60" />
         </div>
       )}
@@ -340,7 +340,7 @@ function VoiceBubble({ msg, isMe, recipientId, groupKeyB64, pending, onContextMe
         "flex items-center gap-2 md:gap-3 rounded-2xl px-3 py-2.5 md:px-4 md:py-3",
         "w-[min(288px,calc(100vw-110px))]",
         isMe
-          ? "bg-primary-foreground/95 text-zinc-900"
+          ? "bg-primary/90 text-primary-foreground"
           : "bg-zinc-800/90 border border-white/10 text-white backdrop-blur-md"
       )}
     >
@@ -367,8 +367,8 @@ function VoiceBubble({ msg, isMe, recipientId, groupKeyB64, pending, onContextMe
           "h-9 w-9 md:h-10 md:w-10 rounded-full flex items-center justify-center shrink-0 transition-all",
           "hover:scale-105 active:scale-95",
           isMe
-            ? "bg-zinc-900 text-white hover:bg-zinc-800"
-            : "bg-primary text-white shadow-md shadow-primary/30 hover:bg-primary/90",
+            ? "bg-primary-foreground text-primary hover:bg-primary-foreground/85"
+            : "bg-primary text-primary-foreground shadow-md shadow-primary/30 hover:bg-primary/90",
           loading && "opacity-70",
           pending && "opacity-70"
         )}
@@ -400,8 +400,8 @@ function VoiceBubble({ msg, isMe, recipientId, groupKeyB64, pending, onContextMe
               style={{
                 height: h,
                 background: active
-                  ? (isMe ? "rgb(24 24 27)" : "rgb(var(--primary) / 1)")
-                  : (isMe ? "rgba(24,24,27,0.25)" : "rgba(255,255,255,0.4)"),
+                  ? (isMe ? "var(--primary-foreground)" : "var(--primary)")
+                  : (isMe ? "color-mix(in oklch, var(--primary-foreground) 30%, transparent)" : "rgba(255,255,255,0.4)"),
                 transformOrigin: "center",
               }}
               animate={playing ? { scaleY: [1, 1 + ((i * 7) % 10) / 10, 1] } : { scaleY: 1 }}
