@@ -154,8 +154,10 @@ export function AudioFileBubble({ meta, isMe, keyUserId, groupKeyB64 }: AudioFil
     setProgress(ratio);
   }
 
-  const fill = isMe ? "rgb(24 24 27)" : "var(--primary)";
-  const track = isMe ? "rgba(24,24,27,0.22)" : "rgba(255,255,255,0.25)";
+  // Свои сообщения — светлый пузырь (primary-foreground), поэтому заливка
+  // прогресса тёмная, а у входящих (тёмный пузырь) — светлая/primary.
+  const fill = isMe ? "var(--primary-foreground)" : "var(--primary)";
+  const track = isMe ? "color-mix(in oklch, var(--primary-foreground) 25%, transparent)" : "rgba(255,255,255,0.25)";
 
   return (
     <div
@@ -163,7 +165,7 @@ export function AudioFileBubble({ meta, isMe, keyUserId, groupKeyB64 }: AudioFil
         "flex items-center gap-3 rounded-2xl px-3 py-2.5 select-none",
         "w-[min(300px,calc(100vw-110px))] min-w-[220px]",
         isMe
-          ? "bg-primary-foreground/95 text-zinc-900"
+          ? "bg-primary/90 text-primary-foreground"
           : "bg-zinc-800/90 border border-white/10 text-white backdrop-blur-md"
       )}
     >
@@ -194,8 +196,8 @@ export function AudioFileBubble({ meta, isMe, keyUserId, groupKeyB64 }: AudioFil
           "h-10 w-10 rounded-full flex items-center justify-center shrink-0 transition-all",
           "hover:scale-105 active:scale-95",
           isMe
-            ? "bg-zinc-900 text-white hover:bg-zinc-800"
-            : "bg-primary text-white shadow-md shadow-primary/30 hover:bg-primary/90",
+            ? "bg-primary-foreground text-primary hover:bg-primary-foreground/85"
+            : "bg-primary text-primary-foreground shadow-md shadow-primary/30 hover:bg-primary/90",
           loading && "opacity-70"
         )}
       >
