@@ -90,6 +90,13 @@ export function GroupCreateModal({ open, chats, onClose, onSubmit, onCreated }: 
   const bgAnimsRef = useRef<Animation[]>([]);
   const openTokenRef = useRef(0);
   const isMobile = useIsMobile();
+  // SSR: document.body существует только после монтирования в браузере.
+  // Без гейта createPortal(document.body) падает на серверном рендере.
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const activeKind = GROUP_KINDS.find((k) => k.id === kind) ?? GROUP_KINDS[0];
 
@@ -578,6 +585,8 @@ export function GroupCreateModal({ open, chats, onClose, onSubmit, onCreated }: 
       Отмена
     </button>
   );
+
+  if (!mounted) return null;
 
   return createPortal(
     <AnimatePresence>
