@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Безопасность
+
+- **Hardening по отчёту Supabase Database Linter** (миграция `0014_linter_hardening.sql`):
+  - у функций `protect_is_verified`, `handle_updated_at`, `terminate_device_session` зафиксирован `search_path` (linter `function_search_path_mutable`);
+  - `EXECUTE` отозван у `anon` для внутренних RPC `create_group_atomic`, `is_group_member`, `terminate_device_session` и `get_my_bot_token` (последняя — только если она завязана на `auth.uid()`); `authenticated`/`service_role` доступ сохраняют. `broadcast_message` намеренно остаётся доступной `anon` — QR-вход выполняется до авторизации, канал ограничен префиксом `auth_`;
+  - `pg_trgm` перенесён из `public` в `extensions` (linter `extension_in_public`);
+  - удалена широкая SELECT-политика бакета `wallpapers`: публичные объекты доступны по URL и без листинга (linter `public_bucket_allows_listing`);
+  - удалён дублирующий уникальный индекс `device_tokens_user_id_key` — `user_id` уже PRIMARY KEY (linter `duplicate_index`);
+  - RLS-политики `user_themes`, `devices`, `device_tokens`, `login_challenges`, `groups`, `group_members`, `group_key_mailbox` переведены на `(SELECT auth.uid())` (InitPlan считается один раз на запрос, а не на строку), у `devices` убраны старые политики-дубли, две SELECT-политики `login_challenges` объединены в одну;
+  - ⚠️ вне SQL: в Dashboard → Auth → Password Security нужно включить Leaked Password Protection (linter `auth_leaked_password_protection`).
+
 ### Исправлено
 
 - **Группы: SSR-падение модалки создания** (`components/echo/app/group-create-modal.tsx`):
