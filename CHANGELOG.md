@@ -17,6 +17,10 @@
   - `auth.uid()`/`auth.jwt()`/`auth.role()`/`auth.email()` и `current_setting()` в политиках `messages` обёрнуты в `(SELECT ...)` — InitPlan вычисляется один раз на запрос, а не на строку (linter `auth_rls_initplan`);
   - legacy DM-политики `Users can insert/view their own messages` схлопнуты в group-aware `Echo insert/select messages policy` через OR их выражений — семантика доступа сохраняется один-в-один, дубли permissive-политик исчезают (linter `multiple_permissive_policies`);
   - объединение выполняется только при совпадении `cmd`/`permissive`/набора ролей; при расхождении политики не трогаются, пишется `NOTICE`; повторный прогон миграции идемпотентен.
+- **`terminate_device_session` переведена на `SECURITY INVOKER`** (миграция `0016_terminate_device_session_invoker.sql`):
+  - функция удаляет только свои устройства (`user_id = auth.uid()`) и не трогает текущее (`hwid <> requester_hwid`) — ровно то же, что разрешает RLS-политика `Users can delete own devices`, поэтому `SECURITY DEFINER` давал только лишние привилегии;
+  - клиент и так умеет удалять устройство напрямую (fallback в `use-devices.ts`), значит DELETE-право и RLS у `authenticated` есть;
+  - RLS теперь работает вторым барьером, `search_path` остаётся зафиксированным, `EXECUTE` — только у `authenticated`/`service_role`.
 
 ### Исправлено
 
