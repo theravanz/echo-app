@@ -12,6 +12,11 @@
   - удалён дублирующий уникальный индекс `device_tokens_user_id_key` — `user_id` уже PRIMARY KEY (linter `duplicate_index`);
   - RLS-политики `user_themes`, `devices`, `device_tokens`, `login_challenges`, `groups`, `group_members`, `group_key_mailbox` переведены на `(SELECT auth.uid())` (InitPlan считается один раз на запрос, а не на строку), у `devices` убраны старые политики-дубли, две SELECT-политики `login_challenges` объединены в одну;
   - ⚠️ вне SQL: в Dashboard → Auth → Password Security нужно включить Leaked Password Protection (linter `auth_leaked_password_protection`).
+- **RLS `messages`: InitPlan + дубли permissive-политик** (миграция `0015_messages_rls_merge.sql`):
+  - определения политик создавались в Dashboard и в репозитории отсутствуют, поэтому миграция читает реальные выражения из `pg_policies`, а не угадывает их;
+  - `auth.uid()`/`auth.jwt()`/`auth.role()`/`auth.email()` и `current_setting()` в политиках `messages` обёрнуты в `(SELECT ...)` — InitPlan вычисляется один раз на запрос, а не на строку (linter `auth_rls_initplan`);
+  - legacy DM-политики `Users can insert/view their own messages` схлопнуты в group-aware `Echo insert/select messages policy` через OR их выражений — семантика доступа сохраняется один-в-один, дубли permissive-политик исчезают (linter `multiple_permissive_policies`);
+  - объединение выполняется только при совпадении `cmd`/`permissive`/набора ролей; при расхождении политики не трогаются, пишется `NOTICE`; повторный прогон миграции идемпотентен.
 
 ### Исправлено
 
