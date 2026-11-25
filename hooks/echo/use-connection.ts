@@ -12,7 +12,7 @@ interface UseConnectionReturn {
 // Реальная проверка соединения с Supabase через GoTrue health.
 // ВАЖНО: НЕ бить в /rest/v1/ — корень PostgREST без apikey даёт 401,
 // с битым ключом тоже 401; оба случая сыпали warning-записями в Supabase
-// edge-логах и ошибками в консоль (а useConnection опрашивает каждые 15с,
+// edge-логах и ошибками в консоль (а useConnection опрашивает каждые 30с,
 // в StrictMode — дублями). /auth/v1/health всегда 200 без ключа.
 const checkRealConnectivity = async (): Promise<boolean> => {
   if (typeof navigator !== "undefined" && !navigator.onLine) return false;
@@ -81,7 +81,11 @@ export function useConnection(onReconnect?: () => void): UseConnectionReturn {
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
 
-    const checkInterval = setInterval(checkConnection, 15000);
+    const checkInterval = setInterval(() => {
+      // Не шлём health-probe, пока приложение свёрнуто.
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      void checkConnection();
+    }, 30000);
 
     return () => {
       isActive = false;
