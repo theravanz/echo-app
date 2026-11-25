@@ -4,17 +4,6 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Нам нужен доступ к локальной сети для работы сервера разработки Tauri.</string>
-	<key>NSCameraUsageDescription</key>
-	<string>Echo использует камеру для съёмки фото и видео</string>
-	<key>NSMicrophoneUsageDescription</key>
-	<string>Echo использует микрофон для записи голосовых сообщений</string>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsLocalNetworking</key>
-		<true/>
-	</dict>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -28,7 +17,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>0.3.0</string>
 	<key>CFBundleVersion</key>
-	<string>0.3.0</string>
+	<string>0.2.1</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
@@ -44,10 +33,6 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<key>NSBonjourServices</key>
-	<array>
-		<string>_http._tcp</string>
-	</array>
 	<key>UISupportedInterfaceOrientations~ipad</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
@@ -55,6 +40,10 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Echo использует микрофон для записи голосовых сообщений</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Echo использует камеру для съёмки фото и видео</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

@@ -3,10 +3,10 @@
 # и `tauri android build` (собирает ВСЕ 4 ABI) получили одинаковые env.
 
 [target.aarch64-linux-android]
-linker = "/home/ravanz/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
+linker = "/Users/ravanz/Library/Android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android24-clang"
 
 [target.armv7-linux-androideabi]
-linker = "/home/ravanz/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang"
+linker = "/Users/ravanz/Library/Android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/darwin-x86_64/bin/armv7a-linux-androideabi24-clang"
 
 [target.aarch64-apple-ios]
 # iOS: cdylib линкуется до финальной сборки в Xcode, а Swift-мосты
@@ -21,10 +21,10 @@ rustflags = ["-C", "link-arg=-Wl,-undefined,dynamic_lookup"]
 rustflags = ["-C", "link-arg=-Wl,-undefined,dynamic_lookup"]
 
 [target.i686-linux-android]
-linker = "/home/ravanz/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android24-clang"
+linker = "/Users/ravanz/Library/Android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/darwin-x86_64/bin/i686-linux-android24-clang"
 
 [target.x86_64-linux-android]
-linker = "/home/ravanz/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang"
+linker = "/Users/ravanz/Library/Android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/darwin-x86_64/bin/x86_64-linux-android24-clang"
 
 # ВАЖНО: openssl-src при сборке вендоренного OpenSSL берёт CC/AR/RANLIB из
 # cc-rs. Без явных env cc-rs выводит префикс «<triple>-ranlib», которого в
@@ -32,20 +32,20 @@ linker = "/home/ravanz/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/li
 # ошибкой 127 (command not found). Прописываем абсолютные пути для каждой ABI.
 [env]
 # aarch64
-CC_aarch64_linux_android = "/home/ravanz/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"
-AR_aarch64_linux_android = "/home/ravanz/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
-RANLIB_aarch64_linux_android = "/home/ravanz/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
+CC_aarch64_linux_android = "/Users/ravanz/Library/Android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android24-clang"
+AR_aarch64_linux_android = "/Users/ravanz/Library/Android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar"
+RANLIB_aarch64_linux_android = "/Users/ravanz/Library/Android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ranlib"
 # armv7
-CC_armv7_linux_androideabi = "/home/ravanz/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi24-clang"
-AR_armv7_linux_androideabi = "/home/ravanz/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
-RANLIB_armv7_linux_androideabi = "/home/ravanz/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
+CC_armv7_linux_androideabi = "/Users/ravanz/Library/Android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/darwin-x86_64/bin/armv7a-linux-androideabi24-clang"
+AR_armv7_linux_androideabi = "/Users/ravanz/Library/Android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar"
+RANLIB_armv7_linux_androideabi = "/Users/ravanz/Library/Android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ranlib"
 # i686
-CC_i686_linux_android = "/home/ravanz/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin/i686-linux-android24-clang"
-AR_i686_linux_android = "/home/ravanz/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
-RANLIB_i686_linux_android = "/home/ravanz/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
+CC_i686_linux_android = "/Users/ravanz/Library/Android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/darwin-x86_64/bin/i686-linux-android24-clang"
+AR_i686_linux_android = "/Users/ravanz/Library/Android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar"
+RANLIB_i686_linux_android = "/Users/ravanz/Library/Android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ranlib"
 # x86_64
-CC_x86_64_linux_android = "/home/ravanz/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang"
-AR_x86_64_linux_android = "/home/ravanz/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
-RANLIB_x86_64_linux_android = "/home/ravanz/Android/Sdk/ndk/30.0.14904198/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
+CC_x86_64_linux_android = "/Users/ravanz/Library/Android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/darwin-x86_64/bin/x86_64-linux-android24-clang"
+AR_x86_64_linux_android = "/Users/ravanz/Library/Android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar"
+RANLIB_x86_64_linux_android = "/Users/ravanz/Library/Android/sdk/ndk/30.0.16248370/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ranlib"
 
 
