@@ -21,6 +21,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { isTauri } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
@@ -42,6 +43,7 @@ import {
   getMinNativeVersion,
   type OtaManifest,
 } from "@/lib/ota";
+import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
 /** Период фоновой проверки. */
@@ -50,16 +52,55 @@ const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 часов
 const STARTUP_DELAY_MS = 5_000;
 
 export function UpdateManager() {
+  const pathname = usePathname();
+  const [authorized, setAuthorized] = useState(false);
   const [readyVersion, setReadyVersion] = useState<string | null>(null);
   const [activating, setActivating] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState<DownloadProgress | null>(null);
 
+  // OTA разрешён только авторизованному пользователю и только внутри /app.
+  // До входа в аккаунт бандл может быть несовместим с текущим auth-flow:
+  // тестовое обновление, активированное на экране входа, показывало битую
+  // выдачу ключей и после перезапуска оставляло приложение на загрузке.
+  const canUpdate = authorized && !!pathname?.startsWith("/app");
+
   const mountedRef = useRef(true);
+  const canUpdateRef = useRef(false);
   const checkingRef = useRef(false);
   const downloadedRef = useRef<string | null>(null);
   const lastCheckRef = useRef(0);
   const nativeNoticeVersionRef = useRef<string | null>(null);
+
+  // Отслеживаем Supabase-сессию: после logout отложенный бандл сбрасывается,
+  // а до login OTA вообще не проверяется и не активируется.
+  useEffect(() => {
+    let active = true;
+
+    void supabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (active) setAuthorized(!!data.session);
+      })
+      .catch(() => {
+        if (active) setAuthorized(false);
+      });
+
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (active) setAuthorized(!!session);
+    });
+
+    return () => {
+      active = false;
+      subscription.subscription.unsubscribe();
+    };
+  }, []);
+
+  // Синхронное зеркало canUpdate для async-проверки: если пользователь вышел
+  // из аккаунта во время скачивания, результат не должен включать баннер.
+  useEffect(() => {
+    canUpdateRef.current = canUpdate;
+  }, [canUpdate]);
 
   const openNativeDownload = useCallback(async () => {
     if (!OTA_NATIVE_DOWNLOAD_URL) return;
@@ -89,7 +130,7 @@ export function UpdateManager() {
   );
 
   const checkForUpdate = useCallback(async () => {
-    if (!OTA_ENABLED || !isTauri()) return;
+    if (!OTA_ENABLED || !isTauri() || !canUpdate) return;
     // Уже скачали — ждём решения пользователя (перезапуск).
     if (checkingRef.current || downloadedRef.current) return;
 
@@ -122,7 +163,7 @@ export function UpdateManager() {
       }
 
       const result = await checkUpdate();
-      if (!result.available) return;
+      if (!result.available || !canUpdateRef.current) return;
 
       if (mountedRef.current) setDownloading(true);
       try {
@@ -130,6 +171,8 @@ export function UpdateManager() {
         // распаковывает бандл, но НЕ активирует его. Приложение продолжает
         // работать на текущей версии, пока пользователь не нажмёт «Перезапустить».
         const version = await downloadUpdate();
+        // Пользователь мог выйти из аккаунта, пока шла загрузка.
+        if (!canUpdateRef.current) return;
         downloadedRef.current = version;
         if (mountedRef.current) {
           setReadyVersion(version);
@@ -145,10 +188,10 @@ export function UpdateManager() {
     } finally {
       checkingRef.current = false;
     }
-  }, [showNativeOutdated]);
+  }, [canUpdate, showNativeOutdated]);
 
   const handleRestart = useCallback(async () => {
-    if (!readyVersion || activating) return;
+    if (!canUpdate || !readyVersion || activating) return;
     setActivating(true);
     try {
       await activateUpdate();
@@ -159,16 +202,34 @@ export function UpdateManager() {
     } finally {
       window.location.reload();
     }
-  }, [activating, readyVersion]);
+  }, [activating, canUpdate, readyVersion]);
+
+  // Heartbeat подтверждает текущий бандл независимо от авторизации: если
+  // пользователь вышел из аккаунта, рабочий OTA-бандл не должен откатываться
+  // после двух запусков.
+  useEffect(() => {
+    if (!OTA_ENABLED || !isTauri()) return;
+    void notifyReady().catch((error) => {
+      console.warn("[OTA] notifyReady failed:", error);
+    });
+  }, []);
 
   useEffect(() => {
     if (!OTA_ENABLED || !isTauri()) return;
+
+    // До авторизации / вне /app ничего не качаем и не показываем.
+    if (!canUpdate) {
+      downloadedRef.current = null;
+      setReadyVersion(null);
+      setDownloading(false);
+      setProgress(null);
+      return;
+    }
 
     mountedRef.current = true;
     // Чтобы visibilitychange в первые секунды не запустил вторую проверку
     // параллельно со startup-таймером.
     lastCheckRef.current = Date.now();
-    let cancelled = false;
     let startupTimer: ReturnType<typeof setTimeout> | undefined;
     let unlistenProgress: (() => void) | undefined;
 
@@ -188,21 +249,9 @@ export function UpdateManager() {
       })
       .catch(() => {});
 
-    const bootstrap = async () => {
-      // Heartbeat: подтверждаем, что текущий (в т.ч. OTA) бандл работает.
-      try {
-        await notifyReady();
-      } catch (error) {
-        console.warn("[OTA] notifyReady failed:", error);
-      }
-
-      if (cancelled) return;
-      startupTimer = setTimeout(() => {
-        void checkForUpdate();
-      }, STARTUP_DELAY_MS);
-    };
-
-    void bootstrap();
+    startupTimer = setTimeout(() => {
+      void checkForUpdate();
+    }, STARTUP_DELAY_MS);
 
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") void checkForUpdate();
@@ -224,7 +273,6 @@ export function UpdateManager() {
     window.addEventListener("online", onOnline);
 
     return () => {
-      cancelled = true;
       mountedRef.current = false;
       if (startupTimer) clearTimeout(startupTimer);
       clearInterval(interval);
@@ -232,12 +280,15 @@ export function UpdateManager() {
       window.removeEventListener("online", onOnline);
       unlistenProgress?.();
     };
-  }, [checkForUpdate]);
+  }, [canUpdate, checkForUpdate]);
 
   const percent =
     progress?.total && progress.total > 0
       ? Math.min(100, Math.round((progress.downloaded / progress.total) * 100))
       : null;
+
+  // До авторизации (и вне /app) баннер не показываем и активацию не разрешаем.
+  if (!canUpdate) return null;
 
   return (
     <AnimatePresence>

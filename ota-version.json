@@ -1,6 +1,6 @@
 {
-  "version": "0.2.7-ota.1",
-  "sequence": 1,
-  "min_binary_version": "0.3.0",
-  "last_published_at": "2026-11-25T15:38:17.726Z"
+  "version": "0.3.3-ota.3",
+  "sequence": 3,
+  "min_binary_version": "0.3.3",
+  "last_published_at": "2026-11-25T17:38:53.989Z"
 }

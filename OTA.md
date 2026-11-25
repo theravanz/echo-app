@@ -161,6 +161,7 @@ pnpm deploy:ota -- --min-native=0.4.0
   - `plugins.hotswap.pubkey` — строка `RW...`;
   - CSP `connect-src` разрешает `https://*.supabase.co`.
 - `components/echo/app/update-manager.tsx` (монтируется в `app/layout.tsx`):
+  - OTA работает **только после авторизации** и только на маршрутах `/app`; на экранах входа и публичных страницах обновления не проверяются и не активируются;
   - при старте вызывает `notifyReady()` (heartbeat/rollback);
   - раз в 6 часов и при возврате в приложение проверяет манифест;
   - если `getVersion() < min_binary_version` — OTA не ставит, показывает
