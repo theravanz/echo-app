@@ -61,6 +61,14 @@
   - `group_members.role` (`owner|admin|member`, создатели → owner, админов может быть много); чтение состава/ролей уже работает по RLS 0011;
   - `GroupProfilePanel` открывается по клику на группу (шапка/аватар/описание/счётчик + участники, сгруппированные по ролям с бейджами) — НАСТРОЙКИ группы, назначение админов и выход оставлены заглушками с TODO-маркерами (твоя часть: RPC-контракты `group_set_admin` / `group_remove_member` / `group_leave` зафиксированы в шапке миграции 0012);
   - `Chat.my_role`, `useGroupMembers` (`members/myRole/isOwner/isAdmin` + заготовки-обёртки мутаций) готовы к подключению.
+- **OTA-обновления фронтенда без пересборки нативного приложения** (`tauri-plugin-hotswap` 0.0.5, `scripts/publish-ota.mjs`, `lib/ota.ts`, `components/echo/app/update-manager.tsx`, `src-tauri/src/hotswap.rs`, `OTA.md`):
+  - `pnpm deploy:ota` собирает `out/`, упаковывает в `tar.gz` с `index.html` в корне, подписывает minisign-ключом (`tauri signer sign`) и загружает архив + `manifest.json` в публичный бакет Supabase Storage; есть `--dry-run`, `--skip-build`, `--notes`, `--mandatory`, `--sequence`, `--version`, `--min-native`;
+  - манифест содержит `version`, монотонный `sequence`, `min_binary_version`, `url`, `signature`, `sha256`, `bundle_size`; `sequence` хранится в `ota-version.json` и обновляется только после успешной загрузки;
+  - скрипт сверяет публичную часть ключа с `plugins.hotswap.pubkey` в `tauri.conf.json` и падает при несовпадении — защита от публикации бандла «чужим» ключом;
+  - Rust-резолвер добавляет `?t=<unix_ms>` к URL манифеста, чтобы Supabase CDN не отдавал закэшированный `manifest.json` (сам манифест публикуется с `cache-control: 0`, архивы — с `max-age=1 год`);
+  - клиент при старте вызывает `notifyReady()` (heartbeat/rollback), раз в 6 часов и при возврате в приложение тихо проверяет манифест, сверяет `getVersion()` с `min_binary_version`, скачивает бандл в фоне и показывает баннер «Доступно обновление интерфейса — Перезапустить»; по клику `activateUpdate()` + reload WebView;
+  - в `next dev` OTA выключен (включается `NEXT_PUBLIC_OTA_DEV=true`), чтобы не подменять dev-ассеты;
+  - настройка: `SUPABASE_URL`/`NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_BUCKET_NAME`, `SUPABASE_SERVICE_ROLE_KEY` (только на билд-машине), `OTA_SIGNING_KEY_PATH`; публичный ключ зашит в `plugins.hotswap.pubkey`, CSP `connect-src` разрешает `https://*.supabase.co`.
 
 ### Изменено
 

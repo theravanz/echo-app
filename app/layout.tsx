@@ -6,6 +6,7 @@ import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 import { LogBridge } from "@/components/echo/app/log-bridge";
+import { UpdateManager } from "@/components/echo/app/update-manager";
 import { Toaster } from "@/components/ui/sonner";
 
 export const viewport = {
@@ -39,6 +40,8 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         {/* Мост console.* → logcat/Console (диагностика на устройстве). */}
         <LogBridge />
+        {/* OTA: notifyReady на старте + тихая проверка manifest.json из Supabase. */}
+        <UpdateManager />
         {children}
         {/* Один mounted-тостер на всё приложение: без него все toast() из
             sonner (ошибки файлов, «Файл больше 10 МБ» и пр.) не показываются. */}

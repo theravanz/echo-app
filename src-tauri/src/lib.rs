@@ -5,6 +5,9 @@ mod device;
 // Системное открытие файлов на мобильных (Android FileProvider + chooser,
 // iOS QuickLook). На десктопе команды есть, но возвращают "unsupported".
 mod file_open;
+// OTA фронтенда: подмена asset-provider'а Tauri на подписанный бандл из
+// Supabase Storage (tauri-plugin-hotswap). Инициализируется в run().
+mod hotswap;
 mod media;
 // Настоящий выход приложения (Android back при пустом back-стеке):
 // finishAndRemoveTask через JNI — не kill процесса (см. app_exit.rs).
@@ -129,7 +132,14 @@ fn init_vault(app: &AppHandle<tauri::Wry>) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // hotswap::build забирает Context, подменяет asset provider и возвращает
+    // плагин + модифицированный Context. Поэтому Context создаём ДО Builder,
+    // а в run() передаём уже обновлённый.
+    let context = tauri::generate_context!();
+    let (hotswap_plugin, context) = hotswap::build(context);
+
     let builder = tauri::Builder::default()
+        .plugin(hotswap_plugin)
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         // tauri-plugin-sql УДАЛЁН — монополия rusqlite
@@ -278,6 +288,6 @@ pub fn run() {
             log::info!("[Setup] All managers initialized, ready for IPC");
             Ok(())
         })
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running tauri application");
 }
