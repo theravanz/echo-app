@@ -18,7 +18,7 @@ interface TextEditorScreenProps {
   /** описание можно сохранить пустым, название — нет */
   allowEmpty?: boolean;
   onBack: () => void;
-  onSubmit: (value: string) => void;
+  onSubmit: (value: string) => void | Promise<void>;
 }
 
 export function TextEditorScreen({
@@ -33,11 +33,19 @@ export function TextEditorScreen({
   onSubmit,
 }: TextEditorScreenProps) {
   const [val, setVal] = useState(value);
-  const canSave = allowEmpty || val.trim().length > 0;
+  const [saving, setSaving] = useState(false);
+  const canSave = (allowEmpty || val.trim().length > 0) && !saving;
 
-  const submit = () => {
+  const submit = async () => {
     if (!canSave) return;
-    onSubmit(multiline ? val.trim() : val.trim().slice(0, maxLength ?? 64));
+    setSaving(true);
+    try {
+      await onSubmit(multiline ? val.trim() : val.trim().slice(0, maxLength ?? 64));
+    } catch {
+      // Ошибку уже показал вызывающий (toast); остаёмся на экране.
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -46,14 +54,14 @@ export function TextEditorScreen({
       onBack={onBack}
       right={
         <button
-          onClick={submit}
+          onClick={() => void submit()}
           disabled={!canSave}
           className={cn(
             "text-[14px] font-semibold transition",
             canSave ? "text-primary hover:opacity-80" : "text-muted-foreground/50",
           )}
         >
-          {submitLabel}
+          {saving ? "…" : submitLabel}
         </button>
       }
     >
@@ -76,7 +84,7 @@ export function TextEditorScreen({
             placeholder={placeholder}
             onChange={(e) => setVal(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") submit();
+              if (e.key === "Enter") void submit();
             }}
             className="w-full rounded-2xl bg-muted px-4 py-3.5 text-[15px] font-semibold outline-none placeholder:font-normal placeholder:text-muted-foreground/60"
           />

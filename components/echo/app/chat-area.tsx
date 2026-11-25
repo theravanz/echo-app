@@ -83,11 +83,16 @@ interface ChatAreaProps {
   isRightPanelOpen: boolean;
   setIsRightPanelOpen: (open: boolean) => void;
   onOpenChat?: (chatId: string) => void;
+  /** Обновить чат в списке/выбранном (например, имя или аватар группы). */
+  onChatUpdated?: (chatId: string, patch: Partial<Chat>) => void;
+  /** Чат больше недоступен (вышел из группы / группа удалена). */
+  onChatRemoved?: (chatId: string) => void;
 }
 
 export function ChatArea({
   user, selectedChat, isMobile, activeMode, activeTab, onlineUsers, chats, onBack, onCall, onMentionClick,
   messages, setMessages, replyingTo, setReplyingTo, editingMessage, setEditingMessage, newMessage, setNewMessage, fetchMessages, handleSendMessage, handleSendVoice, isRightPanelOpen, setIsRightPanelOpen, onOpenChat,
+  onChatUpdated, onChatRemoved,
   enqueuePending, onCancelPending,
 }: ChatAreaProps) {
   const [bgPickerOpen, setBgPickerOpen] = useState(false);
@@ -663,6 +668,10 @@ export function ChatArea({
               myRole={groupMembersState.myRole}
               isOwner={groupMembersState.isOwner}
               isAdmin={groupMembersState.isAdmin}
+              leaveGroup={groupMembersState.leaveGroup}
+              onRefreshMembers={groupMembersState.refetch}
+              onGroupUpdated={(patch) => onChatUpdated?.(selectedChat.id, patch)}
+              onExited={() => onChatRemoved?.(selectedChat.id)}
               onClose={() => { setProfileViewUserId(null); setIsRightPanelOpen(false); }}
             />
           </motion.aside>

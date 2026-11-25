@@ -18,6 +18,7 @@ import { useNetworkQueue } from "@/hooks/echo/use-network-queue";
 import { useRealtime } from "@/hooks/echo/use-realtime";
 import { useConnection } from "@/hooks/echo/use-connection";
 import { useProfiles } from "@/hooks/echo/use-profiles";
+import { fetchProfileByUsername, primeProfileCache, rememberProfile } from "@/hooks/echo/profile-cache";
 import { saveDevice, generateHWID, getDevices, deleteDevice } from "@/lib/db";
 import { detectDevice } from "@/lib/device-info";
 import dynamic from "next/dynamic";
@@ -94,11 +95,7 @@ function EchoAppContent() {
 
   const handleMentionClick = useCallback(async (username: string) => {
     try {
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("username", username)
-        .maybeSingle();
+      const profile = await fetchProfileByUsername(username);
 
       if (!profile) return;
 
@@ -385,14 +382,10 @@ const setEditingMessageSafe = (msg: any) => {
       (c) => (c.username || '').toLowerCase() === username.toLowerCase(),
     );
 
-    // 2. If not found, fetch from Supabase
+    // 2. If not found, resolve profile from shared cache (no duplicate request)
     if (!existing) {
       try {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('username', username)
-          .maybeSingle();
+        const profile = await fetchProfileByUsername(username);
 
         if (profile) {
           existing = {
@@ -401,7 +394,7 @@ const setEditingMessageSafe = (msg: any) => {
             display_name: profile.display_name,
             avatar_url: profile.avatar_url || undefined,
             avatar_color: profile.avatar_color || undefined,
-            last_seen: profile.last_seen || null,
+            last_seen: (profile as any).last_seen || null,
             bio: profile.bio || undefined,
             public_key: profile.public_key || undefined,
             unreadCount: 0,
@@ -431,9 +424,10 @@ const setEditingMessageSafe = (msg: any) => {
 
     if (existing) {
       setSelectedChat(existing);
-      fetchMessages(existing.id, user.id);
+      // История загрузится эффектом ChatArea при смене selectedChat.id —
+      // второй явный вызов давал дублирующий сетевой запрос.
     }
-  }, [user, chats, setChats, setSelectedChat, fetchMessages]);
+  }, [user, chats, setChats, setSelectedChat]);
 
   const { notifyNewMessage } = useNotifications({ user, chats, settings: notificationSettings, onNotificationClick: (chatId) => setSelectedChat(chats.find(c => c.id === chatId) || null) });
 
@@ -642,6 +636,10 @@ useEffect(() => {
 
   const init = async () => {
     try {
+      // Кэш профилей (SQLCipher) — прогреваем параллельно с сессией,
+      // чтобы панели/упоминания открывались мгновенно и офлайн.
+      void primeProfileCache();
+
       // 1. Мгновенно читаем localStorage до проверки сессии
       let isOffline = false;
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
@@ -744,6 +742,8 @@ useEffect(() => {
           .abortSignal(profileAbort.signal)
           .maybeSingle();
         userData = { ...session.user, user_metadata: { ...session.user.user_metadata, ...(profile || {}) } } as UserProfile;
+        // Свой профиль — в общий кэш (аватар/имя доступны офлайн).
+        if (profile?.id) rememberProfile(profile as UserProfile);
         if (isMounted) {
           setUser(userData);
           userRef.current = userData;
@@ -1018,11 +1018,9 @@ useEffect(() => {
           onSearchFocus={setIsSearchFocused}
           onStartChat={(p) => handleStartChat(p, chats, (chat) => {
             setSelectedChat(chat);
-            if (user) fetchMessages(chat.id, user.id);
           }, (prof) => setChats(prev => [...prev, prof as any]))}
           onSelectChat={(chat) => {
             setSelectedChat(chat);
-            if (user) fetchMessages(chat.id, user.id);
           }}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onCreateGroup={() => setIsGroupCreateOpen(true)}
@@ -1039,7 +1037,6 @@ useEffect(() => {
             const existing = chats.find((c) => c.id === groupId);
             if (existing) {
               setSelectedChat(existing);
-              if (user) fetchMessages(existing.id, user.id);
             }
           }}
         />
@@ -1085,6 +1082,15 @@ useEffect(() => {
           enqueuePending={enqueuePending}
           onCancelPending={cancelPending}
           onOpenChat={(id) => setSelectedChat(chats.find(c => c.id === id)!)}
+          onChatUpdated={(chatId, patch) => {
+            setChats((prev) => prev.map((c) => (c.id === chatId ? { ...c, ...patch } : c)));
+            setSelectedChat((prev) => (prev && prev.id === chatId ? { ...prev, ...patch } : prev));
+          }}
+          onChatRemoved={(chatId) => {
+            setChats((prev) => prev.filter((c) => c.id !== chatId));
+            setSelectedChat((prev) => (prev?.id === chatId ? null : prev));
+            setIsRightPanelOpen(false);
+          }}
         />
       </motion.div>
 
@@ -1132,20 +1138,6 @@ useEffect(() => {
         />
       )}
       <style jsx global>{`
-        .safe-top {
-          padding-top: env(safe-area-inset-top);
-        }
-        .safe-bottom {
-          padding-bottom: env(safe-area-inset-bottom);
-        }
-        .safe-y {
-          padding-top: env(safe-area-inset-top);
-          padding-bottom: env(safe-area-inset-bottom);
-        }
-        .safe-x {
-          padding-left: env(safe-area-inset-left);
-          padding-right: env(safe-area-inset-right);
-        }
         .noise-overlay::before {
           content: "";
           position: fixed;

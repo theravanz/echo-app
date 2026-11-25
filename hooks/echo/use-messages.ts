@@ -92,6 +92,9 @@ export function useMessages(
   // Очередь недосланных — источник для мерджа после рестарта приложения.
   const pendingQueueRef = useRef<PendingMessage[]>(pendingQueue);
   pendingQueueRef.current = pendingQueue;
+  // Single-flight истории: клик по чату + эффект ChatArea дергают
+  // fetchMessages в один тик — второй вызов не должен слать второй запрос.
+  const fetchMessagesInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
 
   /**
    * Домешать к списку сообщения из офлайн-очереди этого чата: после рестарта
@@ -118,7 +121,12 @@ export function useMessages(
     [],
   );
 
-  const fetchMessages = useCallback(async (chatId: string, currentUserId: string) => {
+  const fetchMessages = useCallback((chatId: string, currentUserId: string): Promise<void> => {
+    const inFlightKey = `${currentUserId}_${chatId}`;
+    const existing = fetchMessagesInFlightRef.current.get(inFlightKey);
+    if (existing) return existing;
+
+    const run = (async () => {
     const cacheKey = `echo_msgs_cache_${currentUserId}_${chatId}`;
 
     // 1. Load from cache immediately (SQLCipher через Rust-слой, см. chat-cache.ts;
@@ -292,6 +300,14 @@ export function useMessages(
     } finally {
       clearTimeout(netTimeout);
     }
+    })();
+
+    fetchMessagesInFlightRef.current.set(inFlightKey, run);
+    return run.finally(() => {
+      if (fetchMessagesInFlightRef.current.get(inFlightKey) === run) {
+        fetchMessagesInFlightRef.current.delete(inFlightKey);
+      }
+    });
   }, [decryptMessage, withPendingForChat, chats]);
 
   const handleEditMessage = useCallback(

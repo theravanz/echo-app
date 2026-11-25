@@ -16,7 +16,7 @@ export type GroupPanelScreen =
   | "members" // управление участниками
   | "admins"; // управление админами
 
-/** Локальный черновик правок (до появления RPC сохранения). */
+/** Локальный черновик правок; сохраняется через RPC group_update_metadata. */
 export interface GroupDraftState {
   name: string;
   description: string;

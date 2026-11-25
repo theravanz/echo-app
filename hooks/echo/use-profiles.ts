@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
+import { rememberProfile, rememberProfiles } from "./profile-cache";
 import type { UserProfile, Chat } from "./types";
 
 const RECENT_SEARCHES_KEY = "echo_recent_searches";
@@ -83,6 +84,9 @@ export function useProfiles(): UseProfilesReturn {
           .limit(10);
 
         if (error) throw error;
+        // Результаты поиска — в общий кэш профилей: открытие чата/профиля
+        // после поиска больше не делает повторный запрос.
+        rememberProfiles((data ?? []) as UserProfile[]);
         setSearchResults(data || []);
       } catch (err) {
         const message = err instanceof Error ? err.message : JSON.stringify(err) || 'Unknown search error';
@@ -99,6 +103,7 @@ export function useProfiles(): UseProfilesReturn {
     onSelectChat: (chat: Chat) => void,
     onAddChat: (profile: UserProfile) => void,
   ) => {
+    rememberProfile(profile);
     const updated = [profile, ...recentSearches.filter((p) => p.id !== profile.id)].slice(0, 5);
     setRecentSearches(updated);
     localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(updated));

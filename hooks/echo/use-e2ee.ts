@@ -3,6 +3,7 @@
 import { useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { supabase } from "@/lib/supabase";
+import { getCachedProfile, rememberProfile } from "./profile-cache";
 
 // Вспомогательные функции для симметричного шифрования групп (AES-GCM)
 async function importAesKey(base64Key: string): Promise<CryptoKey> {
@@ -99,6 +100,14 @@ export const useE2EE = (chats: any[]) => {
         return chatFromList.public_key;
       }
 
+      // Общий кэш профилей: публичный ключ не меняется, повторно
+      // запрашивать профиль при каждом сообщении не нужно.
+      const cachedProfile = getCachedProfile(userId);
+      if (cachedProfile?.public_key) {
+        publicKeyCacheRef.current.set(userId, cachedProfile.public_key);
+        return cachedProfile.public_key;
+      }
+
       try {
         const { data, error } = await supabase
           .from("profiles")
@@ -109,6 +118,9 @@ export const useE2EE = (chats: any[]) => {
         if (error) throw error;
         if (data?.public_key) {
           publicKeyCacheRef.current.set(userId, data.public_key);
+          // Только public_key — не помечаем весь профиль «свежим»,
+          // чтобы имя/аватар всё равно ревалидировались по TTL.
+          rememberProfile({ id: userId, public_key: data.public_key }, { touch: false });
         }
         return data?.public_key ?? null;
       } catch {

@@ -224,6 +224,126 @@ export async function createStandardGroup(input: GroupCreateInput): Promise<Grou
   return { group_id: (data as { group_id?: string } | null)?.group_id ?? groupId, seed };
 }
 
+// ── Управление группой (метаданные / выход / передача / удаление) ────
+
+/** Человекочитаемые ошибки RPC групп (PostgREST отдаёт текст исключения). */
+function groupRpcError(error: unknown, fallback: string): Error {
+  const msg = String((error as { message?: string })?.message ?? error ?? "").trim();
+  if (/not authenticated/i.test(msg)) return new Error("Нужно войти в аккаунт");
+  if (/not a group member/i.test(msg)) return new Error("Ты не участник этой группы");
+  if (/owner must transfer/i.test(msg)) {
+    return new Error("Сначала передай права владельца или удали группу");
+  }
+  if (/only owner can transfer/i.test(msg)) return new Error("Передать владельца может только владелец");
+  if (/only owner can delete/i.test(msg)) return new Error("Удалить группу может только владелец");
+  if (/only owner or admin/i.test(msg)) return new Error("Это может сделать только владелец или админ");
+  if (/target is not a group member/i.test(msg)) return new Error("Этого участника нет в группе");
+  if (/invalid ownership target/i.test(msg)) return new Error("Выбери другого участника");
+  if (/group not found/i.test(msg)) return new Error("Группа не найдена");
+  return new Error(msg || fallback);
+}
+
+export interface GroupMetadataInput {
+  name: string;
+  bio: string;
+  /** Текущий путь аватара в bucket avatars (если фото не меняем). */
+  avatarUrl?: string | null;
+  /** Nonce текущего аватара (нужен для расшифровки SecureAvatar). */
+  avatarNonce?: string | null;
+  /** Новое фото: сжимается, шифруется и загружается перед сохранением. */
+  avatarFile?: File | null;
+}
+
+export interface GroupMetadataResult {
+  name: string;
+  bio: string;
+  avatar_url: string;
+  avatar_nonce: string;
+}
+
+/**
+ * Обновить зашифрованные метаданные группы (название / описание / аватар).
+ *
+ * Ключи берём из локального кэша (loadGroupKeys): info_key уже раскрыт при
+ * загрузке списка чатов. Сервер получает только шифротекст + nonce + публичный
+ * ключ автора — по нему получатели восстановят общий секрет SalsaBox.
+ */
+export async function updateGroupMetadata(
+  userId: string,
+  groupId: string,
+  input: GroupMetadataInput,
+): Promise<GroupMetadataResult> {
+  const name = input.name.trim();
+  if (!name) throw new Error("Введите название группы");
+  const bio = input.bio.trim();
+
+  const cached = await loadGroupKeys(userId);
+  const keys = cached[groupId];
+  if (!keys?.info_key) {
+    throw new Error("Ключи группы не найдены — откройте группу заново");
+  }
+
+  let avatarUrl = input.avatarUrl ?? "";
+  let avatarNonce = input.avatarNonce ?? "";
+  if (input.avatarFile) {
+    try {
+      const av = await uploadGroupAvatar(userId, groupId, input.avatarFile);
+      avatarUrl = av.path;
+      avatarNonce = av.nonce;
+    } catch (e) {
+      throw new Error(`Не удалось загрузить фото группы: ${(e as Error)?.message ?? e}`);
+    }
+  }
+
+  const metadataJson = JSON.stringify({
+    name,
+    bio,
+    avatar_url: avatarUrl,
+    avatar_nonce: avatarNonce,
+  });
+
+  let sealed: GroupSealedBox;
+  try {
+    sealed = await invoke<GroupSealedBox>("group_seal_metadata", {
+      infoKeyB64: keys.info_key,
+      metadataB64: utf8ToB64(metadataJson),
+    });
+  } catch (e) {
+    throw new Error(`Не удалось зашифровать метаданные: ${(e as Error)?.message ?? e}`);
+  }
+
+  const { error } = await supabase.rpc("group_update_metadata", {
+    p_group_id: groupId,
+    p_encrypted_metadata: sealed.ciphertext,
+    p_metadata_nonce: sealed.nonce,
+    p_sender_pub: sealed.eph_pub,
+  });
+  if (error) throw groupRpcError(error, "Не удалось сохранить настройки группы");
+
+  return { name, bio, avatar_url: avatarUrl, avatar_nonce: avatarNonce };
+}
+
+/** Выйти из группы (owner должен сначала передать права или удалить её). */
+export async function leaveGroup(groupId: string): Promise<void> {
+  const { error } = await supabase.rpc("group_leave", { p_group_id: groupId });
+  if (error) throw groupRpcError(error, "Не удалось выйти из группы");
+}
+
+/** Передать роль владельца другому участнику. */
+export async function transferGroupOwner(groupId: string, targetId: string): Promise<void> {
+  const { error } = await supabase.rpc("group_transfer_owner", {
+    p_group_id: groupId,
+    p_target: targetId,
+  });
+  if (error) throw groupRpcError(error, "Не удалось передать владельца");
+}
+
+/** Удалить группу (только владелец). */
+export async function deleteGroup(groupId: string): Promise<void> {
+  const { error } = await supabase.rpc("group_delete", { p_group_id: groupId });
+  if (error) throw groupRpcError(error, "Не удалось удалить группу");
+}
+
 // ── Расшифровка (сторона получателя / список чатов) ─────────────────
 
 /** Расшифровать пакет ключей из group_key_mailbox (Rust KeyStore, X25519 DH). */

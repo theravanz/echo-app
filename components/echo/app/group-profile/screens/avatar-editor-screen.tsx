@@ -5,9 +5,10 @@
  * Открытие: тап по аватарке в меню редактора.
  */
 import type { ChangeEvent } from "react";
+import { useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
-import { TbCheck, TbPhotoUp } from "react-icons/tb";
+import { TbCheck, TbLoader2, TbPhotoUp } from "react-icons/tb";
 import { cn } from "@/lib/utils";
 import type { Chat } from "@/hooks/echo/types";
 import { ScreenShell, SectionTitle } from "../screen-shell";
@@ -19,17 +20,30 @@ interface AvatarEditorScreenProps {
   draft: GroupDraftState;
   onBack: () => void;
   onPatch: (patch: Partial<GroupDraftState>) => void;
+  /** Загрузка + перешифрование метаданных группы (RPC). */
+  onSaveAvatar: (file: File) => Promise<void>;
 }
 
-export function AvatarEditorScreen({ chat, draft, onBack, onPatch }: AvatarEditorScreenProps) {
-  const handleFile = (e: ChangeEvent<HTMLInputElement>) => {
+export function AvatarEditorScreen({ chat, draft, onBack, onPatch, onSaveAvatar }: AvatarEditorScreenProps) {
+  const [uploading, setUploading] = useState(false);
+
+  const handleFile = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    onPatch({ avatarPreview: URL.createObjectURL(file) });
-    toast.success("Аватар обновлён (локально)");
-    // TODO(backend): compressAvatar + encryptBlob + upload в зашифрованное
-    // хранилище (bucket/path/nonce/mime) — тот же поток, что в ProfileEditor.
-    e.target.value = "";
+    if (!file || uploading) return;
+    const preview = URL.createObjectURL(file);
+    onPatch({ avatarPreview: preview });
+    setUploading(true);
+    try {
+      await onSaveAvatar(file);
+      onPatch({ avatarPreview: null });
+    } catch {
+      // Текст ошибки показан в GroupProfilePanel; возвращаем старый аватар.
+      onPatch({ avatarPreview: null });
+    } finally {
+      URL.revokeObjectURL(preview);
+      setUploading(false);
+      e.target.value = "";
+    }
   };
 
   return (
@@ -41,12 +55,23 @@ export function AvatarEditorScreen({ chat, draft, onBack, onPatch }: AvatarEdito
           size={112}
           className="rounded-[32px] shadow-xl ring-4 ring-background"
         />
-        <label className="mt-4 inline-flex cursor-pointer items-center gap-2 rounded-full bg-primary px-5 py-2.5 text-[13px] font-bold text-primary-foreground transition hover:opacity-90">
-          <TbPhotoUp size={16} />
-          Загрузить фото
-          <input type="file" accept="image/*" className="hidden" onChange={handleFile} />
+        <label
+          className={cn(
+            "mt-4 inline-flex cursor-pointer items-center gap-2 rounded-full bg-primary px-5 py-2.5 text-[13px] font-bold text-primary-foreground transition hover:opacity-90",
+            uploading && "pointer-events-none opacity-60",
+          )}
+        >
+          {uploading ? <TbLoader2 size={16} className="animate-spin" /> : <TbPhotoUp size={16} />}
+          {uploading ? "Загрузка…" : "Загрузить фото"}
+          <input
+            type="file"
+            accept="image/*"
+            className="hidden"
+            disabled={uploading}
+            onChange={(e) => void handleFile(e)}
+          />
         </label>
-        {draft.avatarPreview && (
+        {draft.avatarPreview && !uploading && (
           <button
             onClick={() => onPatch({ avatarPreview: null })}
             className="mt-2 text-[12px] text-muted-foreground transition hover:text-foreground"
@@ -80,7 +105,7 @@ export function AvatarEditorScreen({ chat, draft, onBack, onPatch }: AvatarEdito
         ))}
       </div>
       <p className="px-5 pb-4 pt-3 text-[11px] leading-relaxed text-muted-foreground">
-        Изменения пока применяются локально — сохранение на сервере появится вместе с RPC.
+        Фото группы сохраняется на сервере в зашифрованном виде. Фон баннера пока применяется только на этом устройстве.
       </p>
     </ScreenShell>
   );

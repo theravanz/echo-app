@@ -3,10 +3,12 @@
 import { useState, useEffect } from "react";
 import { supabase } from "@/lib/supabase";
 import {
+  base64ToBytes,
   bytesToBase64,
   decryptEnvelopeToBlob,
   isSecureEnvelope,
 } from "@/lib/media";
+import { cacheGetBounded, cacheSetBounded } from "./chat-cache";
 
 /**
  * aSecureMediaUrl — резолвер защищённого медиа.
@@ -14,16 +16,150 @@ import {
  * Берёт зашифрованный конверт из ПРИВАТНОГО bucket (через короткоживущий
  * signed-URL), скачивает байты, расшифровывает в Rust и возвращает object-URL
  * (blob:), который уже можно отдать в `<img>/<audio>/<video>`. Результат
- * кэшируется в памяти на время сессии — повторный показ не качает заново.
+ * кэшируется в памяти на время сессии, а аватарки — ещё и в SQLCipher
+ * (переживают перезапуск и открываются офлайн).
  *
  * Возвращает `null`, пока не расшифровано / если данных нет — компоненты
  * используют это как "показать заглушку".
  */
 
 const cache = new Map<string, Promise<string | null>>();
+const resolvedCache = new Map<string, string>();
+const signedResolvedCache = new Map<string, string>();
 
 function cacheKey(bucket: string, path: string): string {
   return `${bucket}/${path}`;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Персистентный кэш медиа (аватарок) в SQLCipher.
+//
+// Signed-URL живёт час и офлайн недоступен, поэтому после первой
+// расшифровки/скачивания сохраняем САМИ БАЙТЫ. Тогда аватарка:
+//   • больше не запрашивается при каждом маунте/перезапуске;
+//   • открывается без интернета;
+//   • не плодит createSignedUrl + fetch на каждый рендер списка.
+// Ограничиваемся bucket'ом avatars и небольшим размером, чтобы не
+// раздувать secure_store большими картинками/видео.
+// ═══════════════════════════════════════════════════════════════════
+
+const PERSIST_BUCKETS = new Set(["avatars"]);
+const PERSIST_MAX_BYTES = 512 * 1024;
+const PERSIST_PREFIX = "echo_media_blob_v1:";
+
+type PersistedMedia = { mime: string; data: string };
+
+function canPersist(bucket: string, size: number): boolean {
+  return PERSIST_BUCKETS.has(bucket) && size > 0 && size <= PERSIST_MAX_BYTES;
+}
+
+async function readPersistedMedia(bucket: string, path: string): Promise<string | null> {
+  if (!PERSIST_BUCKETS.has(bucket)) return null;
+  try {
+    const raw = await cacheGetBounded(`${PERSIST_PREFIX}${cacheKey(bucket, path)}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistedMedia;
+    if (!parsed?.data || !parsed?.mime) return null;
+    const bytes = base64ToBytes(parsed.data);
+    return URL.createObjectURL(
+      new Blob([bytes as unknown as BlobPart], { type: parsed.mime }),
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function persistMediaBlob(bucket: string, path: string, blob: Blob): Promise<void> {
+  if (!canPersist(bucket, blob.size)) return;
+  try {
+    const buf = await blob.arrayBuffer();
+    const data = bytesToBase64(buf);
+    await cacheSetBounded(
+      `${PERSIST_PREFIX}${cacheKey(bucket, path)}`,
+      JSON.stringify({ mime: blob.type || "application/octet-stream", data }),
+    );
+  } catch (e) {
+    console.warn("[MEDIA-CACHE] persist avatar failed:", e);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Батчинг signed-URL.
+//
+// Раньше каждая аватарка в списке/группе дергала createSignedUrl —
+// на большой чат это сотни запросов подряд. Supabase умеет отдавать
+// signed-URL пачкой (createSignedUrls), поэтому собираем запросы за
+// короткое окно и отправляем одним вызовом на bucket.
+// ═══════════════════════════════════════════════════════════════════
+
+const SIGNED_BATCH_DELAY_MS = 40;
+const SIGNED_BATCH_CHUNK = 100;
+
+interface SignedBatch {
+  paths: string[];
+  waiters: Map<string, Array<(url: string | null) => void>>;
+  timer: ReturnType<typeof setTimeout> | null;
+}
+
+const signedBatches = new Map<string, SignedBatch>();
+
+function requestSignedUrl(bucket: string, path: string): Promise<string | null> {
+  // Офлайн: не собираем батч, который всё равно упадёт. Компонент
+  // перезапросит URL при следующем маунте/возврате сети.
+  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+    return Promise.resolve(null);
+  }
+
+  let batch = signedBatches.get(bucket);
+  if (!batch) {
+    batch = { paths: [], waiters: new Map(), timer: null };
+    signedBatches.set(bucket, batch);
+  }
+
+  const promise = new Promise<string | null>((resolve) => {
+    const list = batch!.waiters.get(path);
+    if (list) list.push(resolve);
+    else batch!.waiters.set(path, [resolve]);
+    if (!batch!.paths.includes(path)) batch!.paths.push(path);
+  });
+
+  if (!batch.timer) {
+    batch.timer = setTimeout(() => {
+      void flushSignedBatch(bucket);
+    }, SIGNED_BATCH_DELAY_MS);
+  }
+  return promise;
+}
+
+async function flushSignedBatch(bucket: string): Promise<void> {
+  const batch = signedBatches.get(bucket);
+  if (!batch) return;
+  signedBatches.delete(bucket);
+
+  const paths = batch.paths;
+  const urls = new Map<string, string | null>();
+
+  for (let i = 0; i < paths.length; i += SIGNED_BATCH_CHUNK) {
+    const chunk = paths.slice(i, i + SIGNED_BATCH_CHUNK);
+    try {
+      const { data, error } = await supabase.storage
+        .from(bucket)
+        .createSignedUrls(chunk, 60 * 60);
+      if (!error && data) {
+        for (const item of data as Array<{ path?: string; signedUrl?: string | null }>) {
+          if (item?.path) urls.set(item.path, item.signedUrl ?? null);
+        }
+      }
+    } catch {
+      /* офлайн — все получат null и попробуют позже */
+    }
+  }
+
+  for (const path of paths) {
+    const list = batch.waiters.get(path) ?? [];
+    const url = urls.get(path) ?? null;
+    for (const resolve of list) resolve(url);
+  }
 }
 
 /**
@@ -62,28 +198,45 @@ export async function loadSecureMediaUrl(
   if (!path || !isSecureEnvelope(nonce, "x")) return null;
 
   const key = cacheKey(bucket, path);
+  const resolved = resolvedCache.get(key);
+  if (resolved) return resolved;
+
   const existing = cache.get(key);
   if (existing) return existing;
 
-  const pending = (async (): Promise<string | null> => {
-    try {
-      const { data: signed } = await supabase.storage
-        .from(bucket)
-        .createSignedUrl(path, 60 * 60);
-      if (!signed?.signedUrl) return null;
+  const pending: Promise<string | null> = (async (): Promise<string | null> => {
+    // 1. Офлайн-кэш: аватар уже расшифровывали ранее.
+    const persisted = await readPersistedMedia(bucket, path);
+    if (persisted) {
+      resolvedCache.set(key, persisted);
+      return persisted;
+    }
 
-      const res = await fetch(signed.signedUrl);
+    // 2. Сеть: signed-URL (батчем) → байты → расшифровка в Rust.
+    try {
+      const signedUrl = await requestSignedUrl(bucket, path);
+      if (!signedUrl) return null;
+
+      const res = await fetch(signedUrl);
       if (!res.ok) return null;
 
       const encrypted = await encryptForDecrypt(await res.arrayBuffer());
       const blob = await decryptEnvelopeToBlob(nonce, encrypted, mime);
-      return URL.createObjectURL(blob);
+      const url = URL.createObjectURL(blob);
+      resolvedCache.set(key, url);
+      void persistMediaBlob(bucket, path, blob);
+      return url;
     } catch {
       return null;
     }
   })();
 
   cache.set(key, pending);
+  void pending.then((url) => {
+    // Неуспех НЕ кэшируем: иначе аватар останется пустым до перезапуска
+    // (в т.ч. после возврата сети). Следующий маунт попробует снова.
+    if (!url && cache.get(key) === pending) cache.delete(key);
+  });
   return pending;
 }
 
@@ -115,19 +268,52 @@ export async function loadSignedStorageUrl(
   if (!path) return null;
 
   const key = cacheKey(bucket, path);
+  const resolved = signedResolvedCache.get(key);
+  if (resolved) return resolved;
+
   const existing = signedCache.get(key);
   if (existing) return existing;
 
-  const pending = (async (): Promise<string | null> => {
+  const pending: Promise<string | null> = (async (): Promise<string | null> => {
+    // Офлайн-кэш: legacy-аватар уже скачивали ранее.
+    const persisted = await readPersistedMedia(bucket, path);
+    if (persisted) {
+      signedResolvedCache.set(key, persisted);
+      return persisted;
+    }
+
     try {
-      const { data } = await supabase.storage.from(bucket).createSignedUrl(path, 60 * 60);
-      return data?.signedUrl ?? null;
+      const signedUrl = await requestSignedUrl(bucket, path);
+      if (!signedUrl) return null;
+
+      // Аватарки сохраняем байтами, чтобы потом открывались без сети.
+      if (PERSIST_BUCKETS.has(bucket)) {
+        try {
+          const res = await fetch(signedUrl);
+          if (res.ok) {
+            const blob = await res.blob();
+            if (canPersist(bucket, blob.size)) {
+              const objectUrl = URL.createObjectURL(blob);
+              signedResolvedCache.set(key, objectUrl);
+              void persistMediaBlob(bucket, path, blob);
+              return objectUrl;
+            }
+          }
+        } catch {
+          /* не смогли скачать — отдадим signed-URL ниже */
+        }
+      }
+
+      return signedUrl;
     } catch {
-      return null;
+      return signedResolvedCache.get(key) ?? null;
     }
   })();
 
   signedCache.set(key, pending);
+  void pending.then((resolvedUrl) => {
+    if (!resolvedUrl && signedCache.get(key) === pending) signedCache.delete(key);
+  });
   return pending;
 }
 

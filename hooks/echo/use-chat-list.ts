@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { supabase } from "@/lib/supabase";
 import { useE2EE } from "./use-e2ee";
 import { cacheGetBounded, cacheSetBounded } from "./chat-cache";
+import { fetchProfiles, rememberProfiles } from "./profile-cache";
 import { openGroupKeyPacket, openGroupMetadata, loadGroupKeys, saveGroupKey } from "@/lib/groups";
 import type { Chat, UserProfile, Message, ConnectionStatus } from "./types";
 
@@ -72,11 +73,15 @@ async function buildGroupChats(userId: string, signal: AbortSignal): Promise<Cha
   if (gErr || !groups?.length) return [];
 
   const creatorIds = Array.from(new Set(groups.map((g: any) => g.creator_id).filter(Boolean)));
-  const [{ data: creators }, { data: packets }] = await Promise.all([
-    supabase.from("profiles").select("id, public_key").in("id", creatorIds).abortSignal(signal),
+  // Публичные ключи создателей — из общего кэша профилей (без лишнего
+  // запроса, если эти люди уже есть в списке чатов).
+  const [{ data: packets }, creatorProfiles] = await Promise.all([
     supabase.from("group_key_mailbox").select("group_id, encrypted_payload, nonce").eq("user_id", userId).abortSignal(signal),
+    fetchProfiles(creatorIds as string[], { signal }),
   ]);
-  const creatorPub = new Map<string, string>((creators ?? []).map((p: any) => [p.id, p.public_key]));
+  const creatorPub = new Map<string, string>(
+    Array.from(creatorProfiles.values()).map((p: any) => [p.id, p.public_key]),
+  );
   const packetByGroup = new Map<string, any>((packets ?? []).map((p: any) => [p.group_id, p]));
 
   const cachedKeys = await loadGroupKeys(userId);
@@ -97,11 +102,15 @@ async function buildGroupChats(userId: string, signal: AbortSignal): Promise<Cha
           return null;
         }
       }
-      if (!creatorPublicKey) return null;
+      // Метаданные мог запечатать не только создатель (owner/admin меняет
+      // название/аватар): для новых строк есть metadata_sender_pub.
+      // Старые строки — NULL, их писал создатель.
+      const metadataSenderPub = (g.metadata_sender_pub as string | null) || creatorPublicKey;
+      if (!metadataSenderPub) return null;
 
       let meta: { name?: string; bio?: string; avatar_url?: string; avatar_nonce?: string };
       try {
-        meta = await openGroupMetadata(keys.info_key, creatorPublicKey, g.encrypted_metadata, g.metadata_nonce);
+        meta = await openGroupMetadata(keys.info_key, metadataSenderPub, g.encrypted_metadata, g.metadata_nonce);
       } catch (e) {
         console.warn("[CHAT-CACHE] group metadata open failed:", g.id, e);
         return null;
@@ -149,6 +158,10 @@ export function useChatList(
   // рендерим из кэша сразу (иначе список ждал сетевые таймауты).
   const connectionStatusRef = useRef<ConnectionStatus>(connectionStatus);
   connectionStatusRef.current = connectionStatus;
+  // Single-flight списка чатов: init + realtime + возврат сети могут
+  // дёрнуть fetchChats почти одновременно — делим один проход.
+  const fetchChatsInFlightRef = useRef<Promise<void> | null>(null);
+  const fetchChatsInFlightUserRef = useRef<string | null>(null);
 
   // === Online Presence ===
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
@@ -191,7 +204,11 @@ export function useChatList(
   );
 
   // === Chat Fetching ===
-  const fetchChats = useCallback(async (currentUserId: string) => {
+  const fetchChats = useCallback((currentUserId: string): Promise<void> => {
+    const inFlight = fetchChatsInFlightRef.current;
+    if (inFlight && fetchChatsInFlightUserRef.current === currentUserId) return inFlight;
+
+    const run = (async () => {
     const cacheKey = `echo_chats_cache_${currentUserId}`;
     let cachedChatsAvailable = false;
 
@@ -201,6 +218,27 @@ export function useChatList(
       if (cached) {
         const parsed = JSON.parse(cached);
         if (parsed.chats && Array.isArray(parsed.chats)) {
+          // Профили из кэша списка — в общий кэш профилей: офлайн-панель,
+          // упоминания и групповые отправители работают без сети.
+          rememberProfiles(
+            (parsed.chats as any[])
+              .filter((c) => c?.type !== "group" && c?.id)
+              .map((c) => ({
+                id: c.id,
+                username: c.username,
+                display_name: c.display_name,
+                avatar_url: c.avatar_url,
+                avatar_color: c.avatar_color,
+                avatar_storage_path: c.avatar_storage_path,
+                avatar_nonce: c.avatar_nonce,
+                avatar_mime: c.avatar_mime,
+                bio: c.bio,
+                public_key: c.public_key,
+              })),
+            // Из кэша, а не из сети: не делаем профили «свежими», иначе
+            // fetchProfiles ниже никогда не ревалидирует имя/аватар.
+            { touch: false },
+          );
           setChats((prev) => {
             if (JSON.stringify(prev) === JSON.stringify(parsed.chats)) return prev;
             return parsed.chats;
@@ -267,13 +305,13 @@ export function useChatList(
 
       let dmChats: Chat[] = [];
       if (participantIds.length > 0) {
-        const { data: profiles } = await supabase
-          .from("profiles")
-          .select("*")
-          .in("id", participantIds)
-          .abortSignal(signal);
+        // Кэш профилей: уже известные люди не перезапрашиваются,
+        // новые грузятся ОДНИМ батчем.
+        const profileMap = await fetchProfiles(participantIds, { signal });
+        const profiles = Array.from(profileMap.values());
+        rememberProfiles(profiles);
 
-if (profiles) {
+        if (profiles.length > 0) {
   const decrypt = decryptMessageRef.current;
   const finalChats = await Promise.all(
     profiles.map(async (p: any) => {
@@ -336,7 +374,12 @@ if (profiles) {
           new Date(a.lastMessageTime || a.created_at || 0).getTime(),
       );
 
-      setChats(allChats);
+      setChats((prev) => {
+        // Не меняем ссылку, если данные те же: иначе каждый realtime-тик
+        // перерисовывал весь чат и заново дёргал профили/аватары.
+        if (JSON.stringify(prev) === JSON.stringify(allChats)) return prev;
+        return allChats;
+      });
       // Запись — fire-and-forget: UI не ждёт Rust-слой (сериализованные
       // записи в chat-cache; при таймауте запись всё равно доедет).
       void cacheSetBounded(cacheKey, JSON.stringify({ chats: allChats }))
@@ -356,6 +399,16 @@ if (profiles) {
     } finally {
       clearTimeout(netTimeout);
     }
+    })();
+
+    fetchChatsInFlightRef.current = run;
+    fetchChatsInFlightUserRef.current = currentUserId;
+    return run.finally(() => {
+      if (fetchChatsInFlightRef.current === run) {
+        fetchChatsInFlightRef.current = null;
+        fetchChatsInFlightUserRef.current = null;
+      }
+    });
   }, []);
 
   // === Online Presence Subscription ===

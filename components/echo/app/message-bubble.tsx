@@ -22,6 +22,7 @@ import { TbX as X, TbDownload, TbPhoto, TbVideo, TbMusic, TbFile, TbFileText, Tb
 import { parseFileMeta, keyUserFor, type UploadStatus } from "@/lib/files";
 import { AudioFileBubble } from "./audio-file-bubble";
 import { messagePreview } from "@/lib/utils";
+import { fetchProfileByUsername, getCachedProfileByUsername } from "@/hooks/echo/profile-cache";
 
 interface MessageBubbleProps {
   msg: any;
@@ -114,20 +115,37 @@ const extractMentions = (text: string) => {
 };
 
 function MentionMiniCard({ username, onClick }: { username: string; onClick?: (u: string) => void }) {
-  const [profile, setProfile] = useState<{ display_name?: string; avatar_url?: string; avatar_storage_path?: string | null; avatar_nonce?: string | null; avatar_mime?: string | null; bio?: string | null } | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Кэш профилей: одна и та же @упоминание в истории не делает запрос
+  // на каждый рендер/сообщение; офлайн показывает сохранённые данные.
+  const [profile, setProfile] = useState<{
+    display_name?: string;
+    avatar_url?: string;
+    avatar_storage_path?: string | null;
+    avatar_nonce?: string | null;
+    avatar_mime?: string | null;
+    bio?: string | null;
+  } | null>(() => getCachedProfileByUsername(username));
+  const [loading, setLoading] = useState(() => !getCachedProfileByUsername(username));
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true); setProfile(null);
-    (async () => {
-      try {
-        const { supabase } = await import("@/lib/supabase");
-        const { data } = await supabase.from("profiles").select("display_name,avatar_url,avatar_storage_path,avatar_nonce,avatar_mime,bio").eq("username", username).maybeSingle();
-        if (!cancelled) { setProfile(data); setLoading(false); }
-      } catch { if (!cancelled) setLoading(false); }
-    })();
-    return () => { cancelled = true; };
+    const immediate = getCachedProfileByUsername(username);
+    if (immediate) {
+      setProfile(immediate);
+      setLoading(false);
+    } else {
+      setLoading(true);
+    }
+
+    void fetchProfileByUsername(username).then((p) => {
+      if (cancelled) return;
+      if (p) setProfile(p);
+      setLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [username]);
 
   return (
@@ -437,6 +455,76 @@ function ImageBubble({ msg, onContextMenu, innerRef }: { msg: any; onContextMenu
   return <div ref={innerRef} onContextMenu={onContextMenu} className="rounded-2xl overflow-hidden max-w-[240px] cursor-pointer border border-white/5 shadow-lg"><img src={msg.media_url} alt="" className="w-full h-auto object-cover" /></div>;
 }
 
+type GroupSenderAvatarInfo = NonNullable<MessageBubbleProps["groupSenderAvatar"]>;
+
+/** Аватар отправителя в группе (слева от пузыря, только чужие сообщения). */
+function GroupSenderAvatarButton({
+  name,
+  avatar,
+  onClick,
+}: {
+  name?: string | null;
+  avatar?: GroupSenderAvatarInfo | null;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick?.();
+      }}
+      className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 overflow-hidden mb-0.5 cursor-pointer hover:opacity-80 transition-opacity"
+      style={{ backgroundColor: avatar?.color || "#27272a", color: "#fff" }}
+      title={name || undefined}
+    >
+      {avatar && (avatar.src || avatar.path) ? (
+        <SecureAvatar
+          src={avatar.src}
+          bucket="avatars"
+          path={avatar.path || undefined}
+          nonce={avatar.nonce}
+          mime={avatar.mime}
+          fallback={avatar.fallback || name?.[0]?.toUpperCase()}
+          className="w-full h-full object-cover"
+        />
+      ) : (
+        avatar?.fallback || name?.[0]?.toUpperCase() || "?"
+      )}
+    </button>
+  );
+}
+
+/** Ник отправителя в группе (цвет детерминирован по sender_id). */
+function GroupSenderNameButton({
+  name,
+  color,
+  onClick,
+  className,
+}: {
+  name: string;
+  color?: string | null;
+  onClick?: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick?.();
+      }}
+      className={cn(
+        "block text-[12px] font-bold leading-tight truncate max-w-[220px] cursor-pointer hover:underline",
+        className,
+      )}
+      style={{ color: color || "#4dabf7" }}
+    >
+      {name}
+    </button>
+  );
+}
+
 // --- Main Component ---
 
 export const MessageBubble = memo(({
@@ -448,6 +536,8 @@ export const MessageBubble = memo(({
   const bubbleRef = useRef<HTMLDivElement>(null);
   const isJumbo = isJumboEmoji(msg.content, msg.type);
   const isMedia = msg.type === "sticker" || msg.type === "gif" || msg.type === "image" || msg.type === "video_note";
+  // Группа: чужие сообщения — слева с авой/ником отправителя.
+  const showGroupSender = !isMe && Boolean(groupSenderName);
   const time = new Date(msg.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   const touchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const ac = activeChat as any;
@@ -539,7 +629,22 @@ export const MessageBubble = memo(({
           isMe ? "flex-row-reverse" : "flex-row",
           isDimmed ? "blur-[4px] opacity-20 pointer-events-none" : "z-50"
         )}>
+        {showGroupSender && (
+          <GroupSenderAvatarButton
+            name={groupSenderName}
+            avatar={groupSenderAvatar}
+            onClick={() => onOpenSenderProfile?.(msg.sender_id)}
+          />
+        )}
         <div className={cn("flex flex-col min-w-0 max-w-full", isMe ? "items-end" : "items-start")}>
+          {showGroupSender && (
+            <GroupSenderNameButton
+              name={groupSenderName!}
+              color={groupSenderColor}
+              onClick={() => onOpenSenderProfile?.(msg.sender_id)}
+              className="mb-1"
+            />
+          )}
           {isAudio && meta && !uploadState ? (
             <AudioFileBubble meta={meta} isMe={isMe} keyUserId={fileKeyUserId} groupKeyB64={groupKeyB64} />
           ) : (
@@ -566,9 +671,26 @@ export const MessageBubble = memo(({
           isMe ? "flex-row-reverse" : "flex-row",
           isDimmed ? "blur-[4px] opacity-20 pointer-events-none" : "z-50"
         )}>
-          <div className={cn("flex items-center gap-3 rounded-2xl px-4 py-3 min-w-[210px] bg-zinc-800/80 border border-white/5 text-zinc-400 text-[13px]")}>
-            <TbAlertCircle className="w-4 h-4 text-red-400" />
-            Голосовое не удалось расшифровать
+          {showGroupSender && (
+            <GroupSenderAvatarButton
+              name={groupSenderName}
+              avatar={groupSenderAvatar}
+              onClick={() => onOpenSenderProfile?.(msg.sender_id)}
+            />
+          )}
+          <div className={cn("flex flex-col", isMe ? "items-end" : "items-start")}>
+            {showGroupSender && (
+              <GroupSenderNameButton
+                name={groupSenderName!}
+                color={groupSenderColor}
+                onClick={() => onOpenSenderProfile?.(msg.sender_id)}
+                className="mb-1"
+              />
+            )}
+            <div className={cn("flex items-center gap-3 rounded-2xl px-4 py-3 min-w-[210px] bg-zinc-800/80 border border-white/5 text-zinc-400 text-[13px]")}>
+              <TbAlertCircle className="w-4 h-4 text-red-400" />
+              Голосовое не удалось расшифровать
+            </div>
           </div>
         </div>
       );
@@ -588,7 +710,22 @@ export const MessageBubble = memo(({
         onTouchEnd={handleTouchEnd}
         onTouchMove={handleTouchMove}
       >
+        {showGroupSender && (
+          <GroupSenderAvatarButton
+            name={groupSenderName}
+            avatar={groupSenderAvatar}
+            onClick={() => onOpenSenderProfile?.(msg.sender_id)}
+          />
+        )}
         <div className={cn("flex flex-col", isMe ? "items-end" : "items-start")}>
+          {showGroupSender && (
+            <GroupSenderNameButton
+              name={groupSenderName!}
+              color={groupSenderColor}
+              onClick={() => onOpenSenderProfile?.(msg.sender_id)}
+              className="mb-1"
+            />
+          )}
           <VoiceBubble
             msg={msg}
             isMe={isMe}
@@ -604,7 +741,6 @@ export const MessageBubble = memo(({
 
   // 2. ДЛЯ ОБЫЧНЫХ СООБЩЕНИЙ
   // Группа: чужие — слева с авой отправителя; свои — справа без авы.
-  const showGroupSender = !isMe && !!groupSenderName;
   return (
     <div className={cn(
       "flex items-end gap-2 group animate-in fade-in slide-in-from-bottom-3 duration-300",
@@ -614,27 +750,11 @@ export const MessageBubble = memo(({
       isDimmed ? "blur-[4px] opacity-20 pointer-events-none" : "z-50"
     )}>
       {showGroupSender && (
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onOpenSenderProfile?.(msg.sender_id); }}
-          className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 overflow-hidden mb-0.5 cursor-pointer hover:opacity-80 transition-opacity"
-          style={{ backgroundColor: groupSenderAvatar?.color || "#27272a", color: "#fff" }}
-          title={groupSenderName || undefined}
-        >
-          {groupSenderAvatar && (groupSenderAvatar.src || groupSenderAvatar.path) ? (
-            <SecureAvatar
-              src={groupSenderAvatar.src}
-              bucket="avatars"
-              path={groupSenderAvatar.path || undefined}
-              nonce={groupSenderAvatar.nonce}
-              mime={groupSenderAvatar.mime}
-              fallback={groupSenderAvatar.fallback || groupSenderName?.[0]?.toUpperCase()}
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            groupSenderAvatar?.fallback || groupSenderName?.[0]?.toUpperCase() || "?"
-          )}
-        </button>
+        <GroupSenderAvatarButton
+          name={groupSenderName}
+          avatar={groupSenderAvatar}
+          onClick={() => onOpenSenderProfile?.(msg.sender_id)}
+        />
       )}
       <div className={cn("flex flex-col", isMe ? "items-end" : "items-start")}>
         <div
@@ -648,14 +768,12 @@ export const MessageBubble = memo(({
           )}
         >
           {showGroupSender && (
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onOpenSenderProfile?.(msg.sender_id); }}
-              className="block text-[12px] font-bold leading-tight mb-1 truncate max-w-[220px] cursor-pointer hover:underline"
-              style={{ color: groupSenderColor || "#4dabf7" }}
-            >
-              {groupSenderName}
-            </button>
+            <GroupSenderNameButton
+              name={groupSenderName!}
+              color={groupSenderColor}
+              onClick={() => onOpenSenderProfile?.(msg.sender_id)}
+              className="mb-1 max-w-[220px]"
+            />
           )}
           {msg.reply_to && (
             <div className={cn("mb-2.5 p-2.5 rounded-xl border-l-2 text-xs backdrop-blur-sm", isMe ? "bg-black/20 border-primary-foreground/50" : "bg-black/30 border-primary")}>

@@ -27,6 +27,7 @@ import {
   TbUserPlus,
 } from "react-icons/tb";
 import { cn } from "@/lib/utils";
+import { deleteGroup, transferGroupOwner, updateGroupMetadata, type GroupMetadataResult } from "@/lib/groups";
 import type { Chat, GroupMember, GroupRole } from "@/hooks/echo/types";
 import {
   GROUP_BG_PRESETS,
@@ -59,6 +60,14 @@ export interface GroupProfilePanelProps {
   isOwner: boolean;
   isAdmin: boolean;
   onClose: () => void;
+  /** Успешный выход/удаление: чат нужно убрать из списка и закрыть. */
+  onExited?: () => void;
+  /** Новые метаданные (имя/описание/аватар) — обновить Chat в списке. */
+  onGroupUpdated?: (patch: Partial<Chat>) => void;
+  /** Реальный RPC выхода (useGroupMembers().leaveGroup). */
+  leaveGroup: (groupId: string) => Promise<void>;
+  /** Перечитать состав после передачи владельца. */
+  onRefreshMembers?: () => void | Promise<void>;
 }
 
 export function GroupProfilePanel({
@@ -69,6 +78,10 @@ export function GroupProfilePanel({
   isOwner,
   isAdmin,
   onClose,
+  onExited,
+  onGroupUpdated,
+  leaveGroup,
+  onRefreshMembers,
 }: GroupProfilePanelProps) {
   const meta = useMemo(() => readGroupMeta(chat), [chat]);
 
@@ -83,6 +96,7 @@ export function GroupProfilePanel({
   const [dir, setDir] = useState(1);
   const [dialog, setDialog] = useState<"leave" | "ownerExit" | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   const current = stack.length ? stack[stack.length - 1] : null;
   const canManage = isOwner || isAdmin;
@@ -107,21 +121,128 @@ export function GroupProfilePanel({
   const adminsCount = members.filter((m) => m.role === "admin" || m.role === "owner").length;
   const showAdd = !meta.isPrivate || canManage;
 
-  /* TODO(backend): RPC-заглушки — заменить на реальные вызовы */
-  const handleLeave = () => {
-    setDialog(null);
-    toast.info("Выход из группы — в разработке");
-    // await rpc("group_leave", { chatId: meta.id })
+  const errorText = (e: unknown) => (e as Error)?.message || "Что-то пошло не так";
+
+  /** Новые метаданные — в чат (список/выбранный чат) и в локальный черновик. */
+  const applyMetadata = (result: GroupMetadataResult) => {
+    patchDraft({ name: result.name, description: result.bio });
+    onGroupUpdated?.({
+      display_name: result.name,
+      bio: result.bio,
+      avatar_storage_path: result.avatar_url || null,
+      avatar_nonce: result.avatar_nonce || null,
+      avatar_mime: result.avatar_url ? "image/webp" : null,
+      avatar_url: undefined,
+    });
   };
-  const handleOwnerExit = (mode: "transfer" | "delete", memberId?: string) => {
-    setDialog(null);
-    toast.info(mode === "delete" ? "Удаление группы — в разработке" : "Передача владельца — в разработке");
-    // await rpc(mode === "delete" ? "group_delete" : "group_transfer_owner", { chatId: meta.id, memberId })
+
+  /** Перешифровать метаданные с текущим info_key и сохранить RPC. */
+  const saveMetadata = async (patch: {
+    name?: string;
+    description?: string;
+    avatarFile?: File;
+  }) => {
+    if (!myId) throw new Error("Нужно войти в аккаунт");
+    const result = await updateGroupMetadata(myId, meta.id, {
+      name: patch.name ?? draft.name,
+      bio: patch.description ?? draft.description,
+      avatarUrl: meta.avatar.path,
+      avatarNonce: meta.avatar.nonce,
+      avatarFile: patch.avatarFile ?? null,
+    });
+    applyMetadata(result);
+    return result;
+  };
+
+  const handleSaveName = async (value: string) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await saveMetadata({ name: value });
+      toast.success("Название обновлено");
+      back();
+    } catch (e) {
+      toast.error(errorText(e));
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSaveDescription = async (value: string) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await saveMetadata({ description: value });
+      toast.success("Описание обновлено");
+      back();
+    } catch (e) {
+      toast.error(errorText(e));
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSaveAvatar = async (file: File) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await saveMetadata({ avatarFile: file });
+      toast.success("Аватар обновлён");
+    } catch (e) {
+      toast.error(errorText(e));
+      throw e;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleLeave = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await leaveGroup(meta.id);
+      setDialog(null);
+      toast.success("Ты вышел из группы");
+      onExited?.();
+    } catch (e) {
+      toast.error(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleOwnerExit = async (mode: "transfer" | "delete", memberId?: string) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      if (mode === "delete") {
+        await deleteGroup(meta.id);
+        setDialog(null);
+        toast.success("Группа удалена");
+        onExited?.();
+        return;
+      }
+      if (!memberId) throw new Error("Выбери участника");
+      await transferGroupOwner(meta.id, memberId);
+      setDialog(null);
+      await onRefreshMembers?.();
+      toast.success("Права владельца переданы");
+    } catch (e) {
+      toast.error(errorText(e));
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
     <ScreenDirectionContext.Provider value={dir}>
-      <div className="absolute inset-0 z-50 flex flex-col overflow-hidden bg-background text-foreground">
+      <div className="absolute inset-0 z-50 flex flex-col overflow-hidden bg-background text-foreground safe-top safe-bottom">
+        {/* Внутренний слой — как контент в SettingsModal: absolute-экраны и
+            диалоги позиционируются уже внутри Safe Area, а не под системными
+            панелями телефона. */}
+        <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {/* плавающие кнопки поверх баннера */}
         <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-start justify-between p-4">
           <motion.button
@@ -241,7 +362,13 @@ export function GroupProfilePanel({
             />
           )}
           {current === "avatar" && (
-            <AvatarEditorScreen chat={chat} draft={draft} onBack={back} onPatch={patchDraft} />
+            <AvatarEditorScreen
+              chat={chat}
+              draft={draft}
+              onBack={back}
+              onPatch={patchDraft}
+              onSaveAvatar={handleSaveAvatar}
+            />
           )}
           {current === "name" && (
             <TextEditorScreen
@@ -250,10 +377,7 @@ export function GroupProfilePanel({
               placeholder="Название группы"
               maxLength={64}
               onBack={back}
-              onSubmit={(v) => {
-                patchDraft({ name: v });
-                toast.success("Название обновлено");
-              }}
+              onSubmit={handleSaveName}
             />
           )}
           {current === "description" && (
@@ -266,10 +390,7 @@ export function GroupProfilePanel({
               allowEmpty
               submitLabel="Готово"
               onBack={back}
-              onSubmit={(v) => {
-                patchDraft({ description: v });
-                toast.success("Описание обновлено");
-              }}
+              onSubmit={handleSaveDescription}
             />
           )}
           {current === "link" && (
@@ -310,6 +431,7 @@ export function GroupProfilePanel({
             />
           )}
         </AnimatePresence>
+        </div>
       </div>
     </ScreenDirectionContext.Provider>
   );

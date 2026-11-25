@@ -48,14 +48,22 @@ export function parseVoiceMeta(content: unknown): VoiceMeta | null {
   return null;
 }
 
+/** Кэш публичных ключей на сессию — не дёргаем profiles на каждый файл.
+ *  null не кэшируем: ключ мог быть ещё не сгенерирован. */
+const voicePublicKeyCache = new Map<string, string>();
+
 async function getPublicKey(userId: string): Promise<string | null> {
+  const cached = voicePublicKeyCache.get(userId);
+  if (cached) return cached;
   try {
     const { data } = await supabase
       .from("profiles")
       .select("public_key")
       .eq("id", userId)
       .maybeSingle();
-    return data?.public_key ?? null;
+    const key = data?.public_key ?? null;
+    if (key) voicePublicKeyCache.set(userId, key);
+    return key;
   } catch {
     return null;
   }

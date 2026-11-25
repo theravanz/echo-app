@@ -108,10 +108,19 @@ export function keyUserFor(msg: any, metaTo?: string, myId?: string): string {
   return msg?.sender_id === myId ? (metaTo ?? msg.sender_id ?? "") : (msg?.sender_id ?? "");
 }
 
+/** Кэш публичных ключей: ключ не меняется, повторный запрос на каждый
+ *  файл/голосовое не нужен (раньше на пачку файлов летело N запросов).
+ *  null не кэшируем: ключ мог ещё не сгенерироваться — повторим позже. */
+const publicKeyCache = new Map<string, string>();
+
 async function getPublicKey(userId: string): Promise<string | null> {
+  const cached = publicKeyCache.get(userId);
+  if (cached) return cached;
   try {
     const { data } = await supabase.from("profiles").select("public_key").eq("id", userId).maybeSingle();
-    return data?.public_key ?? null;
+    const key = data?.public_key ?? null;
+    if (key) publicKeyCache.set(userId, key);
+    return key;
   } catch { return null; }
 }
 

@@ -643,7 +643,7 @@ export function GroupCreateModal({ open, chats, onClose, onSubmit, onCreated }: 
           >
             {isMobile && (
               <div
-                className="shrink-0 flex justify-center pt-[max(0.625rem,env(safe-area-inset-top))] pb-1.5 cursor-grab active:cursor-grabbing"
+                className="shrink-0 flex justify-center pt-[max(0.625rem,var(--safe-area-top))] pb-1.5 cursor-grab active:cursor-grabbing"
                 style={{ touchAction: "none" }}
                 onPointerDown={(e) => dragControls.start(e)}
               >
@@ -653,7 +653,7 @@ export function GroupCreateModal({ open, chats, onClose, onSubmit, onCreated }: 
             {portalHeader}
             <div className={cn(
               "flex-1 min-h-0 overflow-y-auto settings-scroll p-5 space-y-6 overscroll-contain",
-              isMobile && "pb-[max(1.25rem,env(safe-area-inset-bottom))]"
+              isMobile && "pb-[max(1.25rem,var(--safe-area-bottom))]"
             )}>
               {avatarBlock}
               {nameBlock}

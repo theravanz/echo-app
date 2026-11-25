@@ -229,6 +229,24 @@ export function useRealtime({
         },
       );
 
+      // Имя/описание/аватар группы и состав участников меняются в отдельных
+      // таблицах. Перечитываем список чатов (debounce), чтобы переименование
+      // и смена фото приезжали другим участникам без перезапуска приложения.
+      msgChannel.on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "groups" },
+        () => {
+          if (isMountedRef.current) debouncedFetchChats();
+        },
+      );
+      msgChannel.on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "group_members" },
+        () => {
+          if (isMountedRef.current) debouncedFetchChats();
+        },
+      );
+
       msgChannel.subscribe((status: string, err?: Error) => {
         if (!isMountedRef.current) return;
         if (status === "SUBSCRIBED") {
@@ -248,8 +266,12 @@ export function useRealtime({
     subscribeMsgChannel();
 
     const startPolling = () => {
+      // 20с вместо 5с: это fallback на случай пропущенного realtime-события,
+      // а не основной транспорт. Плюс не опрашиваем сервер, когда окно
+      // скрыто (свёрнуто) — иначе за час набегали сотни лишних запросов.
       pollInterval = setInterval(async () => {
         if (!isMountedRef.current || !user?.id) return;
+        if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
 
         try {
           const { data } = await supabase
@@ -272,7 +294,7 @@ export function useRealtime({
             }
           }
         } catch { /* silent */ }
-      }, 5000);
+      }, 20000);
     };
 
     startPolling();
